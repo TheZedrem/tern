@@ -104,7 +104,7 @@ restate them elsewhere; link.
 One task per loop. Never start work that isn't in `tasks/`.
 
 1. **Pick a task:** an unblocked `status: now` task, unless the human named one.
-2. **Read** the specs it links, plus `spec/architecture.md` for anything touching the stack.
+2. **Read** the specs it links, plus `spec/architecture.md` for anything touching the stack. A linked spec still in `status: draft` needs the owner's approval first (see Specs).
 3. **Plan** briefly in the conversation. Architecture-relevant deviations stop here (see decision rules).
 4. **Implement** directly on `main` (personal project: no branches or PRs).
 5. **Test.** Run the Rust tests and the typecheck, and verify in the running
@@ -112,8 +112,29 @@ One task per loop. Never start work that isn't in `tasks/`.
    separate agent with fresh context against the spec's acceptance criteria,
    so they test the agreed behavior rather than mirroring the implementation.
 6. **Update the backlog.** Move the task to `tasks/resolved/`, file
-   follow-ups as new tasks, and tick resolved OQs.
+   follow-ups as new tasks, and tick resolved OQs. When every task in a
+   spec's `tasks:` list is resolved, set that spec to `status: implemented`.
 7. **Summarize for review:** what changed, how it was verified, the TTFP if the boot path was touched, and what's still open.
+
+## Specs
+
+One spec per feature at `spec/NNNN-<name>.md`, written with the `write-spec`
+skill, which owns the template. The frontmatter is what you act on:
+
+- **`status`:** `draft` (being written, don't implement), `approved` (the
+  owner signed off, buildable), `implemented` (all of its tasks are resolved).
+  Only the owner moves a spec from `draft` to `approved`.
+- **`phase`:** the roadmap phase in `spec/architecture.md`. Only the current
+  phase gets specs.
+- **`tasks`:** the backlog items that build it. Every task links back with a
+  `Spec:` line, so the two always point at each other.
+- **`related`:** other specs and OQ IDs to read alongside it.
+
+Every spec fills in **Startup impact**, **Platform notes** and **Security &
+privacy**, and ends with 6–10 acceptance criteria. Those criteria are what
+the separate test agent tests against (loop step 5). If the implementation
+has to diverge from an approved spec, update the spec in the same change
+and say so in the summary.
 
 ## Decision rules
 
@@ -133,8 +154,7 @@ One task per loop. Never start work that isn't in `tasks/`.
 The privacy and data rules are in
 [`spec/architecture.md` §Ground rules](spec/architecture.md#ground-rules-binding),
 the trust boundaries in [§Security](spec/architecture.md#security-binding).
-Every feature spec fills in **Startup impact**, **Platform notes** and
-**Security & privacy** (see the `write-spec` skill).
+Each spec's **Security & privacy** section says which of them it touches.
 
 ## Definition of Done
 
