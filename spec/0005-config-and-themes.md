@@ -1,0 +1,181 @@
+---
+status: draft        # draft | approved | implemented
+phase: 1
+tasks: [T-005]
+related: [spec 0001, spec 0003, spec 0004]
+---
+
+# Spec: Config, profiles and themes
+
+Pins the YAML config: its shape, **profiles** as the unit of "what a pane
+runs", error handling, hot reload, and themes (built-in, theme files and
+inline themes, all resolved in Rust).
+
+## Problem & goal
+
+Settings live in one plain file people can version in their dotfiles. It
+must apply without a restart and never break startup. Profiles make "open
+htop", "open my server" and later "open Claude Code" the same one-click
+action.
+
+Done means: editing `config.yaml` changes the running app within a second, a
+broken file never stops boot, local profiles open from the palette, and
+switching themes previews live.
+
+## Scope
+
+**In scope:**
+
+- `config.yaml` schema with defaults for every key
+- Profiles of type `local` (command, args, cwd, env, theme)
+- `default_profile`, plus "Open profile …" palette entries (spec 0004)
+- Themes: built-ins, files in `themes/*.yaml`, inline `theme.custom`, partial themes, `system` light/dark
+- Hot reload; "Open config file"; palette theme picker with live preview
+
+**Out of scope:**
+
+- `type: ssh` profiles and the host manager: Phase 2 (the schema below shows them so the shape is fixed now)
+- Agent profiles: Phase 3
+- `theme.window_style` (native UI base theme): T-009. Accepted silently until then
+- Per-profile fonts, graphical settings page: *Later*
+
+## Design
+
+### Affected areas
+
+- `src-tauri/src/config.rs`, `src-tauri/src/theme.rs`, `src-tauri/themes/*.yaml` (built-ins), `src/features/themes/` (picker)
+
+### Model
+
+Every key is optional:
+
+```yaml
+default_profile: shell              # missing → first profile
+
+profiles:                           # map key = stable profile ID
+  shell:
+    type: local                     # no command → the user's login shell
+    env: { EDITOR: nvim }
+  htop:
+    name: Htop                      # display name; defaults to the ID
+    type: local
+    command: [htop]                 # program + args
+    cwd: ~/projects                 # optional, default: home
+  my-server:                        # Phase 2: parsed, skipped with a notice
+    type: ssh
+    host: myserver.example.com      # or a Host alias from ~/.ssh/config
+    user: myuser                    # optional
+    port: 22                        # optional
+    identity_file: ~/.ssh/id_ed25519 # optional; omit to let ssh choose
+    theme: midnight
+
+font: { family: monospace, size: 13, line_height: 1.2 }
+scrollback: 10000
+cursor: { style: block, blink: true }
+copy_on_select: false
+close_on_exit: clean                # always | clean | never
+restore_session: true
+keybindings: { "ctrl+shift+d": pane.splitRight }
+
+theme:
+  default: dark                     # dark | light | system | any theme name
+  custom:                           # inline themes
+    midnight:
+      base: dark                    # missing colors come from here (default: dark)
+      background: "#1e1e2e"
+      foreground: "#cdd6f4"
+      cursor: "#f5c2e7"
+```
+
+- **Profiles** are a map, so IDs are unique by construction and stay stable
+  for `default_profile`, keybindings and session restore. With no profiles
+  configured, there is one implicit `shell` profile (the login shell). A
+  profile's `theme` applies to that profile's panes only.
+- **Typed per `type`** **[load-bearing]**: serde parses each profile as one
+  variant (internally tagged on `type`). A bad profile is skipped with a
+  notice naming its ID; the other profiles still load. Phase 1 launches only
+  `local`.
+- **Theme** = 16 ANSI colors, foreground, background, cursor, selection,
+  UI accent. A theme may be partial: missing colors come from `base`.
+- **Theme lookup** **[load-bearing]**: inline `theme.custom` → `themes/<name>.yaml`
+  → built-in. The first match wins. Built-ins are `dark` and `light`, embedded
+  in the binary with `include_str!`.
+- **Resolved in Rust only** **[load-bearing]**: the frontend always receives
+  complete palettes. That means one parser, and the window background is
+  known before the webview exists (spec 0001).
+- **`system`** **[load-bearing]**: boot always renders `dark`, with no OS
+  query on the boot path. After the first prompt, at idle, Rust reads the OS
+  light/dark setting. If it's light, every pane using the default theme and
+  the window background switch to `light`, the same way a hot reload does.
+  Because detection is off the boot path, it may use the slower but correct
+  source (the XDG settings portal on Linux, the registry on Windows).
+
+Unknown keys produce a notice, not an error. A wrong type on one key makes
+that key fall back to its default, with a notice; the rest of the file
+still applies.
+
+### IPC surface
+
+- `__BOOT__.config`, `__BOOT__.profiles`, `__BOOT__.themes`: the resolved
+  default theme plus every theme a boot pane's profile uses (spec 0001)
+- Event `config-changed` → `{ config, profiles, notices }` after a hot reload
+- `theme_list() -> ThemeSummary[]`, `theme_resolve(name) -> Theme`
+- `config_open()`: create the commented default if it's missing, then open it in the OS editor
+
+### Flows
+
+1. **Boot:** read and parse, collecting notices. A missing file means
+   defaults and no notice. An unknown `default_profile` or theme name falls
+   back (first profile / `dark`) with a notice.
+2. **Open a profile** (palette entry, keybinding, or a new tab, which uses
+   `default_profile`): spawn the profile's command in its cwd with its env
+   merged over the inherited environment. A missing cwd falls back to home.
+   A non-`local` profile in Phase 1 shows a notice and doesn't open.
+3. **Hot reload:** the watcher starts after idle (spec 0001), debounced at
+   200 ms. Font, themes, cursor, scrollback and keybindings apply live to
+   all open panes. Profile changes apply to newly opened panes; running
+   panes keep what they were started with.
+4. **Theme picker:** a palette command lists all themes. Moving the
+   selection previews live; `Enter` writes `theme.default`; `Esc` reverts.
+   The write changes only that key and keeps comments and formatting.
+5. **Write conflict** (the file changed between read and write): re-read and
+   retry once. If it still conflicts, show a notice and don't write.
+
+### Startup impact
+
+One synchronous read of `config.yaml`, plus one small read per theme file a
+boot pane uses. No writes, no watcher and no OS theme query at boot. `system` detection runs
+after the first prompt. The picker UI is lazy.
+
+### Platform notes
+
+Paths come from `dirs`: `~/.config/zed-term/` on Linux, `%APPDATA%\zed-term\`
+on Windows. `~` in `cwd`/`identity_file` expands on both. On Windows,
+`command: [htop]` resolves through `PATH` and `PATHEXT`. File watchers on
+Windows report editor save-via-rename differently, so test with VS Code and
+Notepad.
+
+### Security & privacy
+
+- Stored: `config.yaml` and `themes/*.yaml`, written only by the user, or by
+  the app on an explicit action (theme picker, "Open config file").
+- **No secrets in config, ever.** There is no `password:` key. Phase 2
+  passwords go to the keychain. A `password` key in a profile is rejected
+  with a notice telling the user where secrets belong.
+- Trust boundaries: none crossed. Profiles run commands only on explicit user action.
+
+## Acceptance criteria
+
+1. With no config file, the app boots to the login shell on the `dark` theme and creates no file.
+2. "Open config file" creates a commented default that parses back to exactly the defaults.
+3. Opening the `htop` profile from the palette runs htop in a new tab, in the profile's cwd, with its env applied.
+4. A profile with `command: 42` is skipped with a notice naming it, and every other profile still opens.
+5. An inline theme `midnight` with only three colors renders those three and takes the rest from `dark`.
+6. With the same name defined inline, as a file and as a built-in, the inline one wins. Remove it and the file wins.
+7. Changing `font.size` in an editor and saving updates every open pane within 1 s.
+8. In the theme picker, `Esc` leaves the file untouched, and `Enter` changes only `theme.default` with comments intact.
+9. The window's first frame uses the resolved default theme's background (no white flash). With `system` on a light-mode OS, the first frame is `dark`, and the switch to `light` happens after the TTFP report.
+
+## Open questions
+
+- Comment-preserving single-key write: if `serde-saphyr` can't round-trip, do a targeted line edit of `theme.default` (insert it if it's missing).
