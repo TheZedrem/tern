@@ -1,8 +1,8 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-001, T-002]
-related: [spec 0005, OQ-003 ✅]
+related: [spec 0005, OQ-003 ✅, OQ-008 ✅]
 ---
 
 # Spec: Terminal pane
@@ -28,7 +28,7 @@ works in a pane on Linux and Windows without glitches.
 - Output streaming and input, resize, exit handling
 - Copy/paste, scrollback, search, clickable links
 - Renderer selection with fallback
-- A `command` field on spawn, so Phase 2 (`ssh …`) and Phase 3 (agents) reuse panes unchanged
+- Spawning by profile ID, so Phase 2 (`ssh …`) and Phase 3 (agents) reuse panes unchanged
 
 **Out of scope:**
 
@@ -48,17 +48,24 @@ works in a pane on Linux and Windows without glitches.
 master, child). The view side (xterm instance, addons) lives in the
 frontend. Pane IDs are `u32`, unique per app run.
 
-- **Command:** the pane's profile `command` (spec 0005) if set. Otherwise `$SHELL` (Linux/macOS, started
+- **Resolved in Rust [load-bearing]:** the webview names a profile; Rust
+  resolves its command, cwd and env from config. The webview never passes a
+  command line, which keeps §Security 1 as narrow as it can be.
+- **Command:** the profile's `command` (spec 0005) if set. Otherwise `$SHELL` (Linux/macOS, started
   as a login shell) or, on Windows, the first one found of `pwsh`,
   `powershell.exe`, `cmd.exe`.
-- **Environment:** inherit, plus `TERM=xterm-256color`, `COLORTERM=truecolor`,
-  `TERM_PROGRAM=zed-term`.
+- **Environment:** inherit, then the profile's `env`, plus `TERM=xterm-256color`,
+  `COLORTERM=truecolor`, `TERM_PROGRAM=zed-term`.
 - **cwd:** explicit, else the home directory. Tracked live from OSC 7, with a
   fallback to `/proc/<pid>/cwd` on Linux; unknown on Windows without OSC 7.
+  The app ships opt-in shell-integration snippets for bash, zsh and pwsh
+  under `shell-integration/`, which the user sources from their rc file
+  (OQ-008). Nothing is injected into the shell automatically.
 
 ### IPC surface
 
-- `pty_spawn({ cols, rows, cwd?, command? }, onOutput: Channel) -> PaneId`
+- `pty_spawn({ profile, cols, rows, cwd? }, onOutput: Channel) -> PaneId`: `cwd` overrides the profile's (splits, restore)
+- `pty_ack(id, bytes)`: output consumed by xterm (backpressure, architecture §Key decisions)
 - `pty_attach(id, onOutput: Channel)`: for boot panes and after a page reload
 - `pty_write(id, data: string)`, `pty_resize(id, cols, rows)`, `pty_kill(id)`
 - `pty_cwd(id) -> string | null`
@@ -71,26 +78,29 @@ frontend. Pane IDs are `u32`, unique per app run.
    actually change.
 2. **Input:** `onData` → `pty_write`. App shortcuts are intercepted before
    xterm (spec 0004). Unbound keys always reach the shell.
-3. **Copy/paste:** `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C/V` on macOS).
-   `Ctrl+C` always reaches the shell. Clipboard goes through
+3. **Output flood:** xterm's `write` callback acks consumed bytes in
+   batches. Past 256 KB unacked, Rust stops reading and the program blocks
+   on its own write, so the UI stays responsive.
+4. **Copy/paste:** `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C/V` on macOS).
+   With default bindings `Ctrl+C` reaches the shell. Clipboard goes through
    `tauri-plugin-clipboard-manager`, because WebKitGTK gates
    `navigator.clipboard` reads. Bracketed paste is handled by xterm.
    Copy-on-select is a config option, default off.
-4. **Scrollback:** `config.scrollback` lines, default 10 000.
-5. **Search:** `Ctrl+Shift+F` opens an inline search bar, a lazy chunk with
+5. **Scrollback:** `config.scrollback` lines, default 10 000.
+6. **Search:** `Ctrl+Shift+F` opens an inline search bar, a lazy chunk with
    `addon-search`. It supports next/previous, case-sensitive and regex
    toggles, and highlights all matches. `Esc` closes it and returns focus to
    the pane.
-6. **Links:** URLs are clickable with Ctrl/Cmd+click and open in the OS
+7. **Links:** URLs are clickable with Ctrl/Cmd+click and open in the OS
    handler. The addon loads after idle.
-7. **Exit:** the pane shows `[process exited with code N]`.
+8. **Exit:** the pane shows `[process exited with code N]`.
    `config.close_on_exit` (`always | clean | never`, default `clean`) decides
    whether it closes. A clean exit (code 0) closes the pane.
-8. **Renderer:** WebGL first. If init fails or the context is lost, dispose
+9. **Renderer:** WebGL first. If init fails or the context is lost, dispose
    it and continue on the DOM renderer without losing buffer content.
-9. **Spawn failure** (bad shell path, missing binary): the pane shows the
-   error and the command it tried, and stays open until closed.
-10. **App quit:** every child process is killed, so no orphaned shells
+10. **Spawn failure** (bad shell path, missing binary, unknown profile): the
+    pane shows the error and the command it tried, and stays open until closed.
+11. **App quit:** every child process is killed, so no orphaned shells
     survive the window.
 
 ### Startup impact
@@ -120,7 +130,7 @@ path is not theoretical.
 ## Acceptance criteria
 
 1. Resizing the window while `vim` is open redraws vim at the new size with no stale rows or wrapping artifacts (Linux and Windows).
-2. `cat` of a 50 MB text file finishes without freezing the UI, and the last line shown matches the file's last line.
+2. `cat` of a 50 MB text file finishes without freezing the UI (tab switching stays responsive during it), the last line shown matches the file's last line, and the webview's memory doesn't grow by more than the scrollback.
 3. Multi-byte UTF-8 (emoji, CJK) split across read chunks renders correctly.
 4. `Ctrl+C` interrupts `sleep 100`. `Ctrl+Shift+C` copies the selection, and `Ctrl+Shift+V` pastes it as one bracketed paste.
 5. Search finds a term 5 000 lines up in scrollback, highlights it, and `Esc` returns focus to the shell.
@@ -129,7 +139,8 @@ path is not theoretical.
 8. Quitting the app leaves no child shell processes running.
 9. Forcing WebGL off still yields a fully working pane on the DOM renderer.
 10. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on Ctrl+click, while an `https://` link opens in the browser.
+11. With the pwsh snippet sourced on Windows, `cd C:\Users` then split: the new pane starts in `C:\Users`.
 
 ## Open questions
 
-- OSC 7 needs shell integration on some shells. Do we ship snippets for bash/zsh/pwsh, or rely on `/proc` on Linux only?
+- None.

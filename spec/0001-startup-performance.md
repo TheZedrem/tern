@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-001]
 related: [OQ-005 ✅]
@@ -67,12 +67,15 @@ Boot path, in order. **[load-bearing]** Nothing may be added to it without a
 TTFP measurement in the commit.
 
 1. `main()` records the start instant.
-2. Read `config.yaml` synchronously (small file). On a missing or broken file,
-   use defaults and queue a notice (architecture §Key decisions). Never write files on the boot
-   path.
-3. Spawn the boot pane PTY(s) at an estimated size (saved window size ÷ font
-   cell size). Output buffers in Rust until a Channel attaches (architecture §Key decisions).
-   The shell boots while the webview loads.
+2. Read `config.yaml` and `session.json` synchronously (both small). On a
+   missing or broken config, use defaults and queue a notice (architecture
+   §Key decisions). A missing or broken session means one fresh tab
+   (spec 0003). Never write files on the boot path.
+3. Spawn the active tab's PTY(s) at an estimated size: the saved window size
+   from `session.json` (default 1000×640 logical px) split per the saved
+   layout, ÷ the font's estimated cell size. Output buffers in Rust until a
+   Channel attaches (architecture §Key decisions). The shell boots while the
+   webview loads.
 4. Create the window with its background set to the theme background, so
    there's no white flash, and inject `__BOOT__`.
 5. Frontend entry: render the layout, mount xterm, attach Channels, fit
@@ -114,7 +117,7 @@ shared and usually warm. macOS: compile-only.
 ## Acceptance criteria
 
 1. A dev run (`pnpm tauri dev`) shows a TTFP badge in a corner of the window and prints the marks to stdout.
-2. A release build launched with `--bench-startup` prints one JSON line with all six marks and exits with code 0, with no window interaction.
+2. A release build launched with `--bench-startup` prints one JSON line with all five marks and exits with code 0, with no window interaction.
 3. On the owner's Fedora machine, `pnpm bench:startup` reports a warm-start median TTFP under 300 ms. The first (cold) run is reported separately.
 4. A broken `config.yaml` (invalid YAML) still boots to a prompt with defaults and shows a notice naming the line.
 5. Adding a 200 KB static import to `main.tsx` makes `pnpm build` fail with a budget message.

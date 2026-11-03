@@ -72,6 +72,10 @@ Load-bearing rules that code elsewhere depends on, plus the price we knowingly p
   single JSON message on the same Channel, so it can never overtake the
   pane's final output. A PTY started before the webview exists buffers its
   output in Rust until a Channel attaches.
+  **Backpressure [load-bearing]:** the reader thread stops reading once
+  256 KB are unacknowledged. The frontend acks from xterm's `write`
+  callback, so a flood (`cat` of a huge file) throttles the program instead
+  of growing xterm's buffer until the webview stalls.
   *Cost:* a Channel dies with the page (a dev reload), so panes must be
   re-attachable. Input costs one IPC round trip per batch; measure large
   pastes.
@@ -100,11 +104,12 @@ All local, all plain files the user can read — nothing leaves the machine.
 |---|---|---|---|
 | Config | `<config_dir>/zed-term/config.yaml` | Settings, profiles, keybindings, inline themes | Until the user edits/deletes it |
 | User themes | `<config_dir>/zed-term/themes/*.yaml` | Color schemes | Same |
-| Session state | `<data_dir>/zed-term/session.json` | Tab/split layout, each pane's cwd and title | Overwritten on every save; never scrollback |
+| Session state | `<data_local_dir>/zed-term/session.json` | Window size, tab/split layout, each pane's profile, cwd and title | Overwritten on every save; never scrollback |
 | Secrets (Phase 2) | OS keychain | SSH passwords / key passphrases | Until the host profile is deleted |
 
-`<config_dir>`/`<data_dir>` come from the `dirs` crate (XDG on Linux,
-`%APPDATA%` on Windows). Scrollback is never written to disk — it can
+`<config_dir>`/`<data_local_dir>` come from the `dirs` crate (XDG on
+Linux; `%APPDATA%` and `%LOCALAPPDATA%` on Windows, so dotfile-style config
+roams but machine-specific cwd paths don't). Scrollback is never written to disk — it can
 contain secrets the user typed or printed.
 
 ## Cross-cutting rules
@@ -121,6 +126,11 @@ contain secrets the user typed or printed.
 - **Errors.** Rust commands return `Result<T, String>` with a human-readable
   message; the frontend shows it in the affected pane, never a modal at
   boot.
+- **Notices.** Non-fatal problems (broken config, skipped profile, bad
+  keybinding, failed write) become notices: plain-text toasts stacked in
+  the window's bottom-right corner, dismissed by click or after 10 s. Rust
+  queues boot notices in `__BOOT__`; the toast UI is lazy and loads only
+  when a notice exists. A notice never takes keyboard focus from the pane.
 - **ACP readiness (Phase 4).** A pane's content source is an abstraction
   (PTY today), so a future structured agent view can live in a pane without
   rewriting layout or tabs.
@@ -135,10 +145,11 @@ contain secrets the user typed or printed.
    is collected or sent anywhere.
 3. **Secrets live in the OS keychain only** — never in `config.yaml`,
    `session.json`, logs, or the frontend's storage.
-4. **Self-hosted assets.** Fonts and icons ship inside the app bundle; no
-   CDNs.
-5. **Data minimization.** Session restore stores layout and cwd, not
-   scrollback or command history.
+4. **Self-hosted assets.** Icons and any bundled fonts ship inside the app
+   bundle; terminal fonts otherwise come from the system. Nothing is
+   fetched from a CDN.
+5. **Data minimization.** Session restore stores window size, layout and
+   cwd, not scrollback or command history.
 
 ## Security (binding)
 

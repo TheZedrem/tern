@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-004]
 related: [spec 0002, spec 0003, spec 0005]
@@ -31,6 +31,7 @@ palette, and bindable in `config.yaml`.
 **Out of scope:**
 
 - Chorded / leader-key bindings: *Later*
+- Binding a key to a specific profile ("open htop"): *Later*; profiles open from the palette
 - Native OS menu bar: *Later*
 
 ## Design
@@ -54,16 +55,20 @@ notice.
 | Command palette | `Ctrl+Shift+P` |
 | New tab / close pane | `Ctrl+Shift+T` / `Ctrl+Shift+W` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
-| Go to tab 1–9 | `Alt+1` … `Alt+9` |
+| Go to tab 1–9 | `Ctrl+Shift+1` … `Ctrl+Shift+9` |
 | Split right / down | `Ctrl+Shift+D` / `Ctrl+Shift+E` |
 | Focus pane | `Alt+←↑→↓` |
 | Zoom pane | `Ctrl+Shift+Z` |
 | Copy / paste / search | `Ctrl+Shift+C` / `Ctrl+Shift+V` / `Ctrl+Shift+F` |
-| Font size + / − / reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
+| Font size + / − / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` |
 
-**[load-bearing]** Defaults never bind plain `Ctrl+<letter>` or plain
-`Alt+<letter>`, because those belong to the shell and to readline/emacs/vim.
-The user may override this in config.
+**[load-bearing]** Defaults never bind `Ctrl` or `Alt` plus a letter, digit
+or punctuation key without `Shift`, because those belong to the shell and
+to readline/emacs/vim (`Ctrl+R`, `Alt+B`, `Alt+3` digit argument, `Ctrl+-`
+undo). The user may override this in config.
+
+Shortcuts match on the physical key (`KeyboardEvent.code`), so
+`Ctrl+Shift+1` works even where `Shift+1` types `!` or another symbol.
 
 ### IPC surface
 
@@ -91,7 +96,8 @@ on first open and are prefetched after idle.
 ### Platform notes
 
 Windows: `Alt` combinations can collide with window-menu accelerators, so
-verify the `Alt+N` bindings there. macOS: `Cmd` variants only.
+verify `Alt+arrows` there. Non-US layouts (German, French) put symbols on
+`Shift+digit`; check `Ctrl+Shift+1` on one. macOS: `Cmd` variants only.
 
 ### Security & privacy
 
@@ -105,8 +111,9 @@ verify the `Alt+N` bindings there. macOS: `Cmd` variants only.
 2. The palette shows the current binding next to each command, including user overrides.
 3. Rebinding `pane.splitRight` to `Alt+Shift+D` in config works after hot reload, and the old key goes to the shell.
 4. A binding for unknown command `tab.explode` produces a notice, and all other bindings still work.
-5. With default config, `Ctrl+R` in bash reaches readline (reverse search), and `Alt+B` moves back a word.
-6. Every Phase 1 action from specs 0002/0003/0005 appears in the palette.
+5. With default config, `Ctrl+R` in bash reaches readline (reverse search), `Alt+B` moves back a word, and `Ctrl+-` undoes the last edit.
+6. On a German keyboard layout, `Ctrl+Shift+2` goes to tab 2.
+7. Every Phase 1 action from specs 0002/0003/0005 appears in the palette.
 
 ## Open questions
 

@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-005]
 related: [spec 0001, spec 0003, spec 0004]
@@ -27,7 +27,7 @@ switching themes previews live.
 **In scope:**
 
 - `config.yaml` schema with defaults for every key
-- Profiles of type `local` (command, args, cwd, env, theme)
+- Profiles of type `local` (command with args, cwd, env, theme)
 - `default_profile`, plus "Open profile …" palette entries (spec 0004)
 - Themes: built-ins, files in `themes/*.yaml`, inline `theme.custom`, partial themes, `system` light/dark
 - Hot reload; "Open config file"; palette theme picker with live preview
@@ -50,7 +50,7 @@ switching themes previews live.
 Every key is optional:
 
 ```yaml
-default_profile: shell              # missing → first profile
+default_profile: shell              # missing → first profile in file order
 
 profiles:                           # map key = stable profile ID
   shell:
@@ -88,9 +88,10 @@ theme:
 ```
 
 - **Profiles** are a map, so IDs are unique by construction and stay stable
-  for `default_profile`, keybindings and session restore. With no profiles
-  configured, there is one implicit `shell` profile (the login shell). A
-  profile's `theme` applies to that profile's panes only.
+  for `default_profile` and session restore. Parsing keeps file order,
+  because "first profile" and the palette listing depend on it. With no
+  profiles configured, there is one implicit `shell` profile (the login
+  shell). A profile's `theme` applies to that profile's panes only.
 - **Typed per `type`** **[load-bearing]**: serde parses each profile as one
   variant (internally tagged on `type`). A bad profile is skipped with a
   notice naming its ID; the other profiles still load. Phase 1 launches only
@@ -131,8 +132,9 @@ still applies.
    `default_profile`): spawn the profile's command in its cwd with its env
    merged over the inherited environment. A missing cwd falls back to home.
    A non-`local` profile in Phase 1 shows a notice and doesn't open.
-3. **Hot reload:** the watcher starts after idle (spec 0001), debounced at
-   200 ms. Font, themes, cursor, scrollback and keybindings apply live to
+3. **Hot reload:** the watcher on `config.yaml` and `themes/` starts after
+   idle (spec 0001), debounced at 200 ms. Problems surface as notices
+   (architecture §Cross-cutting rules). Font, themes, cursor, scrollback and keybindings apply live to
    all open panes. Profile changes apply to newly opened panes; running
    panes keep what they were started with.
 4. **Theme picker:** a palette command lists all themes. Moving the
@@ -172,7 +174,7 @@ Notepad.
 4. A profile with `command: 42` is skipped with a notice naming it, and every other profile still opens.
 5. An inline theme `midnight` with only three colors renders those three and takes the rest from `dark`.
 6. With the same name defined inline, as a file and as a built-in, the inline one wins. Remove it and the file wins.
-7. Changing `font.size` in an editor and saving updates every open pane within 1 s.
+7. Changing `font.size` in an editor and saving updates every open pane within 1 s. Editing a color in `themes/<name>.yaml` for the active theme does the same.
 8. In the theme picker, `Esc` leaves the file untouched, and `Enter` changes only `theme.default` with comments intact.
 9. The window's first frame uses the resolved default theme's background (no white flash). With `system` on a light-mode OS, the first frame is `dark`, and the switch to `light` happens after the TTFP report.
 
