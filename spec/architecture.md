@@ -11,7 +11,8 @@ zed-term is a desktop terminal emulator with built-in SSH/SFTP and one-click
 AI coding agents (Claude Code, Hermes Agent, …) — Tabby's feature set, minus
 Tabby's boot time. It is for developers who live in terminals and remote
 hosts and are tired of waiting for Electron. The constraint that shapes
-everything: **a usable shell prompt in under 300 ms** from launch. It is a
+everything: **a usable shell prompt in under 1 s** from launch, where the
+system webview alone costs most of that (OQ-009). It is a
 local, single-user app: no accounts, no backend, no telemetry.
 
 ## Roadmap
@@ -114,8 +115,9 @@ contain secrets the user typed or printed.
 
 ## Cross-cutting rules
 
-- **Startup budget (load-bearing).** Time-to-first-prompt (TTFP) < 300 ms on
-  a release build. The boot path is: Rust `main` → read config → spawn the
+- **Startup budget (load-bearing).** Time-to-first-prompt (TTFP) < 1 s warm
+  median on a release build. About 800 ms of that is GTK plus WebKitGTK on
+  the reference machine (OQ-009), so our own code has roughly 200 ms. The boot path is: Rust `main` → read config → spawn the
   first shell → create window → first paint. Everything else is lazy. Full
   rules and measurement in [spec 0001](0001-startup-performance.md).
 - **Lazy by default.** A feature that is not needed for the first prompt is

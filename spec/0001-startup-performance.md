@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-001]
-related: [OQ-005 ✅]
+related: [OQ-005 ✅, OQ-009 ✅]
 ---
 
 # Spec: Startup performance and time-to-first-prompt
@@ -17,9 +17,11 @@ Slow boot is the reason this product exists (Tabby, T3 Code). Speed is a
 feature that rots one innocent `import` at a time, so the budget needs a
 number, a measurement and a guard.
 
-Done means: a release build reaches a usable prompt in **< 300 ms median
-on a warm start** on the owner's Fedora machine, and every dev run shows its
-TTFP. Cold starts are measured and reported, with no hard limit.
+Done means: a release build reaches a usable prompt in **< 1 s median on a
+warm start** on the owner's Fedora machine, and every dev run shows its
+TTFP. Cold starts are measured and reported, with no hard limit. The
+budget was 300 ms until T-001 measured the WebKitGTK floor at ~800 ms
+(OQ-009); the time our own code may add on top is therefore ~200 ms.
 
 ## Scope
 
@@ -118,7 +120,7 @@ shared and usually warm. macOS: compile-only.
 
 1. A dev run (`pnpm tauri dev`) shows a TTFP badge in a corner of the window and prints the marks to stdout.
 2. A release build launched with `--bench-startup` prints one JSON line with all five marks and exits with code 0, with no window interaction.
-3. On the owner's Fedora machine, `pnpm bench:startup` reports a warm-start median TTFP under 300 ms. The first (cold) run is reported separately.
+3. On the owner's Fedora machine, `pnpm bench:startup` reports a warm-start median TTFP under 1 s. The first (cold) run is reported separately.
 4. A broken `config.yaml` (invalid YAML) still boots to a prompt with defaults and shows a notice naming the line.
 5. Adding a 200 KB static import to `main.tsx` makes `pnpm build` fail with a budget message.
 6. With networking disabled, startup time and behavior are unchanged, and no request is attempted before the first prompt.

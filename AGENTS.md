@@ -14,7 +14,7 @@ for developers who open a terminal fifty times a day and notice every
 
 ## What we can never compromise on
 
-- **A prompt in under 300 ms.** Slow boot is why this product exists. Every
+- **A prompt in under 1 s, with ~200 ms of it ours.** Slow boot is why this product exists; the system webview eats the rest (OQ-009). Every
   feature that isn't the first prompt is lazy-loaded or runs after idle. The
   boot path is defined in [spec 0001](spec/0001-startup-performance.md), and
   adding anything to it requires a TTFP measurement in the commit.

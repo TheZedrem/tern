@@ -1,7 +1,7 @@
 # zed-term
 
 A fast terminal emulator with built-in SSH/SFTP and one-click AI coding
-agents. Tabby's feature set, with a prompt in under 300 ms. Built with
+agents. Tabby's feature set, with a prompt in under 1 s. Built with
 Tauri 2, Rust, SolidJS and xterm.js.
 
 **Status:** Phase 1 (core terminal) is specified and not yet implemented.

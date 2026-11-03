@@ -48,4 +48,5 @@ for (const mark of MARKS) {
   console.log(`${mark.padEnd(11)} ${fmt(cold[mark])}   ${fmt(med)}  ${fmt(p90)}`);
 }
 const ttfp = percentile(warm.map((r) => r.rendered), 50);
-console.log(`\nTTFP warm median ${ttfp.toFixed(1)} ms (budget < 300 ms): ${ttfp < 300 ? "OK" : "OVER BUDGET"}`);
+const BUDGET_MS = 1000; // spec 0001
+console.log(`\nTTFP warm median ${ttfp.toFixed(1)} ms (budget < ${BUDGET_MS} ms): ${ttfp < BUDGET_MS ? "OK" : "OVER BUDGET"}`);

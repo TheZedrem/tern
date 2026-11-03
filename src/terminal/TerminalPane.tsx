@@ -3,7 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import { onCleanup, onMount } from "solid-js";
-import { type BootPane, boot } from "../boot/boot";
+import { type BootPane, boot, whenIdle } from "../boot/boot";
 import { call, type PaneMessage } from "../ipc";
 
 /** Acks are batched: sent once this many bytes are consumed, or on the next tick. */
@@ -37,13 +37,15 @@ export function TerminalPane(props: Props) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
-    if (boot.webgl) loadWebgl(term);
     fit.fit();
 
+    // The first frame renders on the DOM renderer; WebGL init (~50 ms) is
+    // deferred until after it, which keeps that time off the TTFP.
     const firstRender = () => {
       const sub = term.onRender(() => {
         sub.dispose();
         props.onFirstRender();
+        if (boot.webgl) whenIdle(() => loadWebgl(term));
       });
     };
 
@@ -125,9 +127,9 @@ export function TerminalPane(props: Props) {
 }
 
 /**
- * WebGL first; the DOM renderer is the mandatory fallback (architecture
- * §Key decisions). Disposing the addon on context loss switches xterm back
- * to the DOM renderer without losing the buffer.
+ * Switches to WebGL after the first frame; the DOM renderer is the mandatory
+ * fallback (architecture §Key decisions). Disposing the addon on context
+ * loss switches xterm back to the DOM renderer without losing the buffer.
  */
 function loadWebgl(term: Terminal): void {
   try {

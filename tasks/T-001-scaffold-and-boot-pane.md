@@ -1,6 +1,6 @@
 ---
 status: now
-blocked-by: []       # waiting on OQ-009
+blocked-by: []
 ---
 # T-001: Scaffold the app and boot to a measured prompt
 
@@ -9,7 +9,7 @@ shell before the webview loads, stream it over a binary Channel into xterm
 (WebGL with DOM fallback), with correct fit/resize. Ship the TTFP machinery:
 dev badge, stdout marks, `--bench-startup`, `pnpm bench:startup`, and the
 entry-chunk budget check. Record the first real TTFP numbers (Linux) in the
-task summary: the warm median against the 300 ms budget, with the cold
+task summary: the warm median against the budget, with the cold
 run reported separately. Area: src-tauri, src.
 
 Spec: ../spec/0001-startup-performance.md
@@ -18,7 +18,8 @@ Spec: ../spec/0002-terminal-pane.md (spawn, streaming, resize, renderer, exit on
 ## First TTFP numbers (2026-11-03, Fedora 45, Wayland/COSMIC, WebKitGTK 2.54)
 
 Warm median over 10 bench runs: **1230 ms** (p90 1315, cold 1341). Over the
-300 ms budget by 4×. Breakdown of one warm run, ms since `main()`:
+original 300 ms budget by 4×; OQ-009 raised it to 1 s. Breakdown of one warm
+run, ms since `main()`:
 
 | Phase | ms |
 |---|---|
@@ -33,4 +34,4 @@ Warm median over 10 bench runs: **1230 ms** (p90 1315, cold 1341). Over the
 
 ~800 ms is platform floor before our first line of JS. Under `GDK_BACKEND=x11`
 the window shows at ~255 ms and JS starts at ~520 ms. The WebKit sandbox
-makes no difference. Blocked on OQ-009 (what the budget means given this floor).
+makes no difference.
