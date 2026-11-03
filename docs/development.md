@@ -30,4 +30,4 @@ use `pnpm bench:startup` for numbers you can compare.
 |---|---|
 | Config | `~/.config/zed-term/config.yaml` / `%APPDATA%\zed-term\config.yaml` |
 | User themes | `…/zed-term/themes/*.yaml` |
-| Session state | `~/.local/share/zed-term/session.json` / `%APPDATA%\zed-term\session.json` |
+| Session state | `~/.local/share/zed-term/session.json` / `%LOCALAPPDATA%\zed-term\session.json` |
