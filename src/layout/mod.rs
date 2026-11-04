@@ -420,6 +420,8 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Opens the rename field over tab `ix`, holding its current title, all
+    /// selected so typing replaces it.
     fn start_rename(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.tabs().get(ix) else {
             return;
@@ -438,7 +440,10 @@ impl Workspace {
                 _ => {}
             },
         ));
-        input.update(cx, |input, cx| input.focus(window, cx));
+        input.update(cx, |input, cx| {
+            input.focus(window, cx);
+            input.select_all(window, cx);
+        });
         self.rename = Some(Rename { tab: id, input });
         cx.notify();
     }
