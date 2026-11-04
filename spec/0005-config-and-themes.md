@@ -1,5 +1,5 @@
 ---
-status: approved     # draft | approved | implemented
+status: draft        # draft | approved | implemented
 phase: 1
 tasks: [T-005]
 related: [spec 0001, spec 0003, spec 0004]
@@ -9,7 +9,7 @@ related: [spec 0001, spec 0003, spec 0004]
 
 Pins the YAML config: its shape, **profiles** as the unit of "what a pane
 runs", error handling, hot reload, and themes (built-in, theme files and
-inline themes, all resolved in Rust).
+inline themes, all resolved to complete palettes at load time).
 
 ## Problem & goal
 
@@ -42,7 +42,7 @@ switching themes previews live.
 
 ### Affected areas
 
-- `src-tauri/src/config.rs`, `src-tauri/src/theme.rs`, `src-tauri/themes/*.yaml` (built-ins), `src/features/themes/` (picker)
+- `src/config.rs`, `src/theme.rs`, `themes/*.yaml` (built-ins, embedded), `src/commands/` (theme picker)
 
 ### Model
 
@@ -68,7 +68,7 @@ profiles:                           # map key = stable profile ID
     identity_file: ~/.ssh/id_ed25519 # optional; omit to let ssh choose
     theme: midnight
 
-font: { family: monospace, size: 13, line_height: 1.2 }
+font: { family: null, size: 13, line_height: 1.2 }   # null → the bundled font
 scrollback: 10000
 cursor: { style: block, blink: true }
 copy_on_select: false
@@ -100,11 +100,15 @@ theme:
 - **Theme lookup** **[load-bearing]**: inline `theme.custom` → `themes/<name>.yaml`
   → built-in. The first match wins. Built-ins are `dark` and `light`, embedded
   in the binary with `include_str!`.
-- **Resolved in Rust only** **[load-bearing]**: the frontend always receives
-  complete palettes. That means one parser, and the window background is
-  known before the webview exists (spec 0001).
+- **Resolved at load** **[load-bearing]**: the UI only ever sees complete
+  palettes, so the window's clear color is known before the window exists
+  (spec 0001).
+- **Font** **[load-bearing]**: `font.family: null` (the default) uses the
+  font embedded in the binary and costs no lookup. A named family is
+  resolved once at boot through the OS font database (`font-kit`); if it
+  isn't found, the bundled font is used with a notice.
 - **`system`** **[load-bearing]**: boot always renders `dark`, with no OS
-  query on the boot path. After the first prompt, at idle, Rust reads the OS
+  query on the boot path. After the first frame, the app reads the OS
   light/dark setting. If it's light, every pane using the default theme and
   the window background switch to `light`, the same way a hot reload does.
   Because detection is off the boot path, it may use the slower but correct
@@ -114,13 +118,12 @@ Unknown keys produce a notice, not an error. A wrong type on one key makes
 that key fall back to its default, with a notice; the rest of the file
 still applies.
 
-### IPC surface
+### Module surface
 
-- `__BOOT__.config`, `__BOOT__.profiles`, `__BOOT__.themes`: the resolved
-  default theme plus every theme a boot pane's profile uses (spec 0001)
-- Event `config-changed` → `{ config, profiles, notices }` after a hot reload
-- `theme_list() -> ThemeSummary[]`, `theme_resolve(name) -> Theme`
-- `config_open()`: create the commented default if it's missing, then open it in the OS editor
+- `config::load(path) -> Loaded { config, profiles, notices }`, used at boot and by the watcher
+- `theme::list() -> Vec<ThemeSummary>`, `theme::resolve(name) -> Theme`
+- `config::open_in_editor()`: create the commented default if it's missing, then open it with the OS default handler
+- Hot reload uses the `notify` crate; a reload replaces the shared config and raises a repaint
 
 ### Flows
 
@@ -132,7 +135,7 @@ still applies.
    merged over the inherited environment. A missing cwd falls back to home.
    A non-`local` profile in Phase 1 shows a notice and doesn't open.
 3. **Hot reload:** the watcher on `config.yaml` and `themes/` starts after
-   idle (spec 0001), debounced at 200 ms. Problems surface as notices
+   the first frame (spec 0001), debounced at 200 ms. Problems surface as notices
    (architecture §Cross-cutting rules). Font, themes, cursor, scrollback and keybindings apply live to
    all open panes. Profile changes apply to newly opened panes; running
    panes keep what they were started with.
@@ -145,8 +148,9 @@ still applies.
 ### Startup impact
 
 One synchronous read of `config.yaml`, plus one small read per theme file a
-boot pane uses. No writes, no watcher and no OS theme query at boot. `system` detection runs
-after the first prompt. The picker UI is lazy.
+boot pane uses, plus one font-database query only if `font.family` is set.
+No writes, no watcher and no OS theme query at boot. `system` detection runs
+after the first frame. The picker state is built on first open.
 
 ### Platform notes
 
@@ -167,7 +171,8 @@ Notepad.
 
 ## Acceptance criteria
 
-1. With no config file, the app boots to the login shell on the `dark` theme and creates no file.
+1. With no config file, the app boots to the login shell on the `dark` theme with the bundled font and creates no file.
+10. `font.family: "Nonexistent Mono"` boots with the bundled font and a notice naming the family.
 2. "Open config file" creates a commented default that parses back to exactly the defaults.
 3. Opening the `htop` profile from the palette runs htop in a new tab, in the profile's cwd, with its env applied.
 4. A profile with `command: 42` is skipped with a notice naming it, and every other profile still opens.

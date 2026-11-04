@@ -5,24 +5,26 @@ How to get a working dev setup. Day-to-day commands are in
 
 ## Prerequisites
 
-- Rust (stable, edition 2024), Node (current LTS), pnpm
-- Tauri's system dependencies:
-  - **Fedora:** `sudo dnf install webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel`
-  - **Debian/Ubuntu:** `sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`
-  - **Windows:** Microsoft C++ Build Tools and WebView2 (preinstalled on Windows 11)
-  - **macOS:** Xcode Command Line Tools
-- Full list: <https://v2.tauri.app/start/prerequisites/>
+- Rust (stable, edition 2024) with `rustfmt` and `clippy`
+  - **Fedora:** `sudo dnf install rust cargo rustfmt clippy`
+  - elsewhere: `rustup component add rustfmt clippy`
+- Linux build dependencies for `winit`/`wgpu`:
+  - **Fedora:** `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXcursor-devel libXrandr-devel libXi-devel mesa-vulkan-drivers`
+  - **Debian/Ubuntu:** `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev mesa-vulkan-drivers`
+- **Windows:** the MSVC toolchain (Visual Studio Build Tools). ConPTY needs
+  Windows 10 1809 or newer.
+- **macOS:** Xcode Command Line Tools (compile-only platform).
 
 ## First run
 
 ```sh
-pnpm install
-pnpm tauri dev
+cargo run
 ```
 
 The TTFP badge in the window corner is the startup time of this run. See
 [spec 0001](../spec/0001-startup-performance.md) for what it measures, and
-use `pnpm bench:startup` for numbers you can compare.
+use `cargo build --release && target/release/zed-term --bench-startup 10`
+for numbers you can compare.
 
 ## Where things are written at runtime
 

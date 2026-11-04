@@ -21,7 +21,7 @@ blocked-by: []       # e.g. [T-012, T-014]
 ---
 # T-nnn: <imperative summary>
 
-What to build, from the user's perspective — <area: src-tauri / src / meta>.
+What to build, from the user's perspective — <area: src / meta>.
 Spec: ../spec/NNNN-<feature>.md
 ```
 

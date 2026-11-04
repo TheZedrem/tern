@@ -1,5 +1,5 @@
 ---
-status: approved     # draft | approved | implemented
+status: draft        # draft | approved | implemented
 phase: 1
 tasks: [T-003, T-006]
 related: [spec 0001, spec 0002, spec 0005]
@@ -38,7 +38,7 @@ immediately.
 
 ### Affected areas
 
-- `src/layout/` (store, tab bar, split view), `src-tauri/src/session.rs`
+- `src/layout/` (model, tab bar, split view), `src/session.rs`
 
 ### Model
 
@@ -56,11 +56,11 @@ drops below 10 cols × 3 rows. Leaf IDs are stable across restarts;
 A tab's title is the user's rename if set, else the focused pane's OSC
 title, else the profile's display name.
 
-### IPC surface
+### Persistence
 
-- `session_save(session)`: writes atomically (temp file, then rename).
-- Boot: Rust reads `session.json` and includes the active tab's layout in
-  `__BOOT__`, with PTYs already spawned for that tab's leaves (spec 0001).
+- Saves write atomically (temp file, then rename) from a background thread.
+- Boot reads `session.json` before the window exists and spawns the active
+  tab's leaves right away (spec 0001).
 
 ### Flows
 
@@ -89,10 +89,10 @@ title, else the profile's display name.
 
 ### Startup impact
 
-The tab bar and split view are in the entry chunk because the first frame
-needs them. Drag-reorder and rename UI load on first interaction. Restore
-adds one small file read and N PTY spawns for the active tab only. The TTFP
-report covers a restored 4-pane tab (spec 0001).
+The first frame draws the tab bar and split view; they are plain functions
+over the layout model and cost nothing to initialize. Restore adds one
+small file read and N PTY spawns for the active tab only. The TTFP report
+covers a restored 4-pane tab (spec 0001).
 
 ### Platform notes
 
@@ -105,8 +105,8 @@ None beyond spec 0002.
   Overwritten on every save. Setting `restore_session: false` deletes it on
   the next quit.
 - Trust boundaries: crosses §Security 1, because tab titles come from
-  terminal output (OSC 0/2). They render as plain text only, never HTML,
-  capped at 200 characters.
+  terminal output (OSC 0/2). They render as plain text, with control
+  characters stripped, capped at 200 characters.
 
 ## Acceptance criteria
 
@@ -118,7 +118,7 @@ None beyond spec 0002.
 6. A truncated `session.json` boots one fresh tab and leaves `session.json.bad` behind. Closing the last tab and relaunching boots one fresh tab with no `.bad` file.
 7. TTFP with a restored 4-pane active tab stays under budget (spec 0001).
 8. `session.json` contains no scrollback, commands or environment variables.
-9. `printf '\e]0;<img src=x onerror=alert(1)>\a'` shows that literal text as the tab title and runs nothing.
+9. `printf '\e]0;a\tb\x07c\a'` shows `abc`-like plain text as the tab title: no control characters leak into the tab bar or the window title.
 
 ## Open questions
 

@@ -1,10 +1,6 @@
-//! Themes, resolved in Rust only so the frontend always gets a complete
-//! palette and the window background is known before the webview exists
-//! (spec 0005). T-001 ships the built-in `dark`; lookup, files and partial
-//! themes arrive with T-005.
-//!
-//! Field names serialize to xterm.js's `ITheme` keys, so the frontend passes
-//! the palette straight through.
+//! Themes, resolved to complete palettes at load so the window's clear
+//! color is known before the window exists (spec 0005). The built-in `dark`
+//! lives here; lookup, files and partial themes arrive with T-005.
 
 use serde::Serialize;
 

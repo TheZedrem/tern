@@ -1,5 +1,5 @@
 ---
-status: approved     # draft | approved | implemented
+status: draft        # draft | approved | implemented
 phase: 1
 tasks: [T-004]
 related: [spec 0002, spec 0003, spec 0005]
@@ -38,15 +38,15 @@ palette, and bindable in `config.yaml`.
 
 ### Affected areas
 
-- `src/commands/` (registry, keymap, in entry), `src/features/palette/` (lazy)
+- `src/commands/` (registry, keymap, palette)
 
 ### Model
 
-Command IDs are namespaced strings (`tab.new`, `pane.splitRight`,
-`terminal.search`, `app.openConfig`). Their type is a union derived from the
-registry, so a typo in a keybinding default is a compile error.
-Config-provided bindings are checked at runtime, and unknown IDs produce a
-notice.
+Commands are one `enum` (`Tab::New`, `Pane::SplitRight`, `Terminal::Search`,
+`App::OpenConfig`, …) with a stable string ID per variant (`tab.new`,
+`pane.splitRight`) used in config and shown in the palette. A typo in a
+default binding is a compile error. Config-provided bindings are parsed at
+runtime, and unknown IDs produce a notice.
 
 **Default bindings (Linux/Windows; macOS swaps `Ctrl+Shift` → `Cmd`):**
 
@@ -67,18 +67,15 @@ or punctuation key without `Shift`, because those belong to the shell and
 to readline/emacs/vim (`Ctrl+R`, `Alt+B`, `Alt+3` digit argument, `Ctrl+-`
 undo). The user may override this in config.
 
-Shortcuts match on the physical key (`KeyboardEvent.code`), so
+Shortcuts match on the physical key (`winit`'s `PhysicalKey`), so
 `Ctrl+Shift+1` works even where `Shift+1` types `!` or another symbol.
-
-### IPC surface
-
-None. This is frontend-only, apart from reading keybindings from config.
 
 ### Flows
 
-1. **Key event in a pane:** xterm's custom key handler matches it against the
-   keymap. On a match the command runs and the key is consumed; otherwise the
-   key goes to the shell.
+1. **Key event:** the app consumes `egui` key events before any pane sees
+   them and matches them against the keymap. On a match the command runs
+   and the event is consumed; otherwise it reaches the focused pane and
+   goes to the shell (spec 0002).
 2. **Palette:** opens centered over the focused pane. Typing fuzzy-filters
    titles. `↑↓` moves the selection, `Enter` runs the command, `Esc` closes.
    Focus returns to the pane it came from.
@@ -89,9 +86,8 @@ None. This is frontend-only, apart from reading keybindings from config.
 
 ### Startup impact
 
-The registry and keymap are in the entry chunk (they're small and needed for
-the first keystroke). The palette UI and fuzzy matcher load via `import()`
-on first open and are prefetched after idle.
+The keymap is built from config on the boot path (a few hundred entries at
+most). The palette's entry list and matcher state are built on first open.
 
 ### Platform notes
 
@@ -107,7 +103,7 @@ verify `Alt+arrows` there. Non-US layouts (German, French) put symbols on
 
 ## Acceptance criteria
 
-1. `Ctrl+Shift+P` opens the palette within 100 ms on the first open after idle prefetch. Typing `splr` ranks "Split right" first.
+1. `Ctrl+Shift+P` opens the palette on the next frame. Typing `splr` ranks "Split right" first.
 2. The palette shows the current binding next to each command, including user overrides.
 3. Rebinding `pane.splitRight` to `Alt+Shift+D` in config works after hot reload, and the old key goes to the shell.
 4. A binding for unknown command `tab.explode` produces a notice, and all other bindings still work.
@@ -117,4 +113,4 @@ verify `Alt+arrows` there. Non-US layouts (German, French) put symbols on
 
 ## Open questions
 
-- Fuzzy matcher: a ~1 KB hand-written subsequence scorer vs a library. Prefer hand-written unless ranking is poor.
+- Fuzzy matcher: a small hand-written subsequence scorer vs a crate (`nucleo`). Prefer hand-written unless ranking is poor.

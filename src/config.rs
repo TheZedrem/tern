@@ -1,4 +1,4 @@
-//! `config.yaml` loading (spec 0005, boot-path subset for T-001).
+//! `config.yaml` loading (spec 0005, boot-path subset for T-010).
 //!
 //! A broken config never blocks boot: any read or parse failure yields the
 //! defaults plus a notice naming the line. Per-key fallback, profiles and
@@ -18,7 +18,8 @@ pub struct Config {
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Font {
-    pub family: String,
+    /// `None` means the font bundled in the binary (spec 0005).
+    pub family: Option<String>,
     pub size: f64,
     pub line_height: f64,
 }
@@ -44,7 +45,7 @@ impl Default for Config {
 impl Default for Font {
     fn default() -> Self {
         Self {
-            family: "monospace".into(),
+            family: None,
             size: 13.0,
             line_height: 1.2,
         }

@@ -29,13 +29,13 @@ Done means: …
 
 ### Affected areas
 
-- `src-tauri/` / `src/` / config schema
+- `src/<module>/` / config schema
 
 ### Model
 
-### IPC surface
+### Module surface
 
-New or changed Tauri commands, events, Channel messages.
+New or changed public functions, types and threads other modules rely on.
 
 ### Flows
 

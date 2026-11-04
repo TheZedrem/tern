@@ -1,15 +1,15 @@
 ---
-status: approved     # draft | approved | implemented
+status: draft        # draft | approved | implemented
 phase: 1
-tasks: [T-001, T-002]
+tasks: [T-010, T-002]
 related: [spec 0005, OQ-003 ✅, OQ-008 ✅]
 ---
 
 # Spec: Terminal pane
 
-Pins one terminal pane end to end: spawning the shell, streaming, resize,
-clipboard, scrollback, search, links and exit. Tabs and splits (spec 0003)
-are arrangements of these panes.
+Pins one terminal pane end to end: spawning the shell, parsing, rendering,
+resize, clipboard, scrollback, search, links and exit. Tabs and splits
+(spec 0003) are arrangements of these panes.
 
 ## Problem & goal
 
@@ -24,97 +24,89 @@ works in a pane on Linux and Windows without glitches.
 
 **In scope:**
 
-- Local process spawn from a profile (spec 0005), environment, working directory
-- Output streaming and input, resize, exit handling
+- Spawning by profile ID (spec 0005): command, environment, working directory
+- Parsing and rendering, input, resize, exit handling
 - Copy/paste, scrollback, search, clickable links
-- Renderer selection with fallback
-- Spawning by profile ID, so Phase 2 (`ssh …`) and Phase 3 (agents) reuse panes unchanged
+- A `command` override on spawn, so Phase 2 (`ssh …`) and Phase 3 (agents) reuse panes unchanged
 
 **Out of scope:**
 
 - Multi-line paste warning, "process still running" close prompt: *Later*
 - SSH and agent specifics: Phase 2/3 specs
 - Persisting scrollback: never (`architecture.md` §Ground rules)
+- Ligatures, font fallback for CJK/emoji beyond what the bundled font covers: *Later* (OQ-011)
 
 ## Design
 
 ### Affected areas
 
-- `src-tauri/src/pty.rs`, `src/terminal/`, `src/features/search/`
+- `src/terminal/` (pane, grid widget, input, search)
 
 ### Model
 
-`Pane { id, pty, cwd?, title, exit? }`. The PTY side lives in Rust (writer,
-master, child). The view side (xterm instance, addons) lives in the
-frontend. Pane IDs are `u32`, unique per app run.
+`Pane { id, term: alacritty_terminal::Term, event_loop handle, title, cwd?, exit? }`.
+`alacritty_terminal` owns the VT state (grid, scrollback, selection,
+damage) and the PTY; we own the widget that draws the grid and maps input.
+Pane IDs are `u32`, unique per app run.
 
-- **Resolved in Rust [load-bearing]:** the webview names a profile; Rust
-  resolves its command, cwd and env from config. The webview never passes a
-  command line, which keeps §Security 1 as narrow as it can be.
-- **Command:** the profile's `command` (spec 0005) if set. Otherwise `$SHELL` (Linux/macOS, started
-  as a login shell) or, on Windows, the first one found of `pwsh`,
+- **Resolved from config [load-bearing]:** the caller names a profile; the
+  pane module resolves command, cwd and env from config (spec 0005).
+- **Command:** the profile's `command` if set. Otherwise `$SHELL` (Linux/macOS,
+  started as a login shell) or, on Windows, the first one found of `pwsh`,
   `powershell.exe`, `cmd.exe`.
 - **Environment:** inherit, then the profile's `env`, plus `TERM=xterm-256color`,
   `COLORTERM=truecolor`, `TERM_PROGRAM=zed-term`.
-- **cwd:** explicit, else the home directory. Tracked live from OSC 7, with a
-  fallback to `/proc/<pid>/cwd` on Linux; unknown on Windows without OSC 7.
-  The app ships opt-in shell-integration snippets for bash, zsh and pwsh
-  under `shell-integration/`, which the user sources from their rc file
-  (OQ-008). Nothing is injected into the shell automatically.
-
-### IPC surface
-
-- `pty_spawn({ profile, cols, rows, cwd? }, onOutput: Channel) -> PaneId`: `cwd` overrides the profile's (splits, restore)
-- `pty_ack(id, bytes)`: output consumed by xterm (backpressure, architecture §Key decisions)
-- `pty_attach(id, onOutput: Channel)`: for boot panes and after a page reload
-- `pty_write(id, data: string)`, `pty_resize(id, cols, rows)`, `pty_kill(id)`
-- `pty_cwd(id) -> string | null`
-- Channel messages: raw bytes, or a JSON `{ "exit": code | null }` sent last (architecture §Key decisions)
+- **cwd:** explicit, else the home directory. Tracked live from OSC 7 (an
+  `alacritty_terminal` event), with a fallback to `/proc/<pid>/cwd` on Linux;
+  unknown on Windows without OSC 7. The app ships opt-in shell-integration
+  snippets for bash, zsh and pwsh under `shell-integration/`, which the user
+  sources from their rc file (OQ-008). Nothing is injected automatically.
 
 ### Flows
 
-1. **Resize:** a container `ResizeObserver` triggers fit, batched to at most
-   one per animation frame. `pty_resize` is called only when cols/rows
-   actually change.
-2. **Input:** `onData` → `pty_write`. App shortcuts are intercepted before
-   xterm (spec 0004). Unbound keys always reach the shell.
-3. **Output flood:** xterm's `write` callback acks consumed bytes in
-   batches. Past 256 KB unacked, Rust stops reading and the program blocks
-   on its own write, so the UI stays responsive.
+1. **Resize:** the widget's allocated rect ÷ cell size gives cols/rows; the
+   PTY is resized only when they change, at most once per frame.
+2. **Input:** key events map to bytes (`alacritty_terminal`'s key handling
+   conventions: application cursor mode, modifiers, bracketed paste). App
+   shortcuts are matched first (spec 0004); unbound keys always reach the
+   shell. IME commit text is written as-is.
+3. **Output:** the pane's event loop thread parses PTY bytes into the grid
+   and requests a repaint. The widget renders the visible rows as one galley
+   each, so a flood costs one parse per byte and one layout per visible row
+   per frame, and memory is bounded by `scrollback`.
 4. **Copy/paste:** `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C/V` on macOS).
    With default bindings `Ctrl+C` reaches the shell. Clipboard goes through
-   `tauri-plugin-clipboard-manager`, because WebKitGTK gates
-   `navigator.clipboard` reads. Bracketed paste is handled by xterm.
-   Copy-on-select is a config option, default off.
-5. **Scrollback:** `config.scrollback` lines, default 10 000.
-6. **Search:** `Ctrl+Shift+F` opens an inline search bar, a lazy chunk with
-   `addon-search`. It supports next/previous, case-sensitive and regex
-   toggles, and highlights all matches. `Esc` closes it and returns focus to
-   the pane.
-7. **Links:** URLs are clickable with Ctrl/Cmd+click and open in the OS
-   handler. The addon loads after idle.
+   `egui`'s clipboard (arboard). Paste is bracketed when the program asked
+   for it. Copy-on-select is a config option, default off. Mouse selection
+   is `alacritty_terminal`'s (simple, word on double-click, line on triple).
+5. **Scrollback:** `config.scrollback` lines, default 10 000. Mouse wheel
+   and `Shift+PageUp/PageDown` scroll; any input snaps back to the bottom.
+6. **Search:** `Ctrl+Shift+F` opens an inline search bar. It supports
+   next/previous, case-sensitive and regex toggles (`alacritty_terminal`'s
+   regex search), and highlights all matches. `Esc` closes it and returns
+   focus to the pane.
+7. **Links:** OSC 8 hyperlinks and detected URLs are underlined on hover and
+   open with Ctrl/Cmd+click in the OS handler, with the target shown in a
+   tooltip.
 8. **Exit:** the pane shows `[process exited with code N]`.
    `config.close_on_exit` (`always | clean | never`, default `clean`) decides
    whether it closes. A clean exit (code 0) closes the pane.
-9. **Renderer:** WebGL first. If init fails or the context is lost, dispose
-   it and continue on the DOM renderer without losing buffer content.
-10. **Spawn failure** (bad shell path, missing binary, unknown profile): the
-    pane shows the error and the command it tried, and stays open until closed.
-11. **App quit:** every child process is killed, so no orphaned shells
+9. **Spawn failure** (bad shell path, missing binary, unknown profile): the
+   pane shows the error and the command it tried, and stays open until closed.
+10. **App quit:** every child process is killed, so no orphaned shells
     survive the window.
 
 ### Startup impact
 
-xterm core, WebGL and fit are in the entry chunk (spec 0001). Search,
-web-links, unicode11 and the clipboard JS wrapper load lazily or after
-idle.
+A pane adds one thread and one PTY spawn to the boot path (spec 0001). The
+search bar and link detection initialize on first use.
 
 ### Platform notes
 
-Windows: ConPTY via `portable-pty`. ConPTY rewrites output and can
-reflow-redraw on resize, so verify resize behavior with `vim` on Windows
-explicitly. Linux: WebKitGTK may refuse WebGL on some GPUs, so the fallback
-path is not theoretical.
+Windows: ConPTY via `alacritty_terminal::tty`. ConPTY rewrites output and
+can reflow-redraw on resize, so verify resize behavior with `vim` on Windows
+explicitly. Key mapping differs (no `$SHELL`, AltGr), so the input map is
+tested on both.
 
 ### Security & privacy
 
@@ -123,24 +115,24 @@ path is not theoretical.
   level.
 - Trust boundaries: crosses §Security 1 and 2, because the pane renders
   untrusted program output. Decisions:
-  - **Titles (OSC 0/2) and cwd (OSC 7):** honored. Titles are plain text, never HTML (spec 0003).
+  - **Titles (OSC 0/2) and cwd (OSC 7):** honored. Titles are plain text (spec 0003).
   - **Links (OSC 8 and detected URLs):** open only on Ctrl/Cmd+click, with the target shown on hover. Only `http`/`https` URLs open.
-  - **Clipboard writes (OSC 52):** not handled in Phase 1.
+  - **Clipboard writes (OSC 52):** not handled in Phase 1 (the event is ignored).
 
 ## Acceptance criteria
 
 1. Resizing the window while `vim` is open redraws vim at the new size with no stale rows or wrapping artifacts (Linux and Windows).
-2. `cat` of a 50 MB text file finishes without freezing the UI (tab switching stays responsive during it), the last line shown matches the file's last line, and the webview's memory doesn't grow by more than the scrollback.
-3. Multi-byte UTF-8 (emoji, CJK) split across read chunks renders correctly.
-4. `Ctrl+C` interrupts `sleep 100`. `Ctrl+Shift+C` copies the selection, and `Ctrl+Shift+V` pastes it as one bracketed paste.
+2. `cat` of a 50 MB text file finishes without freezing the UI (tab switching stays responsive during it), the last line shown matches the file's last line, and memory doesn't grow by more than the scrollback.
+3. Multi-byte UTF-8 (emoji, CJK) split across read chunks renders correctly for characters the bundled font covers.
+4. `Ctrl+C` interrupts `sleep 100`. `Ctrl+Shift+C` copies the selection, and `Ctrl+Shift+V` pastes it as one bracketed paste when the program enabled it.
 5. Search finds a term 5 000 lines up in scrollback, highlights it, and `Esc` returns focus to the shell.
 6. A configured nonexistent shell shows an error in the pane instead of a blank pane or a crash.
 7. `exit 0` closes the pane under the default config. `exit 3` leaves it open showing code 3.
 8. Quitting the app leaves no child shell processes running.
-9. Forcing WebGL off still yields a fully working pane on the DOM renderer.
-10. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on Ctrl+click, while an `https://` link opens in the browser.
-11. With the pwsh snippet sourced on Windows, `cd C:\Users` then split: the new pane starts in `C:\Users`.
+9. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on Ctrl+click, while an `https://` link opens in the browser.
+10. With the pwsh snippet sourced on Windows, `cd C:\Users` then split: the new pane starts in `C:\Users`.
+11. Typing with an IME (e.g. ibus with a CJK layout on Linux) delivers the committed text to the shell.
 
 ## Open questions
 
-- None.
+- [OQ-011](open-questions.md): font fallback for glyphs the bundled font lacks.

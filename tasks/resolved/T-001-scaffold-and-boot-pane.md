@@ -4,6 +4,12 @@ blocked-by: []
 ---
 # T-001: Scaffold the app and boot to a measured prompt
 
+**Resolved as superseded (2026-11-04):** the Tauri + WebKitGTK app this
+task built could not get under 1 s on the reference machine (numbers
+below). OQ-010 chose a native rewrite; the Tauri code was removed in the
+same change and T-010 restarts the scaffold on the native stack. The
+measurements here are the reason, so they stay.
+
 Scaffold Tauri 2 + SolidJS + Vite + Tailwind (pnpm), spawn the boot pane's
 shell before the webview loads, stream it over a binary Channel into xterm
 (WebGL with DOM fallback), with correct fit/resize. Ship the TTFP machinery:

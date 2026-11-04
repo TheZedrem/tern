@@ -1,8 +1,8 @@
 ---
-status: approved     # draft | approved | implemented
+status: draft        # draft | approved | implemented
 phase: 1
-tasks: [T-001]
-related: [OQ-005 ✅, OQ-009 ✅]
+tasks: [T-010]
+related: [OQ-005 ✅, OQ-009 ✅, OQ-010 ✅]
 ---
 
 # Spec: Startup performance and time-to-first-prompt
@@ -14,22 +14,22 @@ during development instead of in reviews.
 ## Problem & goal
 
 Slow boot is the reason this product exists (Tabby, T3 Code). Speed is a
-feature that rots one innocent `import` at a time, so the budget needs a
-number, a measurement and a guard.
+feature that rots one innocent initialization at a time, so the budget
+needs a number, a measurement and a guard.
 
-Done means: a release build reaches a usable prompt in **< 1 s median on a
-warm start** on the owner's Fedora machine, and every dev run shows its
-TTFP. Cold starts are measured and reported, with no hard limit. The
-budget was 300 ms until T-001 measured the WebKitGTK floor at ~800 ms
-(OQ-009); the time our own code may add on top is therefore ~200 ms.
+Done means: a release build reaches a usable prompt in **< 150 ms median
+on a warm start** on the owner's Fedora machine, and every dev run shows its
+TTFP. Cold starts are measured and reported, with no hard limit. The native
+spike (OQ-010) measured 68 ms, so the budget leaves room for a real UI
+without inviting rot.
 
 ## Scope
 
 **In scope:**
 
-- Boot path rules (Rust and frontend)
-- TTFP definition, dev badge, stdout report, `--bench-startup`, `pnpm bench:startup`
-- Entry-bundle size budget enforced at build time
+- Boot path rules
+- TTFP definition, dev badge, stdout report, `--bench-startup`
+- Bench runner built into the binary (no scripts, works on Windows)
 
 **Out of scope:**
 
@@ -40,28 +40,18 @@ budget was 300 ms until T-001 measured the WebKitGTK floor at ~800 ms
 
 ### Affected areas
 
-- `src-tauri/` (boot sequence, timing), `src/main.tsx` (entry), `vite.config.ts` (budget check), `scripts/`
+- `src/main.rs` (boot sequence), `src/timing.rs` (marks, bench)
 
 ### Model
 
-**TTFP** = time from Rust `main()` entry to xterm.js having rendered the
-first output bytes of the first pane. First shell output is the practical
+**TTFP** = time from `main()` entry to the first frame presented that
+contains output from the first pane. First shell output is the practical
 proxy for "prompt visible". Time spent before `main()` (exec, dynamic
 linking) isn't counted; that's accepted as a small constant.
 
-Intermediate marks, all relative to `main()`: `config` (config read),
-`pty` (first PTY spawned), `window` (window created), `first_byte` (first
-PTY output in Rust), `rendered` (frontend report).
-
-### IPC surface
-
-- `window.__BOOT__`, injected by the window's initialization script: resolved
-  config subset, resolved theme palette, the IDs of the panes started at boot,
-  and the layout to render. **[load-bearing]** No `invoke` round trip is
-  needed before the first paint.
-- `report_first_prompt() -> TtfpReport`: called once by the frontend after the
-  first render. Rust prints the report, returns it for the badge, and exits
-  the app in bench mode.
+Marks, all relative to `main()`: `config` (config and session read),
+`pty` (active tab's PTYs spawned), `window` (window created), `first_byte`
+(first PTY output parsed), `rendered` (first frame with output presented).
 
 ### Flows
 
@@ -73,60 +63,58 @@ TTFP measurement in the commit.
    missing or broken config, use defaults and queue a notice (architecture
    §Key decisions). A missing or broken session means one fresh tab
    (spec 0003). Never write files on the boot path.
-3. Spawn the active tab's PTY(s) at an estimated size: the saved window size
-   from `session.json` (default 1000×640 logical px) split per the saved
-   layout, ÷ the font's estimated cell size. Output buffers in Rust until a
-   Channel attaches (architecture §Key decisions). The shell boots while the
-   webview loads.
-4. Create the window with its background set to the theme background, so
-   there's no white flash, and inject `__BOOT__`.
-5. Frontend entry: render the layout, mount xterm, attach Channels, fit
-   (this triggers one PTY resize if the estimate was off).
-6. First render of PTY output → `report_first_prompt()`.
-7. Only after step 6, when idle (with a `setTimeout` fallback, since WebKit
-   lacks `requestIdleCallback`), run deferred work: config watcher,
-   web-links/unicode addons, prefetching lazy chunks.
+3. Spawn the active tab's PTY(s) at the grid size implied by the saved
+   window size (default 1000×640 logical px) and the font's cell size. Each
+   pane's event loop starts parsing immediately (architecture §Key
+   decisions). The shell boots while the window comes up.
+4. Create the window with its clear color set to the theme background, so
+   there's no white flash. The bundled font is already in memory; no font
+   lookup happens unless `font.family` is configured.
+5. First frame: render the layout and every visible pane's grid.
+6. The first frame that includes PTY output records `rendered` and prints
+   the report.
+7. Only after step 6, on the next frame, run deferred work: config watcher,
+   OS theme detection, prefetching anything lazy.
 
-**Failure paths:** if the WebGL renderer fails to initialize, use the DOM
-renderer and still report TTFP. If the PTY spawn fails, render the error in
-the pane and report TTFP at that render, so the bench never hangs.
+**Failure paths:** if `wgpu` can't create a device, `eframe` falls back to
+the `glow` backend and TTFP is still reported. If the PTY spawn fails,
+render the error in the pane and report TTFP at that frame, so the bench
+never hangs.
 
 **Bench mode (`--bench-startup`):** the boot pane runs a minimal shell
 command (`sh -c 'echo ready'` / `cmd /c echo ready`) instead of the user's
 shell, so the number measures zed-term, not dotfiles. It prints one JSON
-line with all marks and exits. `pnpm bench:startup [N=10]` runs the release
-binary N times and prints the median and p90 for each mark.
+line with all five marks and exits. `zed-term --bench-startup 10` runs the
+release binary ten times (one cold, N warm) by re-spawning itself and prints
+the median and p90 per mark; the default N is 10.
 
 ### Startup impact
 
-This spec *is* the startup path. Entry-chunk budget: **≤ 150 KB gzipped
-JS** (Solid, xterm, WebGL/fit addons, layout, pane). `pnpm build` fails if
-the entry chunk exceeds it. Raising the budget needs the owner's OK.
+This spec *is* the startup path. The guard is the dev badge on every run
+plus the bench; there is no bundle to size.
 
 ### Platform notes
 
-Linux: WebKitGTK is the biggest unknown for the warm budget; measure it in
-T-001 before optimizing anything else. Windows: WebView2 is
-shared and usually warm. macOS: compile-only.
+Linux: Wayland and X11 via `winit`; `wgpu` on Vulkan. Windows: `wgpu` on
+DX12, ConPTY via `alacritty_terminal`. macOS: compile-only.
 
 ### Security & privacy
 
 - Stored: nothing. Timings are printed to stdout only, with no paths,
   commands or output.
-- `__BOOT__` carries resolved config and themes, never secrets.
 - Trust boundaries: none crossed.
 
 ## Acceptance criteria
 
-1. A dev run (`pnpm tauri dev`) shows a TTFP badge in a corner of the window and prints the marks to stdout.
+1. A dev run (`cargo run`) shows a TTFP badge in a corner of the window and prints the marks to stdout.
 2. A release build launched with `--bench-startup` prints one JSON line with all five marks and exits with code 0, with no window interaction.
-3. On the owner's Fedora machine, `pnpm bench:startup` reports a warm-start median TTFP under 1 s. The first (cold) run is reported separately.
+3. On the owner's Fedora machine, `zed-term --bench-startup 10` reports a warm-start median TTFP under 150 ms. The first (cold) run is reported separately.
 4. A broken `config.yaml` (invalid YAML) still boots to a prompt with defaults and shows a notice naming the line.
-5. Adding a 200 KB static import to `main.tsx` makes `pnpm build` fail with a budget message.
-6. With networking disabled, startup time and behavior are unchanged, and no request is attempted before the first prompt.
-7. No white flash: the first painted frame is the theme background.
-8. With WebGL unavailable, the app boots on the DOM renderer and still reports TTFP.
+5. With networking disabled, startup time and behavior are unchanged, and no request is attempted before the first prompt.
+6. No white flash: the first painted frame is the theme background.
+7. With `wgpu` forced off (env `ZED_TERM_RENDERER=glow`), the app boots on the OpenGL backend and still reports TTFP.
+8. The same binary and bench run on Windows and report all five marks.
 
 ## Open questions
 
-- Whether coalescing tiny PTY reads matters for TTFP (expected: no).
+- None.

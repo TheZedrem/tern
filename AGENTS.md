@@ -8,16 +8,18 @@ represented in `tasks/`. Read this file fully before your first task.
 
 A desktop terminal emulator with built-in SSH/SFTP and one-click AI coding
 agents. Think Tabby's feature set with the boot time of a native terminal.
-It's built on Tauri 2 (Rust + system webview), `portable-pty` and xterm.js,
-for developers who open a terminal fifty times a day and notice every
-100 ms.
+It's pure Rust: `egui` for the window and chrome, `alacritty_terminal` for
+the terminal itself, for developers who open a terminal fifty times a day
+and notice every 10 ms.
 
 ## What we can never compromise on
 
-- **A prompt in under 1 s, with ~200 ms of it ours.** Slow boot is why this product exists; the system webview eats the rest (OQ-009). Every
-  feature that isn't the first prompt is lazy-loaded or runs after idle. The
-  boot path is defined in [spec 0001](spec/0001-startup-performance.md), and
-  adding anything to it requires a TTFP measurement in the commit.
+- **A prompt in under 150 ms.** Slow boot is why this product exists. A
+  native spike measured 68 ms; a webview version measured 1.07 s and was
+  dropped (OQ-010). Every feature that isn't the first frame initializes
+  after it. The boot path is defined in
+  [spec 0001](spec/0001-startup-performance.md), and adding anything to it
+  requires a TTFP measurement in the commit.
 - **The shell owns the keyboard.** Plain `Ctrl+<letter>` / `Alt+<letter>`
   belong to readline, vim and emacs. App shortcuts use `Ctrl+Shift` (`Cmd` on
   macOS) by default. A terminal that eats `Ctrl+R` is broken.
@@ -31,64 +33,57 @@ for developers who open a terminal fifty times a day and notice every
 
 Simple beats clever: the simplest design that meets the budget wins, and a
 design that needs a paragraph to justify itself is the wrong one. YAGNI
-unless a spec says otherwise. Types do the heavy lifting: no `any` in TS,
-inferred types over annotations, typed IPC wrappers over string `invoke`s.
-Tests are focused on behavior, not smoke for its own sake. Comments explain
-*why* at function and module level, and stay in sync with the code. These
-are good defaults. If one fights the task, say so and ask.
+unless a spec says otherwise. Types do the heavy lifting: enums over
+stringly-typed IDs, inferred types over annotations. Tests are focused on
+behavior, not smoke for its own sake. Comments explain *why* at function
+and module level, and stay in sync with the code. These are good defaults.
+If one fights the task, say so and ask.
 
 ## The ways to hurt this project (worst first)
 
-1. **A static import on the boot path.** Anything `src/main.tsx` imports,
-   directly or transitively, lands in the entry chunk that every launch
-   parses. Use `import()` for features. `pnpm build` enforces the 150 KB
-   gzip budget. Don't raise the budget to make a build pass; ask first.
-2. **Blocking the Tauri main thread.** Non-`async` Tauri commands run on the
-   main thread. A blocking PTY write (a large paste into a full buffer)
-   freezes the whole UI. Commands touching PTYs or files are `async` or hand
-   off to a thread.
+1. **Work before the first frame.** Anything `main.rs` does before
+   `eframe::run_native` presents a frame is on every launch. Font database
+   scans, theme engines, watchers, network: all after the first frame.
+   The dev badge shows the TTFP of every run; watch it.
+2. **Blocking the UI thread.** The `egui` update loop is the UI thread.
+   File IO, PTY writes and anything that can wait go to a thread; the
+   update function only locks a pane's grid long enough to draw it.
 3. **Killing the wrong process.** Never `pkill zed-term` / `pkill -f`. The
    owner may be daily-driving a zed-term build, and that kills every shell
    they have open. Kill only a PID you captured at spawn.
 4. **Logging terminal bytes.** PTY output carries passwords, tokens and
    private data. Never log it, even at debug level, and never persist it.
-5. **Solid isn't React.** Components run once. Destructuring props or reading
-   a signal outside a tracking scope silently freezes the UI. Use
-   `props.x` and `splitProps`.
-6. **Channels die with the page.** A dev reload (HMR) orphans every pane's
-   Channel. Panes re-attach via `pty_attach`; never assume one Channel lives
-   for the PTY's whole lifetime ([architecture](spec/architecture.md#key-decisions-and-their-costs)).
+5. **Per-frame work that scales with scrollback.** Immediate mode redraws
+   every frame. Only visible rows are laid out; never iterate the whole
+   grid or re-layout unchanged rows.
+6. **Holding the grid lock across a frame.** `alacritty_terminal`'s event
+   loop thread needs the lock to parse. Snapshot what the frame needs,
+   release, draw.
 7. **ConPTY is not a Unix PTY.** Windows rewrites output and redraws on
    resize. Resize, cursor and exit behavior must be checked on Windows, not
    inferred from Linux.
 
 ## Operations
 
-These commands exist once T-001 lands. Until then, `docs/development.md`
-lists the system prerequisites.
-
 | Command | What it does |
 |---|---|
-| `pnpm install` | Install frontend dependencies |
-| `pnpm tauri dev` | Run the app with HMR. The TTFP badge is shown in a corner |
-| `pnpm build` | Frontend build plus the entry-chunk budget check |
-| `pnpm typecheck` | `tsc --noEmit` |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust unit tests |
-| `pnpm tauri build --no-bundle` | Release binary at `src-tauri/target/release/zed-term` |
-| `pnpm bench:startup` | Median/p90 TTFP over 10 release launches (spec 0001) |
+| `cargo run` | Run the app (debug). The TTFP badge is shown in a corner |
+| `cargo test` | Unit tests |
+| `cargo fmt && cargo clippy --all-targets -- -D warnings` | Must be clean before a commit |
+| `cargo build --release` | Release binary at `target/release/zed-term` |
+| `target/release/zed-term --bench-startup 10` | Cold run plus median/p90 TTFP over 10 warm launches (spec 0001) |
 
-Verify UI changes in the running app (`pnpm tauri dev`), not just in tests.
+Verify UI changes in the running app (`cargo run`), not just in tests.
 Report the TTFP the badge shows whenever you touched the boot path.
 
 ## Architecture in one paragraph
 
-Rust (`src-tauri/`) owns processes and files: PTYs, config, themes, session
-state, and later SSH/keychain. The SolidJS frontend (`src/`) owns
-presentation: xterm.js views, tabs, splits, palette. They talk only through
-typed Tauri commands, plus one binary Channel per pane carrying PTY output.
-The stack and every decision live in
-[`spec/architecture.md`](spec/architecture.md). Don't
-restate them elsewhere; link.
+One Rust binary. `src/main.rs` is the boot path: read config and session,
+spawn the active tab's PTYs, open the window, draw. `alacritty_terminal`
+owns each pane's PTY and VT state on its own thread; `egui` draws the grid,
+tabs, splits and palette every frame from plain Rust state. The stack and
+every decision live in [`spec/architecture.md`](spec/architecture.md).
+Don't restate them elsewhere; link.
 
 | Path | What it is |
 |---|---|
@@ -96,8 +91,8 @@ restate them elsewhere; link.
 | `tasks/` | The backlog: one file per task, resolved files move to `tasks/resolved/` (format: `tasks/README.md`) |
 | `docs/` | **Current state**: dev setup, conventions. Links to `spec/`, never restates decisions |
 | `.claude/skills/` | Project skills (see below) |
-| `src-tauri/` | Rust backend (after T-001) |
-| `src/` | SolidJS frontend. `main.tsx` is the boot path, `features/*` are lazy (after T-001) |
+| `src/` | The crate. `main.rs` is the boot path; modules per `spec/architecture.md` §Code layout |
+| `spikes/` | Throwaway prototypes, only on `spike/*` branches; `main` keeps the verdicts |
 
 ## Loop protocol
 
@@ -107,10 +102,10 @@ One task per loop. Never start work that isn't in `tasks/`.
 2. **Read** the specs it links, plus `spec/architecture.md` for anything touching the stack. A linked spec still in `status: draft` needs the owner's approval first (see Specs).
 3. **Plan** briefly in the conversation. Architecture-relevant deviations stop here (see decision rules).
 4. **Implement** directly on `main` (personal project: no branches or PRs).
-5. **Test.** Run the Rust tests and the typecheck, and verify in the running
-   app. Per the owner's rule, tests for new behavior are written by a
-   separate agent with fresh context against the spec's acceptance criteria,
-   so they test the agreed behavior rather than mirroring the implementation.
+5. **Test.** Run the tests, fmt and clippy, and verify in the running app.
+   Per the owner's rule, tests for new behavior are written by a separate
+   agent with fresh context against the spec's acceptance criteria, so they
+   test the agreed behavior rather than mirroring the implementation.
 6. **Update the backlog.** Move the task to `tasks/resolved/`, file
    follow-ups as new tasks, and tick resolved OQs. When every task in a
    spec's `tasks:` list is resolved, set that spec to `status: implemented`.
@@ -144,9 +139,9 @@ and say so in the summary.
 - **Unknowns go to `spec/open-questions.md`** (next free OQ-nnn). Pick the
   most conservative choice that doesn't paint us into a corner, leave
   `// TODO(OQ-nnn)` at the site, and keep moving.
-- **Stop and ask** before: new dependencies (crate or npm), anything added
-  to the boot path, new Tauri capabilities/permissions, outbound network
-  calls, writing outside the app's config/data dirs, and history rewrites.
+- **Stop and ask** before: new crates, anything added to the boot path,
+  outbound network calls, writing outside the app's config/data dirs, and
+  history rewrites.
 - Bugs you find but don't fix: file a `type: bug` task.
 
 ## Ground rules (binding)
@@ -159,7 +154,7 @@ Each spec's **Security & privacy** section says which of them it touches.
 ## Definition of Done
 
 - Implemented per the spec, on Linux, with Windows behavior considered (and checked when the task touches PTY, keys or paths).
-- Tests written and passing; `pnpm typecheck` and `pnpm build` (budget) green.
+- Tests written and passing; `cargo fmt`, `clippy` and `cargo test` green.
 - TTFP reported if the boot path was touched.
 - Docs and specs updated where reality diverged, and the backlog updated.
 
@@ -172,5 +167,6 @@ Each spec's **Security & privacy** section says which of them it touches.
 ## Conventions
 
 Summary; full text in [`docs/conventions.md`](docs/conventions.md):
-Conventional Commits straight to `main`; pnpm with a committed
-lockfile; `cargo fmt` and `clippy` clean; no Tailwind arbitrary values.
+Conventional Commits straight to `main`; cargo with a committed lockfile;
+`cargo fmt` and `clippy` clean; no `unwrap` outside tests and the boot
+path's "cannot continue" cases.

@@ -10,7 +10,7 @@ Repo-wide working rules. Architecture decisions are **not** here; see
 
 feat(pane): add search bar
 fix(pty): kill children on quit
-perf(boot): spawn shell before webview loads
+perf(boot): spawn shell before the window opens
 docs, chore, refactor, test, perf, ci, build
 ```
 
@@ -18,45 +18,35 @@ docs, chore, refactor, test, perf, ci, build
 - Scope = feature or module (`boot`, `pty`, `pane`, `layout`, `palette`,
   `config`, `theme`, `spec`), not a filename.
 - Add a body only for what the diff can't show (the why, an invisible
-  constraint).
+  constraint). When a commit changes the boot path, put the TTFP
+  before/after in its body.
 
 ## Workflow
 
 Personal project: work is committed straight to `main`, with no branches
-or PRs. One task = one or a few focused commits. When a commit changes the
-boot path, put the TTFP before/after in its body.
+or PRs. One task = one or a few focused commits. Throwaway prototypes live
+on `spike/*` branches (see the `prototype` skill); `main` keeps only the
+verdict.
 
 ## Versions and dependencies
 
-- Start new dependencies at current stable. Adding any dependency is a
+- Start new dependencies at current stable. Adding any crate is a
   stop-and-ask (see `AGENTS.md`), because every crate costs compile time and
-  every npm package risks the boot path.
-- pnpm with a committed `pnpm-lock.yaml`; cargo with a committed `Cargo.lock`.
+  can sneak onto the boot path.
+- cargo with a committed `Cargo.lock`.
 
 ## Rust
 
-- `cargo fmt` and `cargo clippy -- -D warnings` clean.
-- Commands are thin: parse arguments, call a plain module function, map
-  errors to `String`. Logic lives in modules that are testable without a
-  window.
-- Commands touching PTYs or the filesystem are `async` (never block the main
-  thread).
-
-## TypeScript / SolidJS
-
-- No `any`. Prefer inferred types; derive unions from data (command IDs from
-  the registry).
-- No string-literal `invoke` in components. Go through the typed wrappers in
-  `src/ipc.ts`.
-- Feature code under `src/features/<name>/` is only ever reached through
-  `import()`.
-
-## Tailwind
-
-- **No arbitrary values.** Use the spacing scale (quarter steps included),
-  theme tokens with opacity modifiers, and the semantic type scale.
-  Genuinely unmappable one-offs go into a scoped rule in the stylesheet.
-  Arbitrary *variants* (`data-[state=open]:…`) are fine.
+- `cargo fmt` and `cargo clippy --all-targets -- -D warnings` clean.
+- Modules are plain Rust that is testable without a window; `egui` code is
+  a thin layer that reads state and emits commands.
+- No `unwrap`/`expect` outside tests, except on the boot path where the
+  alternative is "cannot run at all" (e.g. no window). Everything else
+  returns `Result<T, String>` with a message a user can read.
+- The UI thread never blocks: file IO and PTY writes go to threads or the
+  pane's event loop.
+- Enums over string IDs. A command, a theme name that we define, a profile
+  type: all enums; serde maps them to the strings in `config.yaml`.
 
 ## CI
 
