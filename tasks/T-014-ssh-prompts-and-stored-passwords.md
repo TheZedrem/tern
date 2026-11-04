@@ -9,7 +9,8 @@ socket with per-connection tokens, dialogs for every prompt ssh sends
 (host keys, one-time codes, passwords), "Remember in keychain" through
 `keyring`, auto-fill only for the connection's own password and key
 passphrase prompts, one attempt per connection, "Forget saved password",
-and the no-keychain fallback. New crates: `keyring` 4, `interprocess`,
-`getrandom`. Area: src.
+and the no-keychain fallback. The keychain keys need the target as ssh
+resolves it: `ssh -G` at connect time (moved here from T-012). New crates:
+`keyring` 4, `interprocess`, `getrandom`. Area: src.
 
 Spec: ../spec/0006-ssh-hosts.md

@@ -3,7 +3,8 @@
 //! parser; the UI only locks the grid to draw it (architecture §Key
 //! decisions).
 
-use crate::config::Profile;
+use crate::config::{Profile, ProfileKind};
+use crate::ssh;
 use crate::timing::{Mark, Timing};
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, Notifier};
@@ -104,10 +105,15 @@ impl Command {
         }
     }
 
-    /// What `profile` runs: its command, or the login shell, with its env.
-    /// On Windows the program resolves through `PATH` and `PATHEXT`.
+    /// What `profile` runs. A local profile: its command, or the login
+    /// shell, with its env; on Windows the program resolves through `PATH`
+    /// and `PATHEXT`. An SSH profile: [`ssh::command`].
     pub fn of_profile(profile: &Profile) -> Self {
-        let shell = match profile.command.as_deref() {
+        let local = match &profile.kind {
+            ProfileKind::Local(local) => local,
+            ProfileKind::Ssh(remote) => return ssh::command(remote),
+        };
+        let shell = match local.command.as_deref() {
             Some([program, args @ ..]) => Self {
                 program: program.clone(),
                 args: args.to_vec(),
@@ -116,7 +122,7 @@ impl Command {
             _ => Self::default_shell(),
         };
         Self {
-            env: profile.env.clone(),
+            env: local.env.clone(),
             ..shell
         }
     }
@@ -144,10 +150,10 @@ impl Command {
     }
 }
 
-#[cfg(windows)]
-fn on_path(exe: &str) -> bool {
+/// Whether `program` is a file in one of `PATH`'s directories.
+pub fn on_path(program: &str) -> bool {
     std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(exe).is_file()))
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
 /// Forwards terminal events to the UI thread and records the first output.
@@ -175,10 +181,16 @@ pub struct Session {
     pub term: Terminal,
     pub notifier: Notifier,
     pub events: UnboundedReceiver<Event>,
+    /// What feeds `events`, for a program started again on `term`.
+    pub proxy: EventProxy,
     pub size: GridSize,
     /// The program's process ID, where the platform exposes it (Unix).
     pub child_pid: Option<u32>,
 }
+
+/// A program started on a terminal: the channel to it, and its process ID
+/// where the platform exposes it (Unix).
+pub type Started = (Notifier, Option<u32>);
 
 /// Starts `command` in a new PTY of `size`, in `cwd` or the home directory.
 /// Output is parsed on the event loop's own thread from the first byte,
@@ -190,6 +202,35 @@ pub fn spawn(
     scrollback: usize,
     timing: Arc<Timing>,
 ) -> Result<Session, String> {
+    let (tx, events) = unbounded();
+    let proxy = EventProxy { tx, timing };
+    let config = term::Config {
+        scrolling_history: scrollback,
+        ..Default::default()
+    };
+    let term = Arc::new(FairMutex::new(Term::new(config, &size, proxy.clone())));
+    let (notifier, child_pid) = rerun(command, size, cwd, &term, &proxy)?;
+    Ok(Session {
+        term,
+        notifier,
+        events,
+        proxy,
+        size,
+        child_pid,
+    })
+}
+
+/// Starts `command` in a new PTY on `term`, an existing session's
+/// terminal, whose events keep going through `proxy`. The screen and
+/// scrollback stay, so a reconnected SSH pane shows the old session above
+/// the new one (spec 0006, flow 5).
+pub fn rerun(
+    command: &Command,
+    size: GridSize,
+    cwd: Option<&Path>,
+    term: &Terminal,
+    proxy: &EventProxy,
+) -> Result<Started, String> {
     #[allow(
         clippy::needless_update,
         reason = "tty::Options has one more field on Windows"
@@ -224,32 +265,29 @@ pub fn spawn(
     #[cfg(not(unix))]
     let child_pid = None;
 
-    let (tx, events) = unbounded();
-    let proxy = EventProxy { tx, timing };
-    let config = term::Config {
-        scrolling_history: scrollback,
-        ..Default::default()
-    };
-    let term = Arc::new(FairMutex::new(Term::new(config, &size, proxy.clone())));
-    let event_loop =
-        EventLoop::new(Arc::clone(&term), proxy, pty, true, false).map_err(|e| e.to_string())?;
+    let event_loop = EventLoop::new(Arc::clone(term), proxy.clone(), pty, true, false)
+        .map_err(|e| e.to_string())?;
     let notifier = Notifier(event_loop.channel());
     // Detached: the thread ends when the program exits and its output is drained.
     let _ = event_loop.spawn();
-
-    Ok(Session {
-        term,
-        notifier,
-        events,
-        size,
-        child_pid,
-    })
+    Ok((notifier, child_pid))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::tests::ssh_to;
+    use crate::config::{LocalProfile, SshProfile};
+    use std::num::NonZeroU16;
     use std::time::Instant;
+
+    /// The `shell` profile, running `local` instead.
+    fn local(local: LocalProfile) -> Profile {
+        Profile {
+            kind: ProfileKind::Local(local),
+            ..Profile::shell()
+        }
+    }
 
     const SMALL: GridSize = GridSize {
         cols: 20,
@@ -321,15 +359,37 @@ mod tests {
     #[test]
     fn a_profile_without_a_command_runs_the_login_shell_with_its_env() {
         let env = BTreeMap::from([("EDITOR".to_owned(), "nvim".to_owned())]);
-        let profile = Profile {
+        let profile = local(LocalProfile {
             env: env.clone(),
-            ..Profile::shell()
-        };
+            ..LocalProfile::default()
+        });
         let expected = Command {
             env,
             ..Command::default_shell()
         };
         assert_eq!(Command::of_profile(&profile), expected);
+    }
+
+    #[test]
+    fn an_ssh_profile_runs_ssh_to_its_host() {
+        let remote = SshProfile {
+            user: Some("alice".into()),
+            port: NonZeroU16::new(2222),
+            ..ssh_to("myserver.example.com")
+        };
+        let profile = Profile {
+            kind: ProfileKind::Ssh(remote.clone()),
+            ..Profile::shell()
+        };
+        assert_eq!(Command::of_profile(&profile), ssh::command(&remote));
+    }
+
+    /// What tells a pane that `ssh` is missing (spec 0006, flow 8).
+    #[test]
+    fn on_path_tells_whether_a_program_is_in_a_path_directory() {
+        let everywhere = if cfg!(windows) { "cmd.exe" } else { "sh" };
+        assert!(on_path(everywhere));
+        assert!(!on_path("zed-term-test-no-such-program"));
     }
 
     #[cfg(unix)]
@@ -375,24 +435,102 @@ mod tests {
         timing: Arc<Timing>,
     ) -> (Session, Vec<Event>) {
         let mut session = spawn(command, size, cwd, 100, timing).expect("spawn sh");
+        let events = until_exit(&mut session.events);
+        (session, events)
+    }
+
+    /// `events` as they arrive, until a program exited and the UI was woken
+    /// after that.
+    #[cfg(unix)]
+    fn until_exit(events: &mut UnboundedReceiver<Event>) -> Vec<Event> {
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
-        let mut events = Vec::new();
+        let mut received = Vec::new();
         loop {
-            match session.events.try_recv() {
+            match events.try_recv() {
                 Ok(event) => {
-                    let exited = events.iter().any(|e| matches!(e, Event::ChildExit(_)));
+                    let exited = received.iter().any(|e| matches!(e, Event::ChildExit(_)));
                     let done = exited && matches!(event, Event::Wakeup);
-                    events.push(event);
+                    received.push(event);
                     if done {
-                        return (session, events);
+                        return received;
                     }
                 }
                 Err(_) => {
-                    assert!(Instant::now() < deadline, "no exit within 10 s: {events:?}");
+                    assert!(
+                        Instant::now() < deadline,
+                        "no exit within 10 s: {received:?}"
+                    );
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
             }
         }
+    }
+
+    /// Every line `term` holds, scrollback first, without trailing blanks.
+    #[cfg(unix)]
+    fn all_lines<T>(term: &Term<T>) -> Vec<String> {
+        use alacritty_terminal::index::{Column, Line};
+        let grid = term.grid();
+        let top = -(grid.history_size() as i32);
+        (top..grid.screen_lines() as i32)
+            .map(|line| {
+                let row = &grid[Line(line)];
+                let text: String = (0..grid.columns()).map(|col| row[Column(col)].c).collect();
+                text.trim_end().to_owned()
+            })
+            .collect()
+    }
+
+    /// Spec 0006, flow 5: a reconnected pane shows the old session above
+    /// the new one.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_rerun_on_a_finished_terminal_prints_below_what_was_there() {
+        // Four lines on three rows: the first two go to the scrollback.
+        let dropped = sh(r"printf 'one\ntwo\nthree\nfour\n'; exit 255");
+        let (session, _) = run_to_exit(&dropped, SMALL, None, timing());
+        rerun(
+            &sh("echo again"),
+            SMALL,
+            None,
+            &session.term,
+            &session.proxy,
+        )
+        .expect("rerun sh");
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        let lines = loop {
+            let lines = all_lines(&*session.term.lock());
+            if lines.iter().any(|line| line == "again") {
+                break lines;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no output within 10 s: {lines:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let printed: Vec<_> = lines
+            .iter()
+            .map(String::as_str)
+            .filter(|line| !line.is_empty())
+            .collect();
+        assert_eq!(printed, ["one", "two", "three", "four", "again"]);
+    }
+
+    /// The pane hears of the rerun program's exit like of the first one's,
+    /// so a connection that drops again offers to reconnect again.
+    #[cfg(unix)]
+    #[test]
+    fn a_rerun_programs_exit_reaches_the_sessions_events() {
+        let (mut session, _) = run_to_exit(&sh("exit 255"), SMALL, None, timing());
+        rerun(&sh("exit 7"), SMALL, None, &session.term, &session.proxy).expect("rerun sh");
+        let exit = until_exit(&mut session.events)
+            .iter()
+            .find_map(|event| match event {
+                Event::ChildExit(status) => Some(status.code()),
+                _ => None,
+            });
+        assert_eq!(exit, Some(Some(7)));
     }
 
     #[cfg(unix)]
@@ -508,10 +646,11 @@ mod tests {
             .collect();
         let profile = Profile {
             id: "probe".into(),
-            command: Some(command),
-            cwd: Some(dir.path().to_path_buf()),
-            env: BTreeMap::from([("GREETING".into(), "hello".into())]),
-            ..Profile::shell()
+            ..local(LocalProfile {
+                command: Some(command),
+                cwd: Some(dir.path().to_path_buf()),
+                env: BTreeMap::from([("GREETING".into(), "hello".into())]),
+            })
         };
         let wide = GridSize {
             cols: 400,
@@ -521,7 +660,7 @@ mod tests {
         let (session, _) = run_to_exit(
             &Command::of_profile(&profile),
             wide,
-            profile.cwd.as_deref(),
+            profile.cwd(),
             timing(),
         );
         let screen = crate::terminal::tests::screen(&*session.term.lock());
@@ -536,15 +675,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_profiles_env_wins_over_zed_terms_own_terminal_variables() {
-        let profile = Profile {
+        let profile = local(LocalProfile {
             command: Some(
                 ["sh", "-c", r#"echo "$TERM $COLORTERM $TERM_PROGRAM""#]
                     .map(String::from)
                     .to_vec(),
             ),
             env: BTreeMap::from([("TERM".into(), "dumb".into())]),
-            ..Profile::shell()
-        };
+            ..LocalProfile::default()
+        });
         let wide = GridSize { cols: 100, ..SMALL };
         let (session, _) = run_to_exit(&Command::of_profile(&profile), wide, None, timing());
         let screen = crate::terminal::tests::screen(&*session.term.lock());

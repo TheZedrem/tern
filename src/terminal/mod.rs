@@ -7,8 +7,10 @@ pub mod grid;
 pub mod input;
 pub mod pty;
 
-use crate::config::{self, CloseOnExit, Profile};
+use crate::config::{self, CloseOnExit, Profile, ProfileKind};
+use crate::ssh;
 use crate::theme::{self, Theme};
+use crate::timing::Timing;
 use alacritty_terminal::event::{Event, Notify, OnResize};
 use alacritty_terminal::event_loop::{Msg, Notifier};
 use alacritty_terminal::grid::Scroll;
@@ -21,9 +23,10 @@ use gpui::{
     KeyDownEvent, MouseButton, NoAction, ParentElement, Pixels, Render, SharedString, Size, Styled,
     Window, div, font, px, size,
 };
-use pty::{GridSize, Terminal};
+use pty::{EventProxy, GridSize, Terminal};
 use std::borrow::Cow;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Longest tab title taken from a program (spec 0003).
 const MAX_TITLE_CHARS: usize = 200;
@@ -174,6 +177,9 @@ pub struct PaneProfile {
     pub name: String,
     /// The pane's theme; `None` follows `theme.default`.
     pub theme: Option<String>,
+    /// An SSH connection that drops waits for Enter to reconnect (spec
+    /// 0006, flow 5).
+    pub reconnects: bool,
 }
 
 impl From<&Profile> for PaneProfile {
@@ -182,9 +188,44 @@ impl From<&Profile> for PaneProfile {
             id: profile.id.clone(),
             name: profile.display_name().to_owned(),
             theme: profile.theme.clone(),
+            reconnects: matches!(profile.kind, ProfileKind::Ssh(_)),
         }
     }
 }
+
+/// What starts a pane's program: at first, at Enter in a waiting pane, and
+/// again when a dropped connection reconnects.
+pub struct Launch {
+    pub command: pty::Command,
+    pub cwd: Option<PathBuf>,
+    pub timing: Arc<Timing>,
+}
+
+/// How a pane begins.
+pub enum Start {
+    /// With its program started, or the reason it couldn't start.
+    Started(Result<pty::Session, String>),
+    /// Showing this until Enter starts the program: an SSH tab opened at
+    /// boot or restored never connects by itself (spec 0006, flow 6).
+    OnEnter(String),
+}
+
+/// What a waiting SSH pane shows (spec 0006, flow 6).
+pub fn connect_prompt(label: &str) -> String {
+    format!("Press Enter to connect to {label}")
+}
+
+/// Why `command` didn't start, as its pane says it. A missing `ssh` comes
+/// with how to install it (spec 0006, flow 8).
+fn failure(command: &pty::Command, error: &str) -> String {
+    if command.program == ssh::PROGRAM && !ssh::installed() {
+        return ssh::not_installed();
+    }
+    format!("Could not start {}: {error}", command.describe())
+}
+
+/// The notice written into the grid when an SSH connection drops.
+const RECONNECT_NOTICE: &str = "\r\n\x1b[2m[connection closed: press Enter to reconnect]\x1b[0m";
 
 /// What a pane tells its owner.
 pub enum PaneEvent {
@@ -242,6 +283,29 @@ pub fn closes_on_exit(policy: CloseOnExit, code: Option<i32>) -> bool {
     }
 }
 
+/// What a pane does once its program exited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AfterExit {
+    Close,
+    /// Shows the exit code and stays.
+    Stay,
+    /// Says the connection closed and waits for Enter to reconnect.
+    Reconnect,
+}
+
+/// What a pane does after its program exited with `code`. A dropped SSH
+/// connection (exit 255) stays open whatever `policy` says (spec 0006,
+/// flow 5); everything else follows `policy`.
+pub fn after_exit(reconnects: bool, policy: CloseOnExit, code: Option<i32>) -> AfterExit {
+    if reconnects && code == Some(ssh::CONNECTION_LOST) {
+        AfterExit::Reconnect
+    } else if closes_on_exit(policy, code) {
+        AfterExit::Close
+    } else {
+        AfterExit::Stay
+    }
+}
+
 /// The notice written into the grid when the program exits.
 pub fn exit_notice(code: Option<i32>) -> String {
     match code {
@@ -252,12 +316,16 @@ pub fn exit_notice(code: Option<i32>) -> String {
 
 enum State {
     Running(Running),
+    /// The program waits for Enter; the pane shows this.
+    Waiting(String),
     /// The program couldn't start; the pane shows why.
     Failed(String),
 }
 
 struct Running {
     term: Terminal,
+    /// What feeds the pane's events, kept for a program started again.
+    proxy: EventProxy,
     notifier: Notifier,
     size: GridSize,
     child_pid: Option<u32>,
@@ -266,11 +334,14 @@ struct Running {
 pub struct TerminalPane {
     focus: FocusHandle,
     state: State,
+    launch: Launch,
     profile: PaneProfile,
     settings: PaneSettings,
     /// Bench panes never close on exit; the bench quits after the first frame.
     bench: bool,
     exited: bool,
+    /// The SSH connection dropped and Enter reconnects (spec 0006, flow 5).
+    reconnect: bool,
     has_output: bool,
     first_frame_scheduled: bool,
     /// The title the program set (OSC 0/2), already cleaned.
@@ -280,56 +351,130 @@ pub struct TerminalPane {
 impl EventEmitter<PaneEvent> for TerminalPane {}
 
 impl TerminalPane {
-    /// A pane showing `session`, or the error if the program couldn't start
-    /// (spec 0002, flow 9).
+    /// A pane that begins as `start` says, showing the error if the program
+    /// couldn't start (spec 0002, flow 9).
     pub fn new(
-        session: Result<pty::Session, String>,
-        command: &pty::Command,
+        start: Start,
+        launch: Launch,
         profile: PaneProfile,
         settings: PaneSettings,
         bench: bool,
         cx: &mut Context<Self>,
     ) -> Self {
-        let state = match session {
-            Ok(session) => {
-                let mut events = session.events;
-                cx.spawn(async move |this, cx| {
-                    while let Some(event) = events.next().await {
-                        let mut batch = vec![event];
-                        while let Ok(event) = events.try_recv() {
-                            batch.push(event);
-                        }
-                        let alive = this.update(cx, |pane, cx| {
-                            for event in batch {
-                                pane.handle_event(event, cx);
-                            }
-                        });
-                        if alive.is_err() {
-                            break;
-                        }
-                    }
-                })
-                .detach();
-                State::Running(Running {
-                    term: session.term,
-                    notifier: session.notifier,
-                    size: session.size,
-                    child_pid: session.child_pid,
-                })
-            }
-            Err(error) => State::Failed(format!("Could not start {}: {error}", command.describe())),
-        };
-        Self {
+        let mut pane = Self {
             focus: cx.focus_handle(),
-            state,
+            state: State::Failed(String::new()),
+            launch,
             profile,
             settings,
             bench,
             exited: false,
+            reconnect: false,
             has_output: false,
             first_frame_scheduled: false,
             title: None,
+        };
+        match start {
+            Start::Started(session) => pane.attach(session, cx),
+            Start::OnEnter(prompt) => pane.state = State::Waiting(prompt),
         }
+        pane
+    }
+
+    /// Shows `session`'s program, or why it couldn't start, and forwards its
+    /// events to the pane.
+    fn attach(&mut self, session: Result<pty::Session, String>, cx: &mut Context<Self>) {
+        let session = match session {
+            Ok(session) => session,
+            Err(error) => {
+                self.state = State::Failed(failure(&self.launch.command, &error));
+                return;
+            }
+        };
+        let mut events = session.events;
+        cx.spawn(async move |this, cx| {
+            while let Some(event) = events.next().await {
+                let mut batch = vec![event];
+                while let Ok(event) = events.try_recv() {
+                    batch.push(event);
+                }
+                let alive = this.update(cx, |pane, cx| {
+                    for event in batch {
+                        pane.handle_event(event, cx);
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        self.state = State::Running(Running {
+            term: session.term,
+            proxy: session.proxy,
+            notifier: session.notifier,
+            size: session.size,
+            child_pid: session.child_pid,
+        });
+    }
+
+    /// Starts the program of a waiting pane, sized to the window until the
+    /// next frame measures the pane.
+    fn start(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let viewport = window.viewport_size();
+        let grid = GridSize::fit(
+            (f32::from(viewport.width), f32::from(viewport.height)),
+            self.settings.font.estimated_cell(),
+        );
+        let session = pty::spawn(
+            &self.launch.command,
+            grid,
+            self.launch.cwd.as_deref(),
+            self.settings.scrollback,
+            Arc::clone(&self.launch.timing),
+        );
+        self.attach(session, cx);
+        cx.notify();
+    }
+
+    /// Text where the grid would be, in the pane's font: a waiting pane's
+    /// prompt, or why its program couldn't start.
+    fn message(&self, text: &str, color: u32) -> gpui::Div {
+        div()
+            .p(px(pty::PADDING))
+            .font_family(self.settings.font.family.clone())
+            .text_size(self.settings.font.size)
+            .text_color(theme::hsla(color))
+            .child(text.to_owned())
+    }
+
+    /// Starts the program again in the same terminal, after its SSH
+    /// connection dropped: the old session stays in the scrollback.
+    fn rerun(&mut self, cx: &mut Context<Self>) {
+        let State::Running(running) = &mut self.state else {
+            return;
+        };
+        let started = pty::rerun(
+            &self.launch.command,
+            running.size,
+            self.launch.cwd.as_deref(),
+            &running.term,
+            &running.proxy,
+        );
+        match started {
+            Ok((notifier, child_pid)) => {
+                running.notifier = notifier;
+                running.child_pid = child_pid;
+                self.exited = false;
+                self.reconnect = false;
+            }
+            Err(error) => {
+                let notice = format!("\r\n{}", failure(&self.launch.command, &error));
+                let mut parser = Processor::<StdSyncHandler>::new();
+                parser.advance(&mut *running.term.lock(), notice.as_bytes());
+            }
+        }
+        cx.notify();
     }
 
     pub fn focus_handle(&self) -> &FocusHandle {
@@ -422,21 +567,41 @@ impl TerminalPane {
 
     fn child_exited(&mut self, code: Option<i32>, cx: &mut Context<Self>) {
         self.exited = true;
+        let after = after_exit(self.profile.reconnects, self.settings.close_on_exit, code);
+        self.reconnect = after == AfterExit::Reconnect;
+        let notice = if self.reconnect {
+            RECONNECT_NOTICE.to_owned()
+        } else {
+            exit_notice(code)
+        };
         if let State::Running(running) = &self.state {
             let mut parser = Processor::<StdSyncHandler>::new();
-            parser.advance(&mut *running.term.lock(), exit_notice(code).as_bytes());
+            parser.advance(&mut *running.term.lock(), notice.as_bytes());
         }
         cx.notify();
-        if !self.bench && closes_on_exit(self.settings.close_on_exit, code) {
+        if !self.bench && after == AfterExit::Close {
             cx.emit(PaneEvent::Exited);
         }
     }
 
-    fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        let State::Running(running) = &self.state else {
-            return;
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let enter = event.keystroke.key == "enter" && !event.keystroke.modifiers.modified();
+        let running = match &self.state {
+            State::Waiting(_) => {
+                if enter {
+                    self.start(window, cx);
+                }
+                cx.stop_propagation();
+                return;
+            }
+            State::Failed(_) => return,
+            State::Running(running) => running,
         };
         if self.exited {
+            if enter && self.reconnect {
+                self.rerun(cx);
+                cx.stop_propagation();
+            }
             return;
         }
         let bytes = {
@@ -471,8 +636,8 @@ impl TerminalPane {
 
 impl Render for TerminalPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let failed = matches!(self.state, State::Failed(_));
-        if (self.has_output || failed) && !self.first_frame_scheduled {
+        let text_only = matches!(self.state, State::Failed(_) | State::Waiting(_));
+        if (self.has_output || text_only) && !self.first_frame_scheduled {
             self.first_frame_scheduled = true;
             let pane = cx.entity().downgrade();
             window.on_next_frame(move |_, cx| {
@@ -489,12 +654,11 @@ impl Render for TerminalPane {
                 self.focus.is_focused(window),
             )
             .into_any_element(),
-            State::Failed(message) => div()
-                .p(px(pty::PADDING))
-                .font_family(self.settings.font.family.clone())
-                .text_size(self.settings.font.size)
-                .text_color(theme::hsla(self.settings.theme.ansi[1]))
-                .child(message.clone())
+            State::Failed(message) => self
+                .message(message, self.settings.theme.ansi[1])
+                .into_any_element(),
+            State::Waiting(prompt) => self
+                .message(prompt, self.settings.theme.foreground)
                 .into_any_element(),
         };
 
@@ -518,6 +682,7 @@ impl Render for TerminalPane {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::config::tests::ssh_to;
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
@@ -578,6 +743,88 @@ mod tests {
         bytes.extend_from_slice(exit_notice(Some(3)).as_bytes());
         let term = term_with(40, 3, &bytes);
         assert_eq!(screen(&term)[..2], ["hi", "[process exited with code 3]"]);
+    }
+
+    /// Spec 0006, flow 5: ssh exits 255 when the connection failed or
+    /// dropped.
+    #[test]
+    fn an_ssh_exit_255_reconnects_whatever_close_on_exit_says() {
+        for policy in [CloseOnExit::Always, CloseOnExit::Clean, CloseOnExit::Never] {
+            let after = after_exit(true, policy, Some(255));
+            assert_eq!(after, AfterExit::Reconnect, "{policy:?}");
+        }
+    }
+
+    /// The remote shell's `exit`, a failed remote command, a signal: the
+    /// pane does what `close_on_exit` says, as for any program.
+    #[test]
+    fn every_other_ssh_exit_follows_close_on_exit() {
+        use AfterExit::{Close, Stay};
+        // Exit codes 0 and 1, then killed by a signal.
+        let cases = [
+            (CloseOnExit::Always, [Close, Close, Close]),
+            (CloseOnExit::Clean, [Close, Stay, Stay]),
+            (CloseOnExit::Never, [Stay, Stay, Stay]),
+        ];
+        for (policy, expected) in cases {
+            for (code, after) in [Some(0), Some(1), None].into_iter().zip(expected) {
+                assert_eq!(after_exit(true, policy, code), after, "{policy:?} {code:?}");
+            }
+        }
+    }
+
+    /// Only ssh's 255 means a dropped connection; for a local program it's
+    /// an exit code like any other.
+    #[test]
+    fn a_local_pane_follows_close_on_exit_even_on_exit_255() {
+        use AfterExit::{Close, Stay};
+        // Exit codes 0 and 255, then killed by a signal.
+        let cases = [
+            (CloseOnExit::Always, [Close, Close, Close]),
+            (CloseOnExit::Clean, [Close, Stay, Stay]),
+            (CloseOnExit::Never, [Stay, Stay, Stay]),
+        ];
+        for (policy, expected) in cases {
+            for (code, after) in [Some(0), Some(255), None].into_iter().zip(expected) {
+                assert_eq!(
+                    after_exit(false, policy, code),
+                    after,
+                    "{policy:?} {code:?}"
+                );
+            }
+        }
+    }
+
+    /// Spec 0006, flow 5.
+    #[test]
+    fn a_dropped_connection_shows_the_reconnect_hint_on_the_line_after_the_output() {
+        let mut bytes = b"Connection to prod closed.".to_vec();
+        bytes.extend_from_slice(RECONNECT_NOTICE.as_bytes());
+        let term = term_with(60, 3, &bytes);
+        let expected = [
+            "Connection to prod closed.",
+            "[connection closed: press Enter to reconnect]",
+        ];
+        assert_eq!(screen(&term)[..2], expected);
+    }
+
+    #[test]
+    fn panes_of_an_ssh_profile_reconnect_and_local_ones_dont() {
+        let ssh = Profile {
+            kind: ProfileKind::Ssh(ssh_to("prod.example.com")),
+            ..Profile::shell()
+        };
+        assert!(PaneProfile::from(&ssh).reconnects);
+        assert!(!PaneProfile::from(&Profile::shell()).reconnects);
+    }
+
+    /// Spec 0006, flow 6: a restored SSH tab names the host it waits for.
+    #[test]
+    fn a_waiting_ssh_pane_asks_for_enter_naming_its_host() {
+        assert_eq!(
+            connect_prompt("Production DB"),
+            "Press Enter to connect to Production DB"
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ mod bench;
 mod commands;
 mod config;
 mod layout;
+mod ssh;
 mod terminal;
 mod theme;
 mod timing;
@@ -14,6 +15,7 @@ use bench::Mode;
 use gpui::WindowDecorations;
 use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 use std::ffi::OsStr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use terminal::FontSettings;
@@ -66,21 +68,30 @@ fn main() {
     };
     timing.mark(Mark::Config);
 
-    // The shell starts now and boots while GPUI comes up.
-    let command = if bench {
-        Command::bench()
-    } else {
-        Command::of_profile(&profile)
+    // The shell starts now and boots while GPUI comes up. An SSH profile
+    // waits for Enter instead: no network at startup (spec 0006, flow 6).
+    let launch = terminal::Launch {
+        command: if bench {
+            Command::bench()
+        } else {
+            Command::of_profile(&profile)
+        },
+        cwd: profile.cwd().map(Path::to_path_buf),
+        timing: Arc::clone(&timing),
     };
-    let font = FontSettings::from_config(&config.font);
-    let grid = GridSize::fit(WINDOW_SIZE, font.estimated_cell());
-    let session = pty::spawn(
-        &command,
-        grid,
-        profile.cwd.as_deref(),
-        config.scrollback as usize,
-        Arc::clone(&timing),
-    );
+    let start = if !bench && matches!(profile.kind, config::ProfileKind::Ssh(_)) {
+        terminal::Start::OnEnter(terminal::connect_prompt(profile.display_name()))
+    } else {
+        let font = FontSettings::from_config(&config.font);
+        let grid = GridSize::fit(WINDOW_SIZE, font.estimated_cell());
+        terminal::Start::Started(pty::spawn(
+            &launch.command,
+            grid,
+            launch.cwd.as_deref(),
+            config.scrollback as usize,
+            Arc::clone(&timing),
+        ))
+    };
     timing.mark(Mark::Pty);
 
     let app = gpui_platform::application().with_assets(gpui_kit_assets::Assets);
@@ -123,8 +134,8 @@ fn main() {
             ..Default::default()
         };
         let boot = layout::BootPane {
-            session,
-            command,
+            start,
+            launch,
             profile: (&profile).into(),
             theme: pane_theme,
         };

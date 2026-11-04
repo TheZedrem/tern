@@ -19,11 +19,14 @@ it from VS Code and from Notepad reloads it within a second, and a profile
 with `command: [htop]`-style program names resolves through `PATH` and
 `PATHEXT`. For T-004: `Ctrl+Shift+P` opens the palette, and `Ctrl+=`,
 `Ctrl+-` and `Ctrl+0` change the font size on a US and on a German layout
-(GPUI's Windows key mapper rewrites bindings per layout). Fix what fails.
-Area: src.
+(GPUI's Windows key mapper rewrites bindings per layout). For T-012: an
+SSH profile connects through the built-in `ssh.exe`, a dropped connection
+(exit 255) offers Enter to reconnect, and with the OpenSSH Client feature
+turned off the pane says how to turn it on. Fix what fails. Area: src.
 
 Spec: ../spec/0001-startup-performance.md (AC8)
 Spec: ../spec/0002-terminal-pane.md (spawn, input, resize, exit on Windows)
 Spec: ../spec/0003-tabs-splits-and-session-restore.md (keys, resize, close)
 Spec: ../spec/0004-commands-keybindings-palette.md (palette and font keys)
 Spec: ../spec/0005-config-and-themes.md (paths, watcher, PATHEXT)
+Spec: ../spec/0006-ssh-hosts.md (ssh.exe, reconnect, missing client)

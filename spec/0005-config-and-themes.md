@@ -60,7 +60,7 @@ profiles:                           # map key = stable profile ID
     type: local
     command: [htop]                 # program + args
     cwd: ~/projects                 # optional, default: home
-  my-server:                        # spec 0006; skipped with a notice until T-012
+  my-server:                        # spec 0006
     type: ssh
     host: myserver.example.com      # or a Host alias from ~/.ssh/config
     user: myuser                    # optional

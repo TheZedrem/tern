@@ -15,7 +15,7 @@ use crate::commands::{
 use crate::config::{self, Config, Profile};
 use crate::terminal::pty::{self, Command, GridSize};
 use crate::terminal::{
-    FONT_SIZES, FontSettings, PaneEvent, PaneProfile, PaneSettings, TerminalPane,
+    FONT_SIZES, FontSettings, Launch, PaneEvent, PaneProfile, PaneSettings, Start, TerminalPane,
 };
 use crate::theme::{self, Theme};
 use crate::timing::{Mark, Timing};
@@ -39,7 +39,7 @@ use gpui_component::{ActiveTheme, IconName, Sizable, WindowExt, window_border};
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -122,8 +122,8 @@ struct Rename {
 /// The first pane, its program started before the window existed (spec
 /// 0001).
 pub struct BootPane {
-    pub session: Result<pty::Session, String>,
-    pub command: Command,
+    pub start: Start,
+    pub launch: Launch,
     pub profile: PaneProfile,
     pub theme: Theme,
 }
@@ -219,12 +219,12 @@ impl Workspace {
             content_size: Rc::default(),
         };
         let BootPane {
-            session,
-            command,
+            start,
+            launch,
             profile,
             theme,
         } = boot;
-        workspace.add_pane(leaf, session, &command, profile, theme, window, cx);
+        workspace.add_pane(leaf, start, launch, profile, theme, window, cx);
         workspace.focus_active(window, cx);
         if !bench {
             // A program that prints nothing never makes the first frame
@@ -242,15 +242,15 @@ impl Workspace {
     fn add_pane(
         &mut self,
         leaf: LeafId,
-        session: Result<pty::Session, String>,
-        command: &Command,
+        start: Start,
+        launch: Launch,
         profile: PaneProfile,
         theme: Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let (settings, bench) = (self.pane_settings(theme), self.bench);
-        let pane = cx.new(|cx| TerminalPane::new(session, command, profile, settings, bench, cx));
+        let pane = cx.new(|cx| TerminalPane::new(start, launch, profile, settings, bench, cx));
         let subscription = cx.subscribe_in(&pane, window, move |this, _, event, window, cx| {
             this.pane_event(leaf, event, window, cx);
         });
@@ -278,8 +278,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let command = Command::of_profile(&profile);
-        let cwd = cwd.or_else(|| profile.cwd.clone());
+        let launch = Launch {
+            command: Command::of_profile(&profile),
+            cwd: cwd.or_else(|| profile.cwd().map(Path::to_path_buf)),
+            timing: Arc::clone(&self.timing),
+        };
         let theme = self.theme_for(profile.theme.as_deref(), window, cx);
         let viewport = window.viewport_size();
         let grid = GridSize::fit(
@@ -287,14 +290,15 @@ impl Workspace {
             self.font.estimated_cell(),
         );
         let session = pty::spawn(
-            &command,
+            &launch.command,
             grid,
-            cwd.as_deref(),
+            launch.cwd.as_deref(),
             self.config.scrollback as usize,
             Arc::clone(&self.timing),
         );
         let profile = PaneProfile::from(&profile);
-        self.add_pane(leaf, session, &command, profile, theme, window, cx);
+        let start = Start::Started(session);
+        self.add_pane(leaf, start, launch, profile, theme, window, cx);
     }
 
     /// The palette of a pane whose profile names theme `name` (`None`:

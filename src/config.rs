@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::Write as _;
 use std::marker::PhantomData;
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -76,12 +77,26 @@ pub struct ThemeSettings {
     pub custom: Vec<(String, ThemeSource)>,
 }
 
-/// A `type: local` profile: what a pane runs. `type: ssh` profiles are
-/// skipped at load until they can connect (T-012).
+/// A profile: what a pane runs (spec 0005).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
     pub id: String,
     pub name: Option<String>,
+    /// The theme of this profile's panes; `None` follows `theme.default`.
+    pub theme: Option<String>,
+    pub kind: ProfileKind,
+}
+
+/// A profile's `type`, with the keys that only it has.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProfileKind {
+    Local(LocalProfile),
+    Ssh(SshProfile),
+}
+
+/// `type: local`: a program on this machine.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LocalProfile {
     /// Program and arguments. `None` runs the user's login shell.
     pub command: Option<Vec<String>>,
     /// With `~` expanded. A directory that doesn't exist falls back to home
@@ -89,8 +104,21 @@ pub struct Profile {
     pub cwd: Option<PathBuf>,
     /// Set on top of the inherited environment.
     pub env: BTreeMap<String, String>,
-    /// The theme of this profile's panes; `None` follows `theme.default`.
-    pub theme: Option<String>,
+}
+
+/// `type: ssh`: a host the system `ssh` connects to (spec 0006). Only the
+/// options set here go on its command line, so `~/.ssh/config` still
+/// applies to the rest.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SshProfile {
+    /// A host name or a `Host` alias from `~/.ssh/config`.
+    pub host: String,
+    pub user: Option<String>,
+    /// 1–65535: OpenSSH refuses port 0, and that refusal would look like a
+    /// dropped connection.
+    pub port: Option<NonZeroU16>,
+    /// With `~` expanded.
+    pub identity_file: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -155,16 +183,23 @@ impl Profile {
         Self {
             id: "shell".into(),
             name: None,
-            command: None,
-            cwd: None,
-            env: BTreeMap::new(),
             theme: None,
+            kind: ProfileKind::Local(LocalProfile::default()),
         }
     }
 
     /// The name tab titles and the palette show: `name`, else the ID.
     pub fn display_name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// The directory the profile starts in, for a local profile that sets
+    /// one.
+    pub fn cwd(&self) -> Option<&Path> {
+        match &self.kind {
+            ProfileKind::Local(local) => local.cwd.as_deref(),
+            ProfileKind::Ssh(_) => None,
+        }
     }
 }
 
@@ -848,29 +883,73 @@ impl Attempt<'_> {
                  Passwords never go in config.yaml; ssh asks for them when it connects."
             ));
         }
-        match raw.kind {
-            ProfileKind::Ssh => {
-                self.notice(format!(
-                    "config.yaml{at}: profile `{id}` was skipped: SSH profiles aren't supported yet"
-                ));
-                None
-            }
-            ProfileKind::Local => Some(Profile {
-                id,
-                name: raw.name,
+        // The other type's keys can't do what they were written for.
+        let foreign: Vec<&str> = match raw.kind {
+            ProfileType::Local => [
+                ("host", raw.host.is_some()),
+                ("user", raw.user.is_some()),
+                ("port", raw.port.is_some()),
+                ("identity_file", raw.identity_file.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(key, set)| set.then_some(key))
+            .collect(),
+            ProfileType::Ssh => [
+                ("command", raw.command.is_some()),
+                ("cwd", raw.cwd.is_some()),
+                ("env", !raw.env.is_empty()),
+            ]
+            .into_iter()
+            .filter_map(|(key, set)| set.then_some(key))
+            .collect(),
+        };
+        if !foreign.is_empty() {
+            let kind = match raw.kind {
+                ProfileType::Local => "local",
+                ProfileType::Ssh => "ssh",
+            };
+            self.notice(format!(
+                "config.yaml{at}: profile `{id}` is `type: {kind}`, so `{}` was ignored",
+                foreign.join("`, `")
+            ));
+        }
+        let kind = match raw.kind {
+            ProfileType::Local => ProfileKind::Local(LocalProfile {
                 command: raw.command.filter(|command| !command.is_empty()),
                 cwd: raw.cwd.as_deref().map(expand_home),
                 env: raw.env,
-                theme: raw.theme,
             }),
-        }
+            ProfileType::Ssh => {
+                let host = raw.host.map(|host| host.trim().to_owned());
+                let Some(host) = host.filter(|host| !host.is_empty() && !host.starts_with('-'))
+                else {
+                    self.notice(format!(
+                        "config.yaml{at}: profile `{id}` was skipped: \
+                         an ssh profile needs a `host`, and one can't start with `-`"
+                    ));
+                    return None;
+                };
+                ProfileKind::Ssh(SshProfile {
+                    host,
+                    user: raw.user,
+                    port: raw.port,
+                    identity_file: raw.identity_file.as_deref().map(expand_home),
+                })
+            }
+        };
+        Some(Profile {
+            id,
+            name: raw.name,
+            theme: raw.theme,
+            kind,
+        })
     }
 }
 
 /// `type:`, which picks how a profile is read.
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum ProfileKind {
+enum ProfileType {
     Local,
     Ssh,
 }
@@ -881,26 +960,24 @@ enum ProfileKind {
 #[serde(deny_unknown_fields)]
 struct RawProfile {
     #[serde(rename = "type")]
-    kind: ProfileKind,
+    kind: ProfileType,
     name: Option<String>,
+    theme: Option<String>,
+    // `type: local`.
     command: Option<Vec<String>>,
     cwd: Option<String>,
     #[serde(default)]
     env: BTreeMap<String, String>,
-    theme: Option<String>,
-    /// Only checked for, never kept: secrets belong in the OS keychain.
-    password: Option<IgnoredAny>,
-    // The connection of a `type: ssh` profile (spec 0006), read with T-012.
-    #[serde(rename = "host")]
-    _host: Option<IgnoredAny>,
-    #[serde(rename = "user")]
-    _user: Option<IgnoredAny>,
-    #[serde(rename = "port")]
-    _port: Option<IgnoredAny>,
-    #[serde(rename = "identity_file")]
-    _identity_file: Option<IgnoredAny>,
+    // `type: ssh` (spec 0006).
+    host: Option<String>,
+    user: Option<String>,
+    port: Option<NonZeroU16>,
+    identity_file: Option<String>,
+    /// The host picker's group, read with T-013.
     #[serde(rename = "group")]
     _group: Option<IgnoredAny>,
+    /// Only checked for, never kept: secrets belong in the OS keychain.
+    password: Option<IgnoredAny>,
 }
 
 /// A named value of a map whose values fail one by one.
@@ -1073,6 +1150,26 @@ pub(crate) mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// An ssh profile's connection to `host` with no option set. Shared
+    /// with the tests of the modules that run one.
+    pub(crate) fn ssh_to(host: &str) -> SshProfile {
+        SshProfile {
+            host: host.into(),
+            user: None,
+            port: None,
+            identity_file: None,
+        }
+    }
+
+    /// The IDs of `config`'s profiles, in order.
+    fn profile_ids(config: &Config) -> Vec<&str> {
+        config
+            .profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect()
     }
 
     #[test]
@@ -1492,7 +1589,7 @@ profiles:                           # map key = stable profile ID
     type: local
     command: [htop]                 # program + args
     cwd: ~/projects                 # optional, default: home
-  my-server:                        # spec 0006; skipped with a notice until T-012
+  my-server:                        # spec 0006
     type: ssh
     host: myserver.example.com      # or a Host alias from ~/.ssh/config
     user: myuser                    # optional
@@ -1520,9 +1617,10 @@ theme:
 "##;
 
     /// The keys later tasks read (cursor, copy_on_select, restore_session)
-    /// pass silently.
+    /// pass silently, and so does the ssh profile's `group`, which the host
+    /// picker reads (T-013).
     #[test]
-    fn the_spec_example_loads_with_one_notice_for_its_ssh_profile() {
+    fn the_spec_example_loads_every_profile_without_a_notice() {
         let Loaded { config, notices } = parse(SPEC_EXAMPLE);
         let home = dirs::home_dir().expect("home dir");
         let midnight = ThemeSource {
@@ -1536,14 +1634,31 @@ theme:
             default_profile: Some("shell".into()),
             profiles: vec![
                 Profile {
-                    env: BTreeMap::from([("EDITOR".into(), "nvim".into())]),
+                    kind: ProfileKind::Local(LocalProfile {
+                        env: BTreeMap::from([("EDITOR".into(), "nvim".into())]),
+                        ..LocalProfile::default()
+                    }),
                     ..Profile::shell()
                 },
                 Profile {
                     id: "htop".into(),
                     name: Some("Htop".into()),
-                    command: Some(vec!["htop".into()]),
-                    cwd: Some(home.join("projects")),
+                    kind: ProfileKind::Local(LocalProfile {
+                        command: Some(vec!["htop".into()]),
+                        cwd: Some(home.join("projects")),
+                        ..LocalProfile::default()
+                    }),
+                    ..Profile::shell()
+                },
+                Profile {
+                    id: "my-server".into(),
+                    theme: Some("midnight".into()),
+                    kind: ProfileKind::Ssh(SshProfile {
+                        host: "myserver.example.com".into(),
+                        user: Some("myuser".into()),
+                        port: NonZeroU16::new(22),
+                        identity_file: Some(home.join(".ssh/id_ed25519")),
+                    }),
                     ..Profile::shell()
                 },
             ],
@@ -1555,8 +1670,7 @@ theme:
             ..Config::default()
         };
         assert_eq!(config, expected);
-        assert_eq!(notices.len(), 1, "{notices:?}");
-        assert!(notices[0].contains("my-server"), "{}", notices[0]);
+        assert!(notices.is_empty(), "{notices:?}");
     }
 
     /// A `keybindings:` entry as [`parse`] reads it.
@@ -1629,7 +1743,10 @@ theme:
         ));
         let ids: Vec<_> = config.profiles.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, ["zeta", "alpha"]);
-        assert_eq!(config.profiles[0].command, Some(vec!["htop".to_owned()]));
+        let ProfileKind::Local(zeta) = &config.profiles[0].kind else {
+            panic!("zeta is local");
+        };
+        assert_eq!(zeta.command, Some(vec!["htop".to_owned()]));
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(
             notices[0].contains("broken") && notices[0].contains("line 7"),
@@ -1861,6 +1978,309 @@ theme:
             loaded.notices
         );
         assert!(!format!("{loaded:?}").contains("hunter2"), "{loaded:?}");
+    }
+
+    /// Options a profile leaves out stay unset, so `~/.ssh/config` decides
+    /// them (spec 0006 §Model).
+    #[test]
+    fn an_ssh_profile_with_only_a_host_leaves_every_option_unset() {
+        let Loaded { config, notices } = parse(concat!(
+            "profiles:\n",
+            "  prod:\n",
+            "    type: ssh\n",
+            "    host: prod-alias\n",
+        ));
+        let expected = Profile {
+            id: "prod".into(),
+            kind: ProfileKind::Ssh(ssh_to("prod-alias")),
+            ..Profile::shell()
+        };
+        assert_eq!(config.profiles, [expected]);
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// "First profile" and the palette listing go by file order (spec
+    /// 0005), whatever the type.
+    #[test]
+    fn ssh_and_local_profiles_load_together_in_file_order() {
+        let Loaded { config, notices } = parse(concat!(
+            "profiles:\n",
+            "  zeta:\n",
+            "    type: local\n",
+            "  prod:\n",
+            "    type: ssh\n",
+            "    host: prod.example.com\n",
+            "  alpha:\n",
+            "    type: local\n",
+            "  db:\n",
+            "    type: ssh\n",
+            "    host: db.example.com\n",
+        ));
+        let loaded: Vec<_> = config
+            .profiles
+            .iter()
+            .map(|p| (p.id.as_str(), matches!(p.kind, ProfileKind::Ssh(_))))
+            .collect();
+        let expected = [
+            ("zeta", false),
+            ("prod", true),
+            ("alpha", false),
+            ("db", true),
+        ];
+        assert_eq!(loaded, expected);
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// New tabs may open an SSH profile; at boot it waits for Enter (spec
+    /// 0006, flow 6).
+    #[test]
+    fn default_profile_can_name_an_ssh_profile() {
+        let Loaded { config, notices } = parse(concat!(
+            "default_profile: prod\n",
+            "profiles:\n",
+            "  shell:\n",
+            "    type: local\n",
+            "  prod:\n",
+            "    type: ssh\n",
+            "    host: prod.example.com\n",
+        ));
+        assert_eq!(config.default_profile().id, "prod");
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Without a host there is nothing to connect to.
+    #[test]
+    fn an_ssh_profile_without_a_host_is_skipped_with_a_notice_naming_it() {
+        // No `host` key, one with no value, an empty one.
+        for host in ["", "    host:\n", "    host: \"\"\n"] {
+            let Loaded { config, notices } = parse(&format!(
+                concat!(
+                    "profiles:\n",
+                    "  shell:\n",
+                    "    type: local\n",
+                    "  nowhere:\n",
+                    "    type: ssh\n",
+                    "    user: alice\n",
+                    "{}",
+                    "  prod:\n",
+                    "    type: ssh\n",
+                    "    host: prod.example.com\n",
+                ),
+                host
+            ));
+            assert_eq!(profile_ids(&config), ["shell", "prod"], "{host:?}");
+            assert_eq!(notices.len(), 1, "{host:?}: {notices:?}");
+            assert!(notices[0].contains("nowhere"), "{}", notices[0]);
+        }
+    }
+
+    /// ssh reads an argument that starts with `-` as an option, so such a
+    /// host could set any option, `ProxyCommand` included.
+    #[test]
+    fn an_ssh_host_that_starts_with_a_dash_skips_its_profile_with_a_notice_naming_it() {
+        let Loaded { config, notices } = parse(concat!(
+            "profiles:\n",
+            "  shell:\n",
+            "    type: local\n",
+            "  sneaky:\n",
+            "    type: ssh\n",
+            "    host: \"-oProxyCommand=echo pwned\"\n",
+            "  prod:\n",
+            "    type: ssh\n",
+            "    host: prod.example.com\n",
+        ));
+        assert_eq!(profile_ids(&config), ["shell", "prod"]);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("sneaky"), "{}", notices[0]);
+    }
+
+    /// Whitespace in front can't sneak a dash past the check: whatever is
+    /// done to the host on its way, the argument ssh gets never starts
+    /// with `-`.
+    #[test]
+    fn whitespace_before_a_dash_never_gets_a_host_to_ssh_as_an_option() {
+        for host in [" -oProxyCommand=echo pwned", "\\t-oProxyCommand=echo pwned"] {
+            let Loaded { config, notices } = parse(&format!(
+                "profiles:\n  sneaky:\n    type: ssh\n    host: \"{host}\"\n"
+            ));
+            match config.profiles.as_slice() {
+                [profile] => {
+                    let args = Command::of_profile(profile).args;
+                    let target = args.last().expect("ssh gets a host");
+                    assert!(!target.starts_with('-'), "{host:?} reached ssh as {args:?}");
+                }
+                _ => assert!(
+                    notices.iter().any(|notice| notice.contains("sneaky")),
+                    "{host:?} was skipped without a notice: {notices:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn an_ssh_port_from_1_to_65535_is_kept() {
+        for port in [1, 22, 65535] {
+            let Loaded { config, notices } = parse(&format!(
+                "profiles:\n  prod:\n    type: ssh\n    host: prod.example.com\n    port: {port}\n"
+            ));
+            let expected = ProfileKind::Ssh(SshProfile {
+                port: NonZeroU16::new(port),
+                ..ssh_to("prod.example.com")
+            });
+            let kinds: Vec<_> = config.profiles.iter().map(|p| &p.kind).collect();
+            assert_eq!(kinds, [&expected], "port {port}");
+            assert!(notices.is_empty(), "port {port}: {notices:?}");
+        }
+    }
+
+    /// OpenSSH refuses port 0, and its exit 255 would look like a dropped
+    /// connection. A profile that doesn't fit is skipped on its own (spec
+    /// 0005).
+    #[test]
+    fn an_ssh_port_that_isnt_a_number_from_1_to_65535_skips_its_profile_with_a_notice() {
+        for port in ["0", "65536", "-1", "twenty-two"] {
+            let Loaded { config, notices } = parse(&format!(
+                concat!(
+                    "profiles:\n",
+                    "  shell:\n",
+                    "    type: local\n",
+                    "  bad-port:\n",
+                    "    type: ssh\n",
+                    "    host: prod.example.com\n",
+                    "    port: {}\n",
+                    "  db:\n",
+                    "    type: ssh\n",
+                    "    host: db.example.com\n",
+                ),
+                port
+            ));
+            assert_eq!(profile_ids(&config), ["shell", "db"], "port {port}");
+            assert_eq!(notices.len(), 1, "port {port}: {notices:?}");
+            assert!(notices[0].contains("bad-port"), "{}", notices[0]);
+        }
+    }
+
+    /// Spec 0006 §Security: no password in config.yaml, least of all on
+    /// the profiles that log in somewhere.
+    #[test]
+    fn a_password_on_an_ssh_profile_gives_a_notice_and_is_kept_nowhere() {
+        let loaded = parse(concat!(
+            "profiles:\n",
+            "  prod-db:\n",
+            "    type: ssh\n",
+            "    host: db.example.com\n",
+            "    password: hunter2\n",
+        ));
+        assert!(
+            loaded
+                .notices
+                .iter()
+                .any(|notice| notice.contains("password") && notice.contains("prod-db")),
+            "{:?}",
+            loaded.notices
+        );
+        assert!(!format!("{loaded:?}").contains("hunter2"), "{loaded:?}");
+    }
+
+    /// A profile whose `type` changed keeps loading; what it no longer
+    /// uses is named, once, and has no effect.
+    #[test]
+    fn ssh_keys_on_a_local_profile_give_one_notice_naming_them_and_are_ignored() {
+        let Loaded { config, notices } = parse(concat!(
+            "profiles:\n",
+            "  htop:\n",
+            "    type: local\n",
+            "    command: [htop]\n",
+            "    host: prod.example.com\n",
+            "    user: alice\n",
+            "    port: 2222\n",
+            "    identity_file: ~/.ssh/id_ed25519\n",
+        ));
+        assert_eq!(profile_ids(&config), ["htop"], "{notices:?}");
+        let runs = Command {
+            program: "htop".into(),
+            args: vec![],
+            env: BTreeMap::new(),
+        };
+        assert_eq!(Command::of_profile(&config.profiles[0]), runs);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        for name in ["htop", "host", "user", "port", "identity_file"] {
+            assert!(notices[0].contains(name), "no `{name}`: {}", notices[0]);
+        }
+    }
+
+    #[test]
+    fn local_keys_on_an_ssh_profile_give_one_notice_naming_them_and_are_ignored() {
+        let Loaded { config, notices } = parse(concat!(
+            "profiles:\n",
+            "  prod:\n",
+            "    type: ssh\n",
+            "    host: prod.example.com\n",
+            "    command: [htop]\n",
+            "    cwd: ~/projects\n",
+            "    env: { EDITOR: nvim }\n",
+        ));
+        assert_eq!(profile_ids(&config), ["prod"], "{notices:?}");
+        let profile = &config.profiles[0];
+        let runs = Command {
+            program: "ssh".into(),
+            args: vec!["prod.example.com".into()],
+            env: BTreeMap::new(),
+        };
+        assert_eq!(Command::of_profile(profile), runs);
+        assert_eq!(profile.cwd(), None);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        for name in ["prod", "command", "cwd", "env"] {
+            assert!(notices[0].contains(name), "no `{name}`: {}", notices[0]);
+        }
+    }
+
+    /// A known limitation: both types' keys are read as what they hold
+    /// before `type` decides which apply, so a key of the other type whose
+    /// value doesn't fit that key makes the profile not fit. Like any such
+    /// profile, it's skipped on its own with a notice (spec 0005); not
+    /// reading it at all would take a hand-written profile parser.
+    #[test]
+    fn a_key_of_the_other_type_that_doesnt_fit_skips_its_profile_with_a_notice() {
+        let cases = [
+            (
+                "htop",
+                "    type: local\n    command: [htop]\n    port: 70000\n",
+            ),
+            (
+                "prod",
+                "    type: ssh\n    host: prod.example.com\n    command: htop\n",
+            ),
+        ];
+        for (id, keys) in cases {
+            let Loaded { config, notices } = parse(&format!(
+                "profiles:\n  {id}:\n{keys}  shell:\n    type: local\n"
+            ));
+            assert_eq!(profile_ids(&config), ["shell"], "{id}: {notices:?}");
+            assert_eq!(notices.len(), 1, "{id}: {notices:?}");
+            assert!(notices[0].contains(id), "{}", notices[0]);
+        }
+    }
+
+    /// An SSH pane's own program starts at home; the directory that
+    /// matters is on the remote side.
+    #[test]
+    fn only_a_local_profile_has_a_cwd() {
+        let projects = PathBuf::from("/srv/projects");
+        let local = Profile {
+            kind: ProfileKind::Local(LocalProfile {
+                cwd: Some(projects.clone()),
+                ..LocalProfile::default()
+            }),
+            ..Profile::shell()
+        };
+        assert_eq!(local.cwd(), Some(projects.as_path()));
+        assert_eq!(Profile::shell().cwd(), None);
+        let ssh = Profile {
+            kind: ProfileKind::Ssh(ssh_to("prod.example.com")),
+            ..Profile::shell()
+        };
+        assert_eq!(ssh.cwd(), None);
     }
 
     #[test]

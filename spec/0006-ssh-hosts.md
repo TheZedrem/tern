@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 2
-tasks: [T-012, T-013, T-014, T-015]
+tasks: [T-012, T-013, T-014, T-015, T-006, T-011]
 related: [spec 0002, spec 0003, spec 0004, spec 0005, OQ-001 ✅, research 0001]
 ---
 
@@ -100,7 +100,8 @@ arguments, the environment or a log.
    (spec 0002).
 6. **Restore [load-bearing]:** a restored SSH tab never connects by itself;
    it shows `Press Enter to connect to <label>`. Connecting at boot would
-   be network at startup (architecture §Ground rules).
+   be network at startup (architecture §Ground rules). The same holds for
+   the first tab when `default_profile` is an SSH profile.
 7. **Forget:** the picker offers "Forget saved password" on a host that
    has one.
 8. **Failures:** no `ssh` on `PATH` shows that in the pane, with how to
