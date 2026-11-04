@@ -87,6 +87,11 @@ Load-bearing rules that code elsewhere depends on, plus the price we knowingly p
 - **SolidJS is not React.** Components run once, and destructuring props
   breaks reactivity. Its ecosystem is smaller, so expect to hand-build
   dialogs and menus.
+- **Fixed window chrome on Linux.** Our GTK window always uses libgtk's
+  built-in Adwaita (dark), never the user's desktop theme, because loading
+  a third-party GTK theme costs ~150 ms at boot (OQ-009). Panes still
+  inherit the user's `GTK_THEME`. Windows uses native decorations.
+  *Cost:* the title bar doesn't match KDE/COSMIC themes.
 - **A broken config never blocks boot.** Fall back to defaults and show the
   parse error with its line number. YAML's implicit typing (`no` → false) is
   contained by typed serde structs.

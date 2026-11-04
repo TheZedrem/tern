@@ -36,7 +36,6 @@ switching themes previews live.
 
 - `type: ssh` profiles and the host manager: Phase 2 (the schema below shows them so the shape is fixed now)
 - Agent profiles: Phase 3
-- `theme.window_style` (native UI base theme): T-009. Accepted silently until then
 - Per-profile fonts, graphical settings page: *Later*
 
 ## Design

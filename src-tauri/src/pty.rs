@@ -73,9 +73,33 @@ pub fn bench_command() -> CommandBuilder {
     cmd
 }
 
+/// The user's own `GTK_THEME` (or `None` if unset), saved before we override it.
+#[cfg(target_os = "linux")]
+static USER_GTK_THEME: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+
+/// Makes our GTK window use the theme compiled into libgtk (Adwaita, dark
+/// variant to match the terminal) instead of the user's desktop theme. A
+/// third-party theme costs ~150 ms of file parsing at GTK init on the
+/// reference machine (OQ-009). Panes still get the user's value, see `prepare`.
+///
+/// Must run first in `run()`, before any thread exists.
+#[cfg(target_os = "linux")]
+pub fn use_builtin_gtk_theme() {
+    USER_GTK_THEME.get_or_init(|| std::env::var_os("GTK_THEME"));
+    // SAFETY: called before the app starts any thread, so nothing can read
+    // the environment concurrently.
+    unsafe { std::env::set_var("GTK_THEME", "Adwaita:dark") };
+}
+
 /// Adds the environment every pane gets on top of the inherited one, and
 /// starts in `cwd` or the home directory.
 pub fn prepare(cmd: &mut CommandBuilder, cwd: Option<&std::path::Path>) {
+    // GUI apps started from a pane get the user's theme, not ours.
+    #[cfg(target_os = "linux")]
+    match USER_GTK_THEME.get().cloned().flatten() {
+        Some(theme) => cmd.env("GTK_THEME", theme),
+        None => cmd.env_remove("GTK_THEME"),
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "zed-term");

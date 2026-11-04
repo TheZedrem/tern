@@ -121,6 +121,8 @@ async fn app_quit(app: AppHandle) -> Result<(), String> {
 /// Runs the app. `start` is the instant `main()` was entered; every TTFP
 /// mark is measured from it.
 pub fn run(start: Instant) {
+    #[cfg(target_os = "linux")]
+    pty::use_builtin_gtk_theme();
     let timing = Arc::new(Timing::new(start));
     let bench = std::env::args().any(|a| a == "--bench-startup");
 
