@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 2
 tasks: [T-012, T-013, T-014, T-015, T-006, T-011]
-related: [spec 0002, spec 0003, spec 0004, spec 0005, OQ-001 ✅, research 0001]
+related: [spec 0002, spec 0003, spec 0004, spec 0005, OQ-001 ✅, OQ-016, research 0001, threat model 0001]
 ---
 
 # Spec: SSH hosts and connections
@@ -58,9 +58,11 @@ arguments, the environment or a log.
   profile as `ssh [-l user] [-p port] [-i identity_file] <host>`, with only
   the options the profile sets, so `~/.ssh/config` still applies to it.
 - **Target:** user, host and port as ssh resolves them (`ssh -G`, run at
-  connect time). Passwords are keyed by target (`user@host:port`) and
-  passphrases by key path, so a profile and an alias for the same server
-  share one entry.
+  connect time, never when listing hosts: `Match exec` lines run commands,
+  TM-askpass-20). The host is `hostkeyalias` if set, else `hostname`, the
+  name ssh writes into its prompts. Passwords are keyed by target
+  (`user@host:port`) and passphrases by key path, so a profile and an
+  alias for the same server share one entry.
 
 ### Module surface
 
@@ -75,27 +77,61 @@ arguments, the environment or a log.
    mode, grouped, filtered by label, host and group. Enter opens the host
    in a new tab named after it (spec 0003).
 2. **Connect:** spawn the command in a pane (spec 0002) with
-   `SSH_ASKPASS=<zed-term binary>`, `SSH_ASKPASS_REQUIRE=force`, the
-   askpass endpoint and a fresh per-connection token in its environment.
-3. **Prompt:** ssh runs zed-term as its askpass helper. The helper starts
-   no UI and exits before any GPUI code runs; it sends the prompt, the
-   `SSH_ASKPASS_PROMPT` hint and the token to the running app over the
-   local socket, and prints the answer. A wrong or missing token gets
-   nothing and exit code 1.
+   `SSH_ASKPASS` set to the canonical absolute path of the running
+   executable (never a name looked up on `PATH`),
+   `SSH_ASKPASS_REQUIRE=force`, and the askpass endpoint, a fresh
+   per-connection token and the app's PID in its environment. These go
+   only to the ssh process, never to local panes. The endpoint opens with
+   the first SSH connection:
+   - Unix: a socket in a per-run directory, mode 0700, under
+     `$XDG_RUNTIME_DIR`; the server drops any peer whose `SO_PEERCRED` uid
+     isn't the app's. Without `$XDG_RUNTIME_DIR` there is no askpass, and
+     ssh asks in the terminal.
+   - Windows: a named pipe with 128 random bits in its name, created with
+     `FILE_FLAG_FIRST_PIPE_INSTANCE` and a DACL for the current user only.
+   - Either way the token is 128 bits from `getrandom`, compared in
+     constant time and dropped when its ssh exits (threat model
+     [0001](threat-model/0001-ssh-askpass.md), TM-askpass-01 to -03).
+3. **Prompt:** ssh runs zed-term as its askpass helper. `main` checks for
+   helper mode first, only with both the endpoint and the token set, and
+   the helper exits before any GPUI or config code runs. It checks that
+   the endpoint's server process is the app's PID (`SO_PEERCRED`,
+   `GetNamedPipeServerProcessId`), sends the prompt, the
+   `SSH_ASKPASS_PROMPT` hint and the token in messages of at most 64 KiB,
+   and writes the answer to stdout. It writes nothing to stderr, which is
+   the PTY; any failure, a wrong or missing token among them, is exit
+   code 1 with no output. The server handles each helper on a background
+   task with a 30 s read timeout (TM-askpass-02, -11, -16, -18).
 4. **Answer [load-bearing]:**
-   - ssh's password prompt for the connection's own target
-     (`<user>@<host>'s password: `, or `(<user>@<host>) Password: ` for
-     keyboard-interactive) and its passphrase prompt for the profile's
-     `identity_file` are filled from the keychain, if a secret is stored
-     and hasn't been offered on this connection yet.
+   - The connection's own password and passphrase prompts are filled from
+     the keychain, if a secret is stored and hasn't been offered on this
+     connection yet: a prompt that is exactly `<user>@<host>'s password: `,
+     or `(<user>@<host>) ` followed by a server text of `password:` in any
+     case with optional spaces (keyboard-interactive), or
+     `Enter passphrase for key '<file>': ` for one of the connection's
+     `identityfile`s, all from `ssh -G` (Target). ssh writes the
+     `(user@host)` prefix itself, so a server can't name another target,
+     and a jump host's prompts name the jump host (TM-askpass-04, -19).
+   - Each fill shows a notice naming the target, never the secret:
+     "Logged in with the password saved for `<target>`" (TM-askpass-10).
    - Every other prompt opens a dialog over the pane: host-key questions,
      one-time codes, a jump host's password, a second password prompt
      after the stored one failed. Nothing else is answered automatically.
-   - `confirm` hint: a Yes/No dialog. `none` hint: a notice that closes
-     when ssh ends the helper.
+     One dialog per connection at a time; closing the tab cancels its
+     prompts (TM-askpass-15).
+   - Dialogs show the prompt as plain text, control characters (but line
+     breaks) and invisible or direction characters stripped by the title
+     rules of spec 0003, capped at 4 KiB (TM-askpass-08).
+   - `confirm` hint and host-key questions: a Yes/No dialog with ssh's
+     full text, fingerprint included, where Enter and Esc mean No and Yes
+     needs an explicit choice (TM-askpass-07). `none` hint: a notice that
+     closes when ssh ends the helper.
    - Password and passphrase dialogs offer "Remember in keychain"; after a
      stored password failed, the dialog offers to replace it.
    - Esc cancels: the helper exits 1 and ssh counts a failed attempt.
+   - A secret is held only between the keychain or the dialog and the
+     socket write; keychain calls run on the background executor with a
+     timeout that counts as nothing stored (TM-askpass-13, -17).
 5. **Drop:** when ssh exits with 255 (connection failed or lost), the pane
    stays open with `[connection closed: press Enter to reconnect]`, and
    Enter reruns the same command. Other exits follow `close_on_exit`
@@ -148,15 +184,19 @@ Trust boundaries:
 - **§Security 3 [load-bearing]:** a secret travels keychain → app → helper
   → ssh, over the authenticated local socket only. It is never in an
   environment variable, an argument, the PTY, a log, `config.yaml` or
-  `session.json`.
+  `session.json`. zed-term never logs askpass traffic, prompts included:
+  they name users and hosts.
 - **§Security 1 [load-bearing]:** prompts come only from the local ssh
   through askpass. Nothing the remote side prints can trigger, read or
-  fill a secret.
+  fill a secret, and secrets are never asked for inside the grid.
 - The token is random (128 bits), per connection, and only in that ssh
   process's environment. The socket is private to the user and closes with
   the app.
-- A STRIDE threat model of the askpass path (T-015) comes before T-014 is
-  built.
+- The STRIDE threat model of this path is
+  [0001](threat-model/0001-ssh-askpass.md) (T-015); flows 2 to 4 carry its
+  mitigations, and its accepted risks wait for sign-off in OQ-016: code
+  running as the user, secrets in memory until freed, and a user typing a
+  secret into a prompt the remote printed.
 
 ## Acceptance criteria
 

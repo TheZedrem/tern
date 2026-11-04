@@ -95,7 +95,7 @@ elsewhere; link.
 
 | Path | What it is |
 |---|---|
-| `spec/` | **Forward-looking**: architecture, feature specs (`NNNN-*.md`), `open-questions.md` |
+| `spec/` | **Forward-looking**: architecture, feature specs (`NNNN-*.md`), STRIDE threat models (`threat-model/`), `open-questions.md` |
 | `tasks/` | The backlog: one file per task, resolved files move to `tasks/resolved/` (format: `tasks/README.md`) |
 | `docs/` | **Current state**: dev setup, conventions. Links to `spec/`, never restates decisions |
 | `.claude/skills/` | Project skills (see below) |
