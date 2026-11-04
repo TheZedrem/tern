@@ -7,7 +7,9 @@ blocked-by: []
 Replace the removed Tauri app with the stack from `spec/architecture.md`:
 `gpui-pre` plus `gpui-pre-platform` with only its `wayland` feature, the
 Wayland check before GPUI starts, Lilex embedded and registered as the
-default font, one pane driven by `alacritty_terminal` (its `tty` +
+default font, `gpui-component` initialized with its `Root` as the window's
+root view and the theme written into its colors, one pane driven by
+`alacritty_terminal` (its `tty` +
 `event_loop`), a terminal element that shapes the visible rows, key input
 to the PTY, resize, exit handling, and the config read on the boot path.
 Ship the TTFP machinery: dev badge, stdout marks (six, including

@@ -51,6 +51,7 @@ machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
 |---|---|---|
 | Language | Rust (edition 2024), single crate at the repo root | One language, one build, no bundler and no IPC |
 | Window, UI, rendering | GPUI, Zed's GPU UI framework, as the exact-pinned `gpui-pre` snapshot of Zed's main branch plus `gpui-pre-platform` built with only its `wayland` feature | Owner's choice: the stack Zed ships. GPU text and layout, IME, clipboard, accessibility, actions and key contexts come with it. It renders through wgpu on Vulkan on Linux, and DirectX 11 with DirectWrite on Windows. The official `gpui` crate (0.2.2, 2025-10) no longer compiles against current dependencies, so the weekly snapshot is the maintained channel |
+| Widgets | `gpui-component` with `gpui-kit-assets` (Lucide icons), pinned together with `gpui-pre`; every window's root view is its `Root` | 60+ ready widgets: inputs with IME, lists, tabs, title bar, resizable panes, notifications, tables, trees. They cover the tab bar, palette and toasts now and the SFTP panel in Phase 2. Measured cost: ~9 ms on the first frame and 7.6 MB of binary (OQ-012) |
 | Terminal state | `alacritty_terminal` | The VT parser, grid, scrollback, selection, search and OSC handling behind Alacritty and Zed's terminal; we don't write a VT parser |
 | PTY | `alacritty_terminal::tty` + its `event_loop` | Spawns the shell (Unix PTY, ConPTY on Windows) and reads and parses on its own thread; the grid is bounded by scrollback, so a flood can't grow memory |
 | Terminal rendering | Our own GPUI element: each visible row shaped once as styled runs at the cell width; cell backgrounds, cursor and selection as quads | How Zed's terminal works. Zed's terminal code is GPL, so it is a design reference only; `gpui-terminal` (MIT/Apache) may be reused with attribution |
@@ -85,12 +86,17 @@ Load-bearing rules that code elsewhere depends on, plus the price we knowingly p
   compiles fine and then runs headless: no window, no error. We enable
   exactly `wayland`, and boot refuses to start GPUI without a Wayland
   session. *Cost:* none, as long as nobody "simplifies" the feature list.
-- **GPUI is pinned exactly and bumped on purpose.** `gpui-pre` is a weekly
-  snapshot of Zed's main branch published by the author of
-  `gpui-component`, not by Zed. A bump is its own commit with a TTFP
-  measurement and a look at the Zed commits it pulls in.
-  *Cost:* API churn arrives in bulk at each bump, and one third-party
-  publisher sits in the supply chain.
+- **GPUI and its widgets are pinned exactly and bumped together.**
+  `gpui-pre` is a weekly snapshot of Zed's main branch, and
+  `gpui-component` pins it exactly; both come from the `gpui-component`
+  author, not from Zed. They move in lockstep: a bump is its own commit
+  with a TTFP measurement and a look at the Zed commits it pulls in.
+  *Cost:* API churn arrives in bulk at each bump, one third-party publisher
+  sits in the supply chain, and the release build's final link takes about
+  twice as long.
+- **One palette for terminal and widgets.** The resolved zed-term theme is
+  written into `gpui-component`'s theme at load and on every reload, so
+  widgets never fall back to the library's own colors (spec 0005).
 - **The UI thread never waits for a PTY.** Each pane's `alacritty_terminal`
   event loop runs on its own thread and owns the PTY. Its wakeups reach the
   pane's GPUI entity through a channel and `notify`, so GPUI redraws only

@@ -102,7 +102,8 @@ theme:
   in the binary with `include_str!`.
 - **Resolved at load** **[load-bearing]**: the UI only ever sees complete
   palettes, so the window's clear color is known before the window exists
-  (spec 0001).
+  (spec 0001). The same palette is written into `gpui-component`'s theme,
+  so widgets (tab bar, palette, toasts) match the terminal.
 - **Font** **[load-bearing]**: `font.family: null` (the default) uses Lilex,
   embedded in the binary and registered with GPUI's text system at boot. A
   named family must match an installed font's exact name, because GPUI has

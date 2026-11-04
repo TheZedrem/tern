@@ -8,9 +8,9 @@ represented in `tasks/`. Read this file fully before your first task.
 
 A desktop terminal emulator with built-in SSH/SFTP and one-click AI coding
 agents. Think Tabby's feature set with the boot time of a native terminal.
-It's pure Rust on GPUI, Zed's GPU UI framework, with `alacritty_terminal`
-for the terminal itself, for developers who open a terminal fifty times a
-day and notice every 100 ms.
+It's pure Rust on GPUI, Zed's GPU UI framework, with `gpui-component` for
+widgets and `alacritty_terminal` for the terminal itself, for developers
+who open a terminal fifty times a day and notice every 100 ms.
 
 ## What we can never compromise on
 
@@ -62,9 +62,10 @@ defaults. If one fights the task, say so and ask.
    in `Cargo.toml` is load-bearing.
 6. **Per-frame work that scales with scrollback.** Only visible rows are
    shaped; never iterate the whole grid or re-shape unchanged rows.
-7. **Bumping GPUI in passing.** `gpui-pre` is exact-pinned and its API
-   churns weekly. A bump is its own commit with a TTFP measurement
-   (architecture §Key decisions).
+7. **Bumping GPUI or its widgets in passing.** `gpui-pre` and
+   `gpui-component` are exact-pinned and move together; the API churns
+   weekly. A bump is its own commit with a TTFP measurement (architecture
+   §Key decisions).
 8. **ConPTY is not a Unix PTY.** Windows rewrites output and redraws on
    resize. Resize, cursor and exit behavior must be checked on Windows, not
    inferred from Linux.

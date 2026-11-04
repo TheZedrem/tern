@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-010]
-related: [OQ-005 ✅, OQ-009 ✅, OQ-010 ✅, OQ-013 ✅]
+related: [OQ-005 ✅, OQ-009 ✅, OQ-010 ✅, OQ-012 ✅, OQ-013 ✅]
 ---
 
 # Spec: Startup performance and time-to-first-prompt
@@ -72,7 +72,8 @@ TTFP measurement in the commit.
    window size (default 1000×640 logical px) and the default font's cell
    size. Each pane's event loop starts parsing immediately (architecture
    §Key decisions). The shell boots while GPUI comes up.
-5. Start GPUI's platform and register the embedded default font.
+5. Start GPUI's platform, register the embedded default font and
+   initialize `gpui-component`.
 6. Open the window with the theme background as its clear color, so
    there's no white flash.
 7. The first frame that includes PTY output records `rendered` and prints
@@ -94,8 +95,10 @@ mark.
 ### Startup impact
 
 This spec *is* the startup path. The guard is the dev badge on every run
-plus the bench. The largest fixed cost we don't control is GPUI's system
-font scan on Linux, which the `platform` mark makes visible.
+plus the bench. The largest fixed cost we don't control is GPUI's GPU
+setup, which the `window` mark makes visible; the system font scan on
+Linux shows in the `platform` mark. Widgets from `gpui-component` on the
+first frame cost about 9 ms (OQ-012).
 
 ### Platform notes
 
