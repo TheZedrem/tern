@@ -27,7 +27,8 @@ trust boundaries, among them:
 - size caps and timeouts;
 - `ssh -G` only when connecting, since `Match exec` runs commands.
 
-Three residual risks wait for the owner's sign-off in OQ-016: code
-running as the user, secrets in memory until freed (`zeroize` is T-014's
-call), and a user typing a secret into a prompt the remote printed. T-014
-builds the rest; T-011 checks the Windows half.
+The owner signed off the residual risks (OQ-016): code running as the
+user is accepted with a warning at "Remember in keychain" that recommends
+a private key; secrets in memory are not accepted, so T-014 adds
+`zeroize`; a user typing a secret into a prompt the remote printed is
+accepted. T-014 builds the rest; T-011 checks the Windows half.

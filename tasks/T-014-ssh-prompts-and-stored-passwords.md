@@ -13,9 +13,10 @@ and the no-keychain fallback. The keychain keys need the target as ssh
 resolves it: `ssh -G` at connect time (moved here from T-012). Build the
 mitigations of threat model 0001 as spec 0006's flows 2 to 4 now state
 them (endpoint permissions and server-PID check, exact prompt patterns,
-fill notices, safe host-key dialogs, size caps and timeouts), and settle
-OQ-016 with the owner, `zeroize` included. New crates: `keyring` 4,
-`interprocess`, `getrandom`. Area: src.
+fill notices, safe host-key dialogs, size caps and timeouts, `zeroize`d
+secrets, and the warning at "Remember" that recommends a private key).
+New crates, approved with spec 0006 and OQ-016: `keyring` 4,
+`interprocess`, `getrandom`, `zeroize`. Area: src.
 
 Spec: ../spec/0006-ssh-hosts.md
 Threat model: ../spec/threat-model/0001-ssh-askpass.md

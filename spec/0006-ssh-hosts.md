@@ -69,7 +69,7 @@ arguments, the environment or a log.
 - `ssh::hosts(config, ssh_config_path) -> Vec<Host>`, `ssh::command(&Host) -> pty::Command`
 - `ssh::askpass`: the per-app-run server, and the helper entry point that `main` runs when ssh starts zed-term as `SSH_ASKPASS`
 - `secrets::{get, set, delete}(key)` over `keyring`
-- New crates: `keyring` 4 (already planned), `interprocess` (Unix socket or named pipe), `getrandom` (connection tokens)
+- New crates: `keyring` 4 (already planned), `interprocess` (Unix socket or named pipe), `getrandom` (connection tokens), `zeroize` (overwriting secrets after use; OQ-016)
 
 ### Flows
 
@@ -127,11 +127,16 @@ arguments, the environment or a log.
      needs an explicit choice (TM-askpass-07). `none` hint: a notice that
      closes when ssh ends the helper.
    - Password and passphrase dialogs offer "Remember in keychain"; after a
-     stored password failed, the dialog offers to replace it.
+     stored password failed, the dialog offers to replace it. Next to the
+     option, a warning: any program the user runs can read what's saved
+     there, and logging in with a private key is safer than a saved
+     password (TM-askpass-14, accepted with this warning).
    - Esc cancels: the helper exits 1 and ssh counts a failed attempt.
    - A secret is held only between the keychain or the dialog and the
-     socket write; keychain calls run on the background executor with a
-     timeout that counts as nothing stored (TM-askpass-13, -17).
+     socket write, in a buffer that `zeroize` overwrites when it's dropped,
+     in the app and in the helper; keychain calls run on the background
+     executor with a timeout that counts as nothing stored (TM-askpass-13,
+     -17).
 5. **Drop:** when ssh exits with 255 (connection failed or lost), the pane
    stays open with `[connection closed: press Enter to reconnect]`, and
    Enter reruns the same command. Other exits follow `close_on_exit`
@@ -194,9 +199,9 @@ Trust boundaries:
   the app.
 - The STRIDE threat model of this path is
   [0001](threat-model/0001-ssh-askpass.md) (T-015); flows 2 to 4 carry its
-  mitigations, and its accepted risks wait for sign-off in OQ-016: code
-  running as the user, secrets in memory until freed, and a user typing a
-  secret into a prompt the remote printed.
+  mitigations. Accepted by the owner (OQ-016): code running as the user
+  can read what the keychain holds (hence the warning at "Remember"), and
+  a user may type a secret into a prompt the remote printed.
 
 ## Acceptance criteria
 

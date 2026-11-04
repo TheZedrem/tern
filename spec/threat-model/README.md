@@ -20,4 +20,4 @@ stable so tasks and bugs can cite them.
 
 | Model | Component | Date | Status |
 |---|---|---|---|
-| [0001](0001-ssh-askpass.md) | SSH askpass and stored credentials | 2026-11-04 | draft, accepted risks wait in OQ-016 |
+| [0001](0001-ssh-askpass.md) | SSH askpass and stored credentials | 2026-11-04 | accepted; residual risks signed off in OQ-016 |
