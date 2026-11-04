@@ -35,3 +35,25 @@ run, ms since `main()`:
 ~800 ms is platform floor before our first line of JS. Under `GDK_BACKEND=x11`
 the window shows at ~255 ms and JS starts at ~520 ms. The WebKit sandbox
 makes no difference.
+
+After forcing the built-in Adwaita GTK theme (commit c9cf834): **1066 ms**
+warm median. Of the remaining floor, ~150 ms is the owner's
+`~/.config/gtk-3.0/settings.ini` loading two KDE GTK modules; with an
+isolated config the same binary lands at ~900 ms.
+
+## Native spike (2026-11-04, branch `spike/native-ttfp`)
+
+Question: how fast is a pure-Rust window without a webview on the same
+machine? Prototype: winit + softbuffer (CPU raster) + fontdue + vte +
+portable-pty, same `--bench-startup` marks.
+
+| Mark | Native | Tauri |
+|---|---|---|
+| window shown | 45 ms | 476 ms |
+| prompt rendered (warm median, n=10) | **68 ms** | **1066 ms** |
+| cold run | 64 ms | 1077 ms |
+
+With the owner's real login shell the prompt renders at ~358 ms, of which
+~300 ms is the shell's own startup. Verdict: a native UI is ~15× faster to
+first prompt and is the only route to a native-terminal feel. Decision in
+OQ-010.
