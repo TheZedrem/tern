@@ -31,7 +31,8 @@ pub const TEMPLATE: &str = include_str!("default-config.yaml");
 pub struct Config {
     /// The profile new tabs open, as written; see [`Config::default_profile`].
     pub default_profile: Option<String>,
-    /// In file order. Empty means the one implicit `shell` profile.
+    /// In file order, without the implicit `shell`; see
+    /// [`Config::all_profiles`].
     pub profiles: Vec<Profile>,
     pub font: Font,
     pub scrollback: u32,
@@ -155,33 +156,55 @@ impl Default for ThemeSettings {
 }
 
 impl Config {
+    /// Every profile: the implicit `shell` unless one is configured with
+    /// that ID, then the configured ones in file order (spec 0005).
+    pub fn all_profiles(&self) -> Vec<Profile> {
+        let implicit = self.profile(SHELL).filter(|_| !self.configures(SHELL));
+        implicit
+            .into_iter()
+            .chain(self.profiles.iter().cloned())
+            .collect()
+    }
+
+    /// Profile `id`, counting the implicit `shell`.
+    pub fn profile(&self, id: &str) -> Option<Profile> {
+        self.profiles
+            .iter()
+            .find(|profile| profile.id == id)
+            .cloned()
+            .or_else(|| (id == SHELL).then(Profile::shell))
+    }
+
+    fn configures(&self, id: &str) -> bool {
+        self.profiles.iter().any(|profile| profile.id == id)
+    }
+
     /// The profile new tabs open: `default_profile` if it names a profile,
-    /// else the first one, else the implicit login shell.
+    /// else `shell`.
     pub fn default_profile(&self) -> Profile {
         self.default_profile
             .as_deref()
-            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
-            .or_else(|| self.profiles.first())
-            .cloned()
+            .and_then(|id| self.profile(id))
+            .or_else(|| self.profile(SHELL))
             .unwrap_or_else(Profile::shell)
     }
 
     /// Profile `id` as configured now, or the default profile if it's gone
     /// (spec 0003: a missing profile opens `default_profile`).
     pub fn profile_or_default(&self, id: &str) -> Profile {
-        self.profiles
-            .iter()
-            .find(|profile| profile.id == id)
-            .cloned()
-            .unwrap_or_else(|| self.default_profile())
+        self.profile(id).unwrap_or_else(|| self.default_profile())
     }
 }
 
+/// The ID of the profile that is always there: the user's login shell,
+/// unless a configured profile takes the ID (spec 0005).
+pub const SHELL: &str = "shell";
+
 impl Profile {
-    /// The only profile of a config that configures none.
+    /// The implicit `shell` profile: the user's login shell.
     pub fn shell() -> Self {
         Self {
-            id: "shell".into(),
+            id: SHELL.into(),
             name: None,
             theme: None,
             kind: ProfileKind::Local(LocalProfile::default()),
@@ -288,8 +311,8 @@ pub fn parse(text: &str) -> Loaded {
     }
 }
 
-/// Checks what only the whole config can: that `default_profile` exists,
-/// counting the implicit `shell` of a config without profiles.
+/// Checks what only the whole config can: that `default_profile` names a
+/// profile, the implicit `shell` included.
 fn finish(config: Config, mut notices: Vec<String>) -> Loaded {
     if let Some(id) = &config.default_profile
         && *id != config.default_profile().id
@@ -1578,7 +1601,7 @@ pub(crate) mod tests {
 
     /// The example of spec 0005 §Model, as written there.
     const SPEC_EXAMPLE: &str = r##"
-default_profile: shell              # missing → first profile in file order
+default_profile: shell              # missing → shell, the login shell
 
 profiles:                           # map key = stable profile ID
   shell:
@@ -1756,7 +1779,7 @@ theme:
     }
 
     #[test]
-    fn new_tabs_open_default_profile_else_the_first_profile_in_file_order() {
+    fn new_tabs_open_default_profile_else_the_implicit_shell() {
         let profiles = concat!(
             "profiles:\n",
             "  zeta:\n",
@@ -1767,13 +1790,14 @@ theme:
         let named = parse(&format!("default_profile: alpha\n{profiles}"));
         assert_eq!(named.config.default_profile().id, "alpha");
         let unnamed = parse(profiles);
-        assert_eq!(unnamed.config.default_profile().id, "zeta");
+        assert_eq!(unnamed.config.default_profile(), Profile::shell());
         assert!(named.notices.is_empty(), "{:?}", named.notices);
         assert!(unnamed.notices.is_empty(), "{:?}", unnamed.notices);
     }
 
+    /// Spec 0005, flow 1.
     #[test]
-    fn an_unknown_default_profile_opens_the_first_profile_with_a_notice() {
+    fn an_unknown_default_profile_opens_the_shell_with_a_notice() {
         let loaded = parse(concat!(
             "default_profile: nope\n",
             "profiles:\n",
@@ -1782,19 +1806,116 @@ theme:
             "  alpha:\n",
             "    type: local\n",
         ));
-        assert_eq!(loaded.config.default_profile().id, "zeta");
+        assert_eq!(loaded.config.default_profile(), Profile::shell());
         assert_eq!(loaded.notices.len(), 1, "{:?}", loaded.notices);
         assert!(loaded.notices[0].contains("nope"), "{}", loaded.notices[0]);
     }
 
-    /// With no profiles configured, `shell` is the implicit login-shell
-    /// profile (spec 0005 §Model), so naming it is no mistake. The template
-    /// suggests exactly this line.
+    /// `shell` is always a profile (spec 0005 §Model), so naming it is no
+    /// mistake, with or without other profiles. The template suggests
+    /// exactly this line.
     #[test]
     fn default_profile_shell_names_the_implicit_profile_without_a_notice() {
-        let loaded = parse("default_profile: shell\n");
-        assert_eq!(loaded.config.default_profile().id, "shell");
-        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        let htop = "profiles:\n  htop:\n    type: local\n    command: [htop]\n";
+        for profiles in ["", htop] {
+            let Loaded { config, notices } = parse(&format!("default_profile: shell\n{profiles}"));
+            assert_eq!(config.default_profile(), Profile::shell(), "{profiles:?}");
+            assert!(notices.is_empty(), "{profiles:?}: {notices:?}");
+        }
+    }
+
+    /// SSH hosts don't take over new tabs (spec 0005 §Model): those open
+    /// the login shell unless `default_profile` names another profile.
+    #[test]
+    fn with_only_ssh_profiles_new_tabs_still_open_the_login_shell() {
+        let Loaded { config, notices } = parse(concat!(
+            "profiles:\n",
+            "  prod:\n",
+            "    type: ssh\n",
+            "    host: prod.example.com\n",
+            "  db:\n",
+            "    type: ssh\n",
+            "    host: db.example.com\n",
+        ));
+        let tab = config.default_profile();
+        assert_eq!(tab, Profile::shell());
+        assert_eq!(Command::of_profile(&tab), Command::default_shell());
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// What the palette lists (spec 0005 §Model).
+    #[test]
+    fn all_profiles_are_the_implicit_shell_then_the_configured_ones_in_file_order() {
+        assert_eq!(parse("").config.all_profiles(), [Profile::shell()]);
+        let Loaded { config, notices } = parse(concat!(
+            "profiles:\n",
+            "  zeta:\n",
+            "    type: local\n",
+            "  prod:\n",
+            "    type: ssh\n",
+            "    host: prod.example.com\n",
+            "  alpha:\n",
+            "    type: local\n",
+        ));
+        let all = config.all_profiles();
+        let ids: Vec<_> = all.iter().map(|profile| profile.id.as_str()).collect();
+        assert_eq!(ids, ["shell", "zeta", "prod", "alpha"]);
+        assert_eq!(all[0], Profile::shell());
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// A configured `shell` takes the login shell's place for new tabs,
+    /// and the palette lists it where the file has it.
+    #[test]
+    fn a_configured_shell_replaces_the_implicit_one_at_its_place_in_file_order() {
+        let Loaded { config, notices } = parse(concat!(
+            "profiles:\n",
+            "  zeta:\n",
+            "    type: local\n",
+            "  shell:\n",
+            "    type: local\n",
+            "    command: [fish]\n",
+            "  alpha:\n",
+            "    type: local\n",
+        ));
+        let fish = Profile {
+            kind: ProfileKind::Local(LocalProfile {
+                command: Some(vec!["fish".into()]),
+                ..LocalProfile::default()
+            }),
+            ..Profile::shell()
+        };
+        let all = config.all_profiles();
+        let ids: Vec<_> = all.iter().map(|profile| profile.id.as_str()).collect();
+        assert_eq!(ids, ["zeta", "shell", "alpha"]);
+        assert_eq!(all[1], fish);
+        assert_eq!(config.default_profile(), fish);
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// `shell` is a profile whether it's configured or not; no other ID is.
+    #[test]
+    fn profile_shell_is_the_configured_shell_else_the_login_shell() {
+        let htop = "  htop:\n    type: local\n    command: [htop]\n";
+        let implicit = parse(&format!("profiles:\n{htop}")).config;
+        assert_eq!(implicit.profile("shell"), Some(Profile::shell()));
+        assert_eq!(implicit.profile("nope"), None);
+        let fish = "  shell:\n    type: local\n    command: [fish]\n";
+        let configured = parse(&format!("profiles:\n{htop}{fish}")).config;
+        let shell = configured.profile("shell").expect("the configured shell");
+        assert_eq!(Command::of_profile(&shell).program, "fish");
+    }
+
+    /// A restored tab whose profile is gone opens `default_profile`, else
+    /// the shell (spec 0003). A `shell` tab's profile is never gone.
+    #[test]
+    fn a_profile_thats_gone_opens_default_profile_else_the_shell() {
+        let htop = "profiles:\n  htop:\n    type: local\n    command: [htop]\n";
+        let named = parse(&format!("default_profile: htop\n{htop}")).config;
+        assert_eq!(named.profile_or_default("gone").id, "htop");
+        assert_eq!(named.profile_or_default("shell"), Profile::shell());
+        let unnamed = parse(htop).config;
+        assert_eq!(unnamed.profile_or_default("gone"), Profile::shell());
     }
 
     #[test]
@@ -1999,8 +2120,8 @@ theme:
         assert!(notices.is_empty(), "{notices:?}");
     }
 
-    /// "First profile" and the palette listing go by file order (spec
-    /// 0005), whatever the type.
+    /// The palette lists profiles in file order (spec 0005), whatever their
+    /// type.
     #[test]
     fn ssh_and_local_profiles_load_together_in_file_order() {
         let Loaded { config, notices } = parse(concat!(
@@ -2031,15 +2152,13 @@ theme:
         assert!(notices.is_empty(), "{notices:?}");
     }
 
-    /// New tabs may open an SSH profile; at boot it waits for Enter (spec
-    /// 0006, flow 6).
+    /// New tabs open an SSH profile only when `default_profile` names it;
+    /// at boot it then waits for Enter (spec 0006, flow 6).
     #[test]
     fn default_profile_can_name_an_ssh_profile() {
         let Loaded { config, notices } = parse(concat!(
             "default_profile: prod\n",
             "profiles:\n",
-            "  shell:\n",
-            "    type: local\n",
             "  prod:\n",
             "    type: ssh\n",
             "    host: prod.example.com\n",

@@ -521,14 +521,10 @@ impl Workspace {
         );
     }
 
-    /// The profiles the palette offers: the configured ones, or the
-    /// implicit `shell` when there are none (spec 0005).
+    /// The profiles the palette offers: `shell` and the configured ones
+    /// (spec 0005).
     fn profiles(&self) -> Vec<Profile> {
-        if self.config.profiles.is_empty() {
-            vec![Profile::shell()]
-        } else {
-            self.config.profiles.clone()
-        }
+        self.config.all_profiles()
     }
 
     /// Opens the theme picker: moving through it previews each theme, Enter

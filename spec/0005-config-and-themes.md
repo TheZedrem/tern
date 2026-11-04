@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-005, T-004, T-002, T-011]
+tasks: [T-005, T-004, T-002, T-011, T-019]
 related: [spec 0001, spec 0003, spec 0004]
 ---
 
@@ -49,7 +49,7 @@ switching themes previews live.
 Every key is optional:
 
 ```yaml
-default_profile: shell              # missing → first profile in file order
+default_profile: shell              # missing → shell, the login shell
 
 profiles:                           # map key = stable profile ID
   shell:
@@ -89,9 +89,11 @@ theme:
 
 - **Profiles** are a map, so IDs are unique by construction and stay stable
   for `default_profile` and session restore. Parsing keeps file order,
-  because "first profile" and the palette listing depend on it. With no
-  profiles configured, there is one implicit `shell` profile (the login
-  shell). A profile's `theme` applies to that profile's panes only.
+  because the palette listing depends on it. A `shell` profile, the login
+  shell, is always there without being configured, and it is what new
+  tabs open unless `default_profile` names another; a configured profile
+  with the ID `shell` replaces it. A profile's `theme` applies to that
+  profile's panes only.
 - **Typed per `type`** **[load-bearing]**: serde parses each profile as one
   variant (internally tagged on `type`). A bad profile is skipped with a
   notice naming its ID; the other profiles still load. Phase 1 launches only
@@ -142,7 +144,7 @@ silently run the login shell.
 
 1. **Boot:** read and parse, collecting notices. A missing file means
    defaults and no notice. An unknown `default_profile` or theme name falls
-   back (first profile / `dark`) with a notice.
+   back (`shell` / `dark`) with a notice.
 2. **Open a profile** (palette entry, keybinding, or a new tab, which uses
    `default_profile`): spawn the profile's command in its cwd with its env
    merged over the inherited environment. A missing cwd falls back to home.

@@ -3,11 +3,12 @@
 # save, without a restart. A mistake never stops zed-term from starting:
 # the broken part falls back to its default and a notice says why.
 
-# The profile new tabs open. Missing: the first profile below.
+# The profile new tabs open. Missing: shell, your login shell.
 # default_profile: shell
 
-# Profiles: what a pane runs. With none here, there is one `shell` profile,
-# your login shell. The key is the profile's ID.
+# Profiles: what a pane runs. The key is the profile's ID. A `shell`
+# profile, your login shell, is always there; define one called `shell`
+# here to change it.
 # profiles:
 #   shell:
 #     type: local
