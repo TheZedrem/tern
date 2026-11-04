@@ -34,7 +34,7 @@ switching themes previews live.
 
 **Out of scope:**
 
-- `type: ssh` profiles and the host manager: Phase 2 (the schema below shows them so the shape is fixed now)
+- What `type: ssh` profiles do, and the host picker: spec 0006 (the schema below shows them so the shape is fixed here)
 - Agent profiles: Phase 3
 - Per-profile fonts, graphical settings page: *Later*
 
@@ -60,12 +60,13 @@ profiles:                           # map key = stable profile ID
     type: local
     command: [htop]                 # program + args
     cwd: ~/projects                 # optional, default: home
-  my-server:                        # Phase 2: parsed, skipped with a notice
+  my-server:                        # spec 0006; skipped with a notice until T-012
     type: ssh
     host: myserver.example.com      # or a Host alias from ~/.ssh/config
     user: myuser                    # optional
     port: 22                        # optional
     identity_file: ~/.ssh/id_ed25519 # optional; omit to let ssh choose
+    group: Production               # optional; host picker group, default "Hosts"
     theme: midnight
 
 font: { family: null, size: 13, line_height: 1.2 }   # null → the bundled font

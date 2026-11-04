@@ -55,6 +55,7 @@ focused inputs. The terminal's own context binds nothing that a shell needs.
 | Action | Keys |
 |---|---|
 | Command palette | `Ctrl+Shift+P` |
+| Connect to host (spec 0006) | `Ctrl+Shift+H` |
 | New tab / close pane | `Ctrl+Shift+T` / `Ctrl+Shift+W` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Go to tab 1–9 | `Ctrl+Shift+1` … `Ctrl+Shift+9` |

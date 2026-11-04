@@ -81,7 +81,8 @@ title, else the profile's display name.
 6. **Restore:** the active tab's leaves spawn at boot. Other tabs render as
    tab-bar entries only, and their leaves spawn on first activation. A
    missing cwd falls back to the home directory. A leaf whose profile no
-   longer exists opens `default_profile` with a notice.
+   longer exists opens `default_profile` with a notice. SSH leaves restore
+   disconnected and connect only on Enter (spec 0006).
 7. **Empty, corrupt or unknown-version `session.json`:** boot one fresh tab.
    Quitting by closing the last tab saves an empty session, which is the
    normal case and leaves no `.bad` file. A corrupt or unknown-version file is renamed

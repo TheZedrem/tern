@@ -19,12 +19,13 @@ local, single-user app: no accounts, no backend, no telemetry.
 | Phase | Scope | Specs |
 |---|---|---|
 | 1 — Core terminal | Local shell and local profiles, tabs + splits, shortcuts, clipboard, scrollback, search, command palette, YAML config + themes, session restore | 0001–0005 |
-| 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, SFTP panel, secrets in the OS keychain | not yet written |
+| 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, SFTP panel, secrets in the OS keychain | 0006 (SFTP: T-016) |
 | 3 — AI agents | Agent profiles (command, cwd, optional SSH host), one-click launch into tab/pane, running-agents overview, "waiting for input" notification | not yet written |
 | 4 — ACP | Structured agent integration via the Agent Client Protocol (diffs, plans, tool-call approvals) — keep the architecture open for it, build nothing yet | — |
 
-Only the current phase gets specs and tasks. Later phases live here as one
-row until they start.
+Only phases that have started get specs and tasks; later phases stay one
+row here. Phase 2 started before Phase 1 finished (owner's call,
+2026-11-04), so its tasks wait for the Phase 1 tasks they build on.
 
 ## Platforms
 
@@ -57,9 +58,10 @@ machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
 | Terminal rendering | Our own GPUI element: each visible row shaped once as styled runs at the cell width; cell backgrounds, cursor and selection as quads | How Zed's terminal works. Zed's terminal code is GPL, so it is a design reference only; `gpui-terminal` (MIT/Apache) may be reused with attribution |
 | Fonts | Lilex (Zed's monospace, OFL) embedded and registered at boot as the default; `font.family` names any installed font | GPUI resolves exact family names only, and falls back per glyph to installed fonts for CJK and emoji |
 | Config format | YAML, parsed with `serde-saphyr` | Owner's choice. Pure Rust, never panics while parsing, maintained (`serde_yaml` is archived) |
-| SSH (Phase 2) | System `ssh` binary spawned in a PTY | Owner's choice. Uses the user's `~/.ssh/config`, ProxyJump, agent, FIDO keys and known_hosts, with no crypto code of our own |
+| SSH (Phase 2) | System `ssh` binary spawned in a PTY; its prompts answered in the app through `SSH_ASKPASS` (spec 0006) | Owner's choice. Uses the user's `~/.ssh/config`, ProxyJump, agent, FIDO keys and known_hosts, with no crypto code of our own |
 | SFTP (Phase 2) | `ssh -s <host> sftp`, with the `russh-sftp` client speaking SFTP over its stdio | Same ssh config, agent, keys and known_hosts as terminal sessions; no SSH code of our own |
-| Secrets (Phase 2) | OS keychain via the `keyring` crate | Never in plain files |
+| Secrets (Phase 2) | OS keychain via `keyring` 4: Secret Service over pure-Rust D-Bus on Linux, Credential Manager on Windows | Never in plain files |
+| Askpass channel (Phase 2) | `interprocess` local socket (Unix socket or named pipe) with a per-connection token from `getrandom` | No TCP port, one API on both platforms |
 | Package manager | cargo | |
 | Hosting / CI | GitHub + GitHub Actions | Hosted Linux and Windows runners. TTFP isn't gated in CI (shared runners are too noisy); the bench runs locally |
 
@@ -138,7 +140,7 @@ All local, all plain files the user can read — nothing leaves the machine.
 | Config | `<config_dir>/zed-term/config.yaml` | Settings, profiles, keybindings, inline themes | Until the user edits/deletes it |
 | User themes | `<config_dir>/zed-term/themes/*.yaml` | Color schemes | Same |
 | Session state | `<data_local_dir>/zed-term/session.json` | Window size, tab/split layout, each pane's profile, cwd and title | Overwritten on every save; never scrollback |
-| Secrets (Phase 2) | OS keychain | SSH passwords / key passphrases | Until the host profile is deleted |
+| Secrets (Phase 2) | OS keychain | SSH passwords / key passphrases the user chose to remember | Until the user forgets or replaces it (spec 0006) |
 
 `<config_dir>`/`<data_local_dir>` come from the `dirs` crate (XDG on
 Linux; `%APPDATA%` and `%LOCALAPPDATA%` on Windows, so dotfile-style config
