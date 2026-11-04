@@ -58,6 +58,11 @@ pub fn init(cx: &mut App) -> Result<(), String> {
         .map_err(|e| format!("{e:#}"))
 }
 
+/// The font sizes a pane takes, in pixels: a `font.size` of 0 would
+/// otherwise size the grid at billions of cells and never reach the first
+/// frame (spec 0005).
+pub const FONT_SIZES: std::ops::RangeInclusive<f32> = 4.0..=200.0;
+
 /// Font family, size and line height of a pane's grid.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontSettings {
@@ -68,9 +73,8 @@ pub struct FontSettings {
 }
 
 impl FontSettings {
-    /// Out-of-range sizes are clamped: a `font.size` of 0 would otherwise
-    /// size the grid at billions of cells and never reach the first frame.
-    /// YAML's `.nan`, which `clamp` lets through, means the default.
+    /// Out-of-range sizes are clamped to [`FONT_SIZES`]. YAML's `.nan`,
+    /// which `clamp` lets through, means the default.
     pub fn from_config(font: &config::Font) -> Self {
         let defaults = config::Font::default();
         let number = |value: f64, default: f64| if value.is_nan() { default } else { value };
@@ -80,8 +84,17 @@ impl FontSettings {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_FONT_FAMILY.to_owned())
                 .into(),
-            size: px((number(font.size, defaults.size) as f32).clamp(4.0, 200.0)),
+            size: px(clamp_size(number(font.size, defaults.size) as f32)),
             line_height: (number(font.line_height, defaults.line_height) as f32).clamp(0.5, 4.0),
+        }
+    }
+
+    /// This font, `delta` pixels bigger (smaller when negative), within
+    /// [`FONT_SIZES`].
+    pub fn zoomed(&self, delta: f32) -> Self {
+        Self {
+            size: px(clamp_size(f32::from(self.size) + delta)),
+            ..self.clone()
         }
     }
 
@@ -135,6 +148,10 @@ impl FontSettings {
             .unwrap_or(self.size * 0.6);
         size(width, (self.size * self.line_height).round())
     }
+}
+
+fn clamp_size(size: f32) -> f32 {
+    size.clamp(*FONT_SIZES.start(), *FONT_SIZES.end())
 }
 
 /// What a pane takes from the config. A reload replaces it while the pane
@@ -623,6 +640,35 @@ mod tests {
                 "size {size}, line height {line_height}"
             );
         }
+    }
+
+    /// The font-size commands (spec 0004) step the font; nothing else of
+    /// it changes.
+    #[test]
+    fn zooming_changes_only_the_size_by_the_step() {
+        let font = FontSettings::from_config(&config::Font {
+            family: Some("JetBrains Mono".into()),
+            size: 13.0,
+            line_height: 1.4,
+        });
+        let bigger = FontSettings {
+            size: px(15.0),
+            ..font.clone()
+        };
+        assert_eq!(font.zoomed(2.0), bigger);
+        let smaller = FontSettings {
+            size: px(12.0),
+            ..font.clone()
+        };
+        assert_eq!(font.zoomed(-1.0), smaller);
+    }
+
+    /// Spec 0005 keeps font sizes within 4–200; zooming can't leave that.
+    #[test]
+    fn zooming_stops_at_the_font_size_limits() {
+        let font = FontSettings::from_config(&config::Font::default());
+        assert_eq!(font.zoomed(-1000.0).size, px(4.0));
+        assert_eq!(font.zoomed(1000.0).size, px(200.0));
     }
 
     /// `.nan` is a YAML float, and `clamp` would pass NaN through.

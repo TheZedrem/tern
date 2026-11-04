@@ -272,6 +272,35 @@ impl<'a> Library<'a> {
     }
 }
 
+/// Every theme name the theme picker offers: the built-ins and `system`,
+/// then the inline themes in file order, then the theme files in `dir`,
+/// each name once (spec 0005, flow 4).
+pub fn list(custom: &[(String, ThemeSource)], dir: Option<&Path>) -> Vec<String> {
+    let mut files: Vec<String> = dir
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+        .filter_map(|path| path.file_stem()?.to_str().map(str::to_owned))
+        .filter(|name| is_file_name(name))
+        .collect();
+    files.sort();
+    let mut names: Vec<String> = Vec::new();
+    let all = ["dark", "light", "system"]
+        .map(String::from)
+        .into_iter()
+        .chain(custom.iter().map(|(name, _)| name.clone()))
+        .chain(files);
+    for name in all {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
 /// Whether `name` can be a theme file's name: no path separators or dots
 /// at the start, so a theme name never reaches outside `themes/`.
 fn is_file_name(name: &str) -> bool {
@@ -645,5 +674,75 @@ mod tests {
             assert_eq!(effective(name, false), name);
             assert_eq!(effective(name, true), name);
         }
+    }
+
+    /// A theme file `themes/<name>` in `dir`.
+    fn write_theme(dir: &Path, name: &str) {
+        fs::write(dir.join(name), "base: dark\n").expect("write a theme file");
+    }
+
+    /// Spec 0005, flow 4.
+    #[test]
+    fn the_picker_lists_built_ins_then_inline_themes_then_theme_files() {
+        let themes = TempDir::new("theme-list");
+        for file in ["nord.yaml", "gruvbox.yaml", "solarized.yaml", "ayu.yaml"] {
+            write_theme(themes.path(), file);
+        }
+        // In file order, which isn't sorted.
+        let custom = [
+            with_background("zeta", None, 0x000001),
+            with_background("alpha", None, 0x000002),
+        ];
+        let expected = [
+            "dark",
+            "light",
+            "system",
+            "zeta",
+            "alpha",
+            "ayu",
+            "gruvbox",
+            "nord",
+            "solarized",
+        ];
+        assert_eq!(list(&custom, Some(themes.path())), expected);
+    }
+
+    /// An inline `dark` adjusting the built-in, or a file and an inline
+    /// theme of the same name: offered once, where the name first appears.
+    #[test]
+    fn each_theme_name_is_listed_once() {
+        let themes = TempDir::new("theme-list-once");
+        for file in ["midnight.yaml", "light.yaml"] {
+            write_theme(themes.path(), file);
+        }
+        let custom = [
+            with_background("midnight", None, 0x000001),
+            with_background("dark", None, 0x000002),
+        ];
+        let expected = ["dark", "light", "system", "midnight"];
+        assert_eq!(list(&custom, Some(themes.path())), expected);
+    }
+
+    /// Only files the lookup can load are offered.
+    #[test]
+    fn files_that_arent_loadable_themes_are_not_listed() {
+        let themes = TempDir::new("theme-list-other");
+        // A readme, Emacs's lock file of a theme being edited, and a name
+        // the lookup never reads.
+        for file in ["nord.yaml", "README.md", ".#nord.yaml", "my theme.yaml"] {
+            write_theme(themes.path(), file);
+        }
+        let expected = ["dark", "light", "system", "nord"];
+        assert_eq!(list(&[], Some(themes.path())), expected);
+    }
+
+    /// On a fresh system there is no themes directory.
+    #[test]
+    fn without_a_themes_dir_the_picker_lists_the_built_ins_and_inline_themes() {
+        let root = TempDir::new("theme-list-no-dir");
+        let custom = [with_background("midnight", None, 0x000001)];
+        let expected = ["dark", "light", "system", "midnight"];
+        assert_eq!(list(&custom, Some(&root.path().join("themes"))), expected);
+        assert_eq!(list(&custom, None), expected);
     }
 }

@@ -1,5 +1,5 @@
 ---
-status: next
+status: now
 blocked-by: []
 ---
 # T-012: SSH profiles and connections

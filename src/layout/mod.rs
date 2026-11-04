@@ -6,19 +6,27 @@
 pub mod tabs;
 pub mod tree;
 
+use crate::commands::palette::{Entry, Palette, PaletteEvent};
+use crate::commands::{
+    self, ClosePane, CloseTab, DecreaseFontSize, FocusDown, FocusLeft, FocusRight, FocusUp,
+    GoToTab, IncreaseFontSize, NewTab, NextTab, OpenConfig, OpenPalette, PreviousTab, RenameTab,
+    ResetFontSize, SelectTheme, SplitDown, SplitRight, ZoomPane,
+};
 use crate::config::{self, Config, Profile};
 use crate::terminal::pty::{self, Command, GridSize};
-use crate::terminal::{FontSettings, PaneEvent, PaneProfile, PaneSettings, TerminalPane};
+use crate::terminal::{
+    FONT_SIZES, FontSettings, PaneEvent, PaneProfile, PaneSettings, TerminalPane,
+};
 use crate::theme::{self, Theme};
 use crate::timing::{Mark, Timing};
 use futures::StreamExt;
 use futures::channel::mpsc::unbounded;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, Anchor, AnyElement, App, AppContext, ClickEvent, Context, Decorations, Div,
-    DragMoveEvent, ElementId, Entity, InteractiveElement, IntoElement, KeyBinding, MouseButton,
-    ParentElement, Pixels, Render, SharedString, Size, StatefulInteractiveElement, Styled,
-    Subscription, Window, WindowAppearance, actions, canvas, div, px,
+    Anchor, AnyElement, App, AppContext, ClickEvent, Context, Decorations, Div, DragMoveEvent,
+    ElementId, Entity, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement,
+    Pixels, Render, SharedString, Size, StatefulInteractiveElement, Styled, Subscription, Window,
+    WindowAppearance, actions, canvas, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -36,10 +44,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use tabs::{Closed, TabId, Tabs};
-use tree::{Axis, Direction, LeafId, Node};
+use tree::{Axis, Direction, LeafId, Node, Rect};
 
-/// Key context of the workspace: tab and split shortcuts.
-const CONTEXT: &str = "Workspace";
+/// Key context of the workspace, where the commands are bound.
+const CONTEXT: &str = commands::keymap::CONTEXT;
 /// Key context of the tab-rename field.
 const RENAME_CONTEXT: &str = "TabRename";
 /// Thickness of a split divider, in logical pixels.
@@ -53,91 +61,16 @@ const RELOAD_DEBOUNCE: Duration = Duration::from_millis(200);
 /// what waits for it anyway.
 const SILENT_BOOT_WAIT: Duration = Duration::from_secs(1);
 
-actions!(
-    zed_term,
-    [
-        NewTab,
-        ClosePane,
-        NextTab,
-        PreviousTab,
-        SplitRight,
-        SplitDown,
-        FocusLeft,
-        FocusRight,
-        FocusUp,
-        FocusDown,
-        ZoomPane,
-        CancelRename,
-        /// Opens `config.yaml` in the OS's editor, creating it first if it's
-        /// missing (spec 0005). The palette lists it (T-004).
-        OpenConfig,
-    ]
-);
+actions!(zed_term, [CancelRename]);
 
-/// Activates tab N, counted from 0.
-#[derive(Clone, PartialEq, Debug, Action)]
-#[action(namespace = zed_term, no_json)]
-pub struct GoToTab(pub usize);
-
-/// An app shortcut: `Ctrl+Shift` on Linux and Windows, `Cmd` on macOS
-/// (spec 0004).
-#[cfg(not(target_os = "macos"))]
-macro_rules! shortcut {
-    ($key:literal) => {
-        concat!("ctrl-shift-", $key)
-    };
-}
-#[cfg(target_os = "macos")]
-macro_rules! shortcut {
-    ($key:literal) => {
-        concat!("cmd-", $key)
-    };
-}
-
-/// A go-to-tab digit: `Alt` on Linux and Windows, `Cmd` on macOS. Not
-/// `Ctrl+Shift`: GPUI on Linux reports Shift plus a digit as the symbol the
-/// layout types there (`Ctrl+Shift+2` arrives as `ctrl-"` on a German
-/// layout), so a `ctrl-shift-2` binding never matches (OQ-014).
-#[cfg(not(target_os = "macos"))]
-macro_rules! tab_key {
-    ($digit:literal) => {
-        concat!("alt-", $digit)
-    };
-}
-#[cfg(target_os = "macos")]
-macro_rules! tab_key {
-    ($digit:literal) => {
-        concat!("cmd-", $digit)
-    };
-}
-
-/// Binds spec 0004's default keys for the tab and split actions. T-004
-/// adds config overrides on top.
+/// Binds the keys of the workspace's own widgets. The commands' keys are
+/// [`commands::keymap`]'s.
 pub fn init(cx: &mut App) {
-    let workspace = Some(CONTEXT);
-    cx.bind_keys([
-        KeyBinding::new(shortcut!("t"), NewTab, workspace),
-        KeyBinding::new(shortcut!("w"), ClosePane, workspace),
-        KeyBinding::new("ctrl-tab", NextTab, workspace),
-        KeyBinding::new("ctrl-shift-tab", PreviousTab, workspace),
-        KeyBinding::new(shortcut!("d"), SplitRight, workspace),
-        KeyBinding::new(shortcut!("e"), SplitDown, workspace),
-        KeyBinding::new("alt-left", FocusLeft, workspace),
-        KeyBinding::new("alt-right", FocusRight, workspace),
-        KeyBinding::new("alt-up", FocusUp, workspace),
-        KeyBinding::new("alt-down", FocusDown, workspace),
-        KeyBinding::new(shortcut!("z"), ZoomPane, workspace),
-        KeyBinding::new(tab_key!("1"), GoToTab(0), workspace),
-        KeyBinding::new(tab_key!("2"), GoToTab(1), workspace),
-        KeyBinding::new(tab_key!("3"), GoToTab(2), workspace),
-        KeyBinding::new(tab_key!("4"), GoToTab(3), workspace),
-        KeyBinding::new(tab_key!("5"), GoToTab(4), workspace),
-        KeyBinding::new(tab_key!("6"), GoToTab(5), workspace),
-        KeyBinding::new(tab_key!("7"), GoToTab(6), workspace),
-        KeyBinding::new(tab_key!("8"), GoToTab(7), workspace),
-        KeyBinding::new(tab_key!("9"), GoToTab(8), workspace),
-        KeyBinding::new("escape", CancelRename, Some(RENAME_CONTEXT)),
-    ]);
+    cx.bind_keys([KeyBinding::new(
+        "escape",
+        CancelRename,
+        Some(RENAME_CONTEXT),
+    )]);
 }
 
 /// Dragging a tab to a new place in the bar.
@@ -195,15 +128,29 @@ pub struct BootPane {
     pub theme: Theme,
 }
 
+/// The palette while it's open.
+struct OpenPaletteView {
+    view: Entity<Palette>,
+    _events: Subscription,
+    /// The default theme as saved, while the theme picker previews others.
+    saved_theme: Option<Theme>,
+}
+
 pub struct Workspace {
     tabs: Tabs,
     panes: HashMap<LeafId, Entity<TerminalPane>>,
     pane_subscriptions: HashMap<LeafId, Subscription>,
     config: Config,
-    /// The font of every pane, its family checked (spec 0005).
+    /// The configured font, its family checked (spec 0005).
+    configured_font: FontSettings,
+    /// Pixels the font-size commands added to the configured size. Not
+    /// saved: a restart or `font.reset` goes back to the config.
+    zoom: f32,
+    /// What every pane draws with: the configured font, zoomed.
     font: FontSettings,
     /// `theme.default`, resolved.
     theme: Theme,
+    palette: Option<OpenPaletteView>,
     /// The themes profiles name, resolved so far, by the name as written.
     themes: HashMap<String, Theme>,
     /// The OS is in light mode, which `system` follows. Dark until the
@@ -253,8 +200,11 @@ impl Workspace {
             panes: HashMap::new(),
             pane_subscriptions: HashMap::new(),
             config,
+            configured_font: font.clone(),
+            zoom: 0.0,
             font,
             theme,
+            palette: None,
             themes,
             light: false,
             watcher: None,
@@ -503,10 +453,29 @@ impl Workspace {
         }
         let (font, font_notice) = FontSettings::checked(&config.font, cx);
         notices.extend(font_notice);
+        notices.extend(commands::keymap::bind(&config.keybindings, cx));
         self.config = config;
-        self.font = font;
-        self.theme = theme;
+        self.configured_font = font;
+        self.font = self.configured_font.zoomed(self.zoom);
         self.themes = themes;
+        // While the theme picker previews, the new theme waits for its Esc.
+        match self
+            .palette
+            .as_mut()
+            .and_then(|open| open.saved_theme.as_mut())
+        {
+            Some(saved) => *saved = theme,
+            None => self.theme = theme,
+        }
+        self.apply_settings(cx);
+        for notice in notices {
+            show_notice(notice, window, cx);
+        }
+    }
+
+    /// Hands the current font, themes and config to the widgets and every
+    /// pane.
+    fn apply_settings(&mut self, cx: &mut Context<Self>) {
         theme::apply_to_widgets(&self.theme, cx);
         for pane in self.panes.values() {
             let name = pane.read(cx).profile().theme.clone();
@@ -516,10 +485,204 @@ impl Workspace {
             let settings = self.pane_settings(theme);
             pane.update(cx, |pane, cx| pane.apply(settings, cx));
         }
-        for notice in notices {
-            show_notice(notice, window, cx);
-        }
         cx.notify();
+    }
+
+    /// Opens the command palette over the focused pane, or closes it if
+    /// it's open (spec 0004).
+    fn open_palette(&mut self, _: &OpenPalette, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            self.close_palette(false, window, cx);
+            return;
+        }
+        let commands = commands::COMMANDS.iter().filter_map(|command| {
+            Some(Entry::Command {
+                command,
+                title: command.title?,
+                enabled: self.can_run(command.id, window),
+            })
+        });
+        let profiles = self.profiles().into_iter().map(|profile| Entry::Profile {
+            title: format!("Open profile: {}", profile.display_name()),
+            id: profile.id,
+        });
+        let entries = commands.chain(profiles).collect();
+        self.show_palette(
+            entries,
+            "Run a command or open a profile",
+            None,
+            None,
+            window,
+            cx,
+        );
+    }
+
+    /// The profiles the palette offers: the configured ones, or the
+    /// implicit `shell` when there are none (spec 0005).
+    fn profiles(&self) -> Vec<Profile> {
+        if self.config.profiles.is_empty() {
+            vec![Profile::shell()]
+        } else {
+            self.config.profiles.clone()
+        }
+    }
+
+    /// Opens the theme picker: moving through it previews each theme, Enter
+    /// saves one as `theme.default`, Esc goes back (spec 0005, flow 4).
+    fn select_theme(&mut self, _: &SelectTheme, window: &mut Window, cx: &mut Context<Self>) {
+        let dir = config::themes_dir();
+        let names = theme::list(&self.config.theme.custom, dir.as_deref());
+        let current = self.config.theme.default.clone();
+        let highlight = names.iter().position(|name| *name == current);
+        let entries = names
+            .into_iter()
+            .map(|name| Entry::Theme {
+                current: name == current,
+                name,
+            })
+            .collect();
+        let saved = Some(self.theme);
+        self.show_palette(entries, "Select a theme", highlight, saved, window, cx);
+    }
+
+    /// Shows a palette, replacing one that's open: a command in the
+    /// palette can open the theme picker.
+    fn show_palette(
+        &mut self,
+        entries: Vec<Entry>,
+        placeholder: &'static str,
+        highlight: Option<usize>,
+        saved_theme: Option<Theme>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(saved) = self.palette.take().and_then(|open| open.saved_theme) {
+            self.theme = saved;
+            self.apply_settings(cx);
+        }
+        let view = cx.new(|cx| Palette::new(entries, placeholder, highlight, window, cx));
+        let events = cx.subscribe_in(&view, window, Self::palette_event);
+        self.palette = Some(OpenPaletteView {
+            view,
+            _events: events,
+            saved_theme,
+        });
+        cx.notify();
+    }
+
+    fn palette_event(
+        &mut self,
+        palette: &Entity<Palette>,
+        event: &PaletteEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .palette
+            .as_ref()
+            .is_none_or(|open| open.view != *palette)
+        {
+            return;
+        }
+        match event {
+            PaletteEvent::OpenProfile(id) => {
+                let profile = self.config.profile_or_default(id);
+                let leaf = self.tabs.new_tab();
+                self.spawn_pane(leaf, profile, None, window, cx);
+            }
+            PaletteEvent::PreviewTheme(name) => {
+                self.theme = self.theme_for(Some(name), window, cx);
+                self.apply_settings(cx);
+            }
+            PaletteEvent::ChooseTheme(name) => {
+                if let Some(open) = &mut self.palette {
+                    open.saved_theme = None;
+                }
+                self.save_theme(name.clone(), window, cx);
+            }
+            PaletteEvent::Closed { cancelled } => self.close_palette(*cancelled, window, cx),
+        }
+    }
+
+    /// Closes the palette and gives the focus back to the active pane.
+    /// Leaving the theme picker without choosing restores the saved theme.
+    fn close_palette(&mut self, cancelled: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(saved) = self.palette.take().and_then(|open| open.saved_theme)
+            && cancelled
+        {
+            self.theme = saved;
+            self.apply_settings(cx);
+        }
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    /// Writes `name` as `theme.default` off the UI thread. The watcher
+    /// then reloads the config, which applies it for good.
+    fn save_theme(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = config::default_path() else {
+            show_notice("This system has no config directory.".into(), window, cx);
+            return;
+        };
+        let saved = cx.background_spawn(async move { config::save_theme_default(&path, &name) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = saved.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                // Saving may have created the config directory.
+                if let Some(watcher) = &mut this.watcher {
+                    watcher.arm();
+                }
+                if let Err(error) = result {
+                    show_notice(format!("The theme wasn't saved: {error}"), window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Whether command `id` would do anything now; the palette dims those
+    /// that wouldn't (spec 0004, flow 3).
+    fn can_run(&self, id: &str, window: &Window) -> bool {
+        let tab = self.tabs.active();
+        let tabs = self.tabs.tabs().len();
+        let neighbor =
+            |direction| tab.zoomed.is_none() && tab.root.neighbor(tab.focused, direction).is_some();
+        let can_split = |axis| {
+            self.content_size.get().is_none_or(|size| {
+                let area = (f32::from(size.width), f32::from(size.height));
+                self.tabs
+                    .can_split(axis, area, self.pane_min(window), DIVIDER)
+            })
+        };
+        let size = f32::from(self.font.size);
+        match id {
+            "tab.next" | "tab.previous" => tabs > 1,
+            "pane.zoom" => tab.root.leaves().len() > 1,
+            "pane.focusLeft" => neighbor(Direction::Left),
+            "pane.focusRight" => neighbor(Direction::Right),
+            "pane.focusUp" => neighbor(Direction::Up),
+            "pane.focusDown" => neighbor(Direction::Down),
+            "pane.splitRight" => can_split(Axis::Row),
+            "pane.splitDown" => can_split(Axis::Column),
+            "font.increase" => size < *FONT_SIZES.end(),
+            "font.decrease" => size > *FONT_SIZES.start(),
+            "font.reset" => self.zoom != 0.0,
+            id => id
+                .strip_prefix("tab.goTo")
+                .and_then(|n| n.parse::<usize>().ok())
+                .is_none_or(|n| n <= tabs),
+        }
+    }
+
+    /// Grows or shrinks every pane's font by `step` pixels; `None` goes back
+    /// to the configured size (spec 0004). Not saved in the config.
+    fn zoom_font(&mut self, step: Option<f32>, cx: &mut Context<Self>) {
+        self.zoom = step.map_or(0.0, |step| self.zoom + step);
+        self.font = self.configured_font.zoomed(self.zoom);
+        // At the size limits the step didn't take effect; neither does it
+        // count.
+        self.zoom = f32::from(self.font.size) - f32::from(self.configured_font.size);
+        self.apply_settings(cx);
     }
 
     /// Opens `config.yaml` with the OS's default handler, first writing the
@@ -1082,6 +1245,51 @@ fn is_light(appearance: WindowAppearance) -> bool {
     )
 }
 
+/// The widest the palette gets, in logical pixels.
+const PALETTE_WIDTH: f32 = 560.0;
+
+impl Workspace {
+    /// The open palette, centered over the focused pane near its top (spec
+    /// 0004, flow 2). A click outside it leaves it, like Esc.
+    fn render_palette(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let open = self.palette.as_ref()?;
+        let size = self.content_size.get()?;
+        let tab = self.tabs.active();
+        let pane = match tab.zoomed {
+            Some(_) => Rect::UNIT,
+            None => tab
+                .root
+                .rects(Rect::UNIT)
+                .into_iter()
+                .find(|(leaf, _)| *leaf == tab.focused)
+                .map_or(Rect::UNIT, |(_, rect)| rect),
+        };
+        let (width, height) = (f32::from(size.width), f32::from(size.height));
+        let pane_width = pane.width * width;
+        let palette_width = PALETTE_WIDTH.min(pane_width - 16.0).max(240.0);
+        let left = (pane.x * width + (pane_width - palette_width) / 2.0).max(0.0);
+        let top = pane.y * height + (pane.height * height * 0.12).min(80.0);
+        let (border, background) = (cx.theme().border, cx.theme().popover);
+        Some(
+            div()
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(palette_width))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(border)
+                .bg(background)
+                .shadow_lg()
+                .overflow_hidden()
+                .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                    this.close_palette(true, window, cx);
+                }))
+                .child(open.view.clone()),
+        )
+    }
+}
+
 /// An invisible element covering its parent that records the parent's size
 /// at every layout.
 fn measure_size(size: Rc<Cell<Option<Size<Pixels>>>>) -> impl IntoElement {
@@ -1158,6 +1366,23 @@ impl Render for Workspace {
                 this.tabs.toggle_zoom();
                 cx.notify();
             }))
+            .on_action(cx.listener(Self::open_palette))
+            .on_action(cx.listener(Self::select_theme))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                this.close_tab(this.tabs.active_index(), window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &RenameTab, window, cx| {
+                this.start_rename(this.tabs.active_index(), window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &IncreaseFontSize, _, cx| {
+                this.zoom_font(Some(1.0), cx);
+            }))
+            .on_action(cx.listener(|this, _: &DecreaseFontSize, _, cx| {
+                this.zoom_font(Some(-1.0), cx);
+            }))
+            .on_action(cx.listener(|this, _: &ResetFontSize, _, cx| {
+                this.zoom_font(None, cx);
+            }))
             .child(self.render_tabs(window, cx))
             .child(
                 div()
@@ -1165,7 +1390,8 @@ impl Render for Workspace {
                     .min_h_0()
                     .relative()
                     .child(content)
-                    .child(measure_size(Rc::clone(&self.content_size))),
+                    .child(measure_size(Rc::clone(&self.content_size)))
+                    .children(self.render_palette(cx)),
             )
             .children(badge);
         // Shadow and resize edges when the compositor draws no frame;

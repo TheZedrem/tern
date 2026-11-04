@@ -3,6 +3,7 @@
 //! frame. Anything added here needs a TTFP measurement in its commit.
 
 mod bench;
+mod commands;
 mod config;
 mod layout;
 mod terminal;
@@ -93,6 +94,9 @@ fn main() {
         boot_notices.extend(font_notice);
         layout::init(cx);
         gpui_component::init(cx);
+        // Everything bound so far stays when a reload rebinds the commands.
+        commands::keymap::keep_library(cx);
+        boot_notices.extend(commands::keymap::bind(&config.keybindings, cx));
         theme::apply_to_widgets(&theme, cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {

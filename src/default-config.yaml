@@ -27,6 +27,14 @@ font:
 scrollback: 10000   # lines each pane keeps
 close_on_exit: clean  # always | clean (exit code 0) | never
 
+# Your own keys for commands, by ID: the command palette (Ctrl+Shift+P)
+# shows the ID of the command you highlight. A command you bind here loses
+# its default key, which then goes to the shell, and a default key you give
+# another command leaves its old command without one.
+# keybindings:
+#   "alt+shift+d": pane.splitRight
+#   "ctrl+shift+n": tab.new
+
 theme:
   default: dark     # dark | light | system | a theme name
   # Your own themes. A theme can also be a file, themes/<name>.yaml next to

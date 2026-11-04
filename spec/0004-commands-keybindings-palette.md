@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-004]
+tasks: [T-004, T-002, T-011]
 related: [spec 0002, spec 0003, spec 0005]
 ---
 
@@ -44,13 +44,19 @@ palette, and bindable in `config.yaml`.
 
 Commands are GPUI actions, one type each (`NewTab`, `SplitRight`,
 `Search`, `OpenConfig`, …), each with a stable ID (`tab.new`,
-`pane.splitRight`) used in config and shown in the palette. A typo in a
-default binding is a compile error. Config-provided bindings are parsed at
-runtime, and unknown IDs produce a notice. Bindings live in key contexts:
-`Workspace` for app actions, plus `Palette`, `Search` and `TextField` for
-focused inputs. The terminal's own context binds nothing that a shell needs.
+`pane.splitRight`) used in config and shown in the palette (under the
+list, for the highlighted command). A typo in a default binding is a
+compile error. Config-provided bindings are parsed at runtime, and unknown
+IDs produce a notice. A command bound in config loses its default keys,
+which go back to the shell; a key bound in config is taken from any command
+it was the default of, so the palette never shows a key that runs
+something else. Bindings live in key contexts: `Workspace` for app actions,
+plus `Palette`, `Search` and `TextField` for focused inputs. The terminal's
+own context binds nothing that a shell needs.
 
-**Default bindings (Linux/Windows; macOS swaps `Ctrl+Shift` → `Cmd`):**
+**Default bindings (Linux/Windows; macOS swaps `Ctrl+Shift` → `Cmd` and
+`Ctrl`/`Alt` + digit or `=`/`-` → `Cmd`, while `Ctrl+Tab` and `Alt+arrows`
+stay):**
 
 | Action | Keys |
 |---|---|
@@ -63,13 +69,16 @@ focused inputs. The terminal's own context binds nothing that a shell needs.
 | Focus pane | `Alt+←↑→↓` |
 | Zoom pane | `Ctrl+Shift+Z` |
 | Copy / paste / search | `Ctrl+Shift+C` / `Ctrl+Shift+V` / `Ctrl+Shift+F` |
-| Font size + / − / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` (OQ-015) |
+| Font size + / − / reset | `Ctrl+=` or `Ctrl++` / `Ctrl+-` / `Ctrl+0` (macOS: `Cmd`; OQ-015) |
 
 **[load-bearing]** Defaults never bind `Ctrl` or `Alt` plus a letter, digit
 or punctuation key without `Shift`, because those belong to the shell and
-to readline/emacs/vim (`Ctrl+R`, `Alt+B`, `Alt+3` digit argument, `Ctrl+-`
-undo). The user may override this in config. The one exception is
-go-to-tab on `Alt+1`–`9`, which takes readline's digit argument (OQ-014).
+to readline/emacs/vim (`Ctrl+R`, `Alt+B`, `Alt+3` digit argument). The
+user may override this in config. Two exceptions, decided because no
+`Shift` combination works on every layout: go-to-tab on `Alt+1`–`9`, which
+takes readline's digit argument (OQ-014), and the font size on `Ctrl+=` /
+`Ctrl+-` / `Ctrl+0`, which takes `Ctrl+-` from readline's undo; undo stays
+on `Ctrl+_` and `Ctrl+/` (OQ-015).
 
 Digit shortcuts must not depend on the keyboard layout. GPUI on Linux
 reports Shift plus a digit as the symbol the layout types there
@@ -86,8 +95,8 @@ typed, on layouts that type digits with Shift (French) too.
    rename) has focus, its `TextField` context binds plain
    `Ctrl+C`/`Ctrl+X`/`Ctrl+V` to that field's copy, cut and paste.
 2. **Palette:** opens centered over the focused pane. Typing fuzzy-filters
-   titles. `↑↓` moves the selection, `Enter` runs the command, `Esc` closes.
-   Focus returns to the pane it came from.
+   titles. `↑↓` moves the selection, `Enter` runs the command, `Esc` clears
+   the query and then closes. Focus returns to the pane it came from.
 3. **Disabled command** (e.g. "Zoom pane" with one pane): it is shown dimmed
    in the palette and is a no-op from its shortcut.
 4. **Invalid binding in config** (unknown command, unparsable key): ignore
@@ -116,7 +125,7 @@ put symbols on `Shift+digit`; check `Alt+1` on one. macOS: `Cmd` variants only.
 2. The palette shows the current binding next to each command, including user overrides.
 3. Rebinding `pane.splitRight` to `Alt+Shift+D` in config works after hot reload, and the old key goes to the shell.
 4. A binding for unknown command `tab.explode` produces a notice, and all other bindings still work.
-5. With default config, `Ctrl+R` in bash reaches readline (reverse search), `Alt+B` moves back a word, and `Ctrl+-` undoes the last edit.
+5. With default config, `Ctrl+R` in bash reaches readline (reverse search), `Alt+B` moves back a word, and `Ctrl+/` undoes the last edit.
 6. On a German keyboard layout, `Alt+2` goes to tab 2.
 7. Every Phase 1 action from specs 0002/0003/0005 appears in the palette.
 
