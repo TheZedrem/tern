@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-003, T-006]
 related: [spec 0001, spec 0002, spec 0005]
@@ -118,7 +118,7 @@ None beyond spec 0002.
 6. A truncated `session.json` boots one fresh tab and leaves `session.json.bad` behind. Closing the last tab and relaunching boots one fresh tab with no `.bad` file.
 7. TTFP with a restored 4-pane active tab stays under budget (spec 0001).
 8. `session.json` contains no scrollback, commands or environment variables.
-9. `printf '\e]0;a\tb\x07c\a'` shows `abc`-like plain text as the tab title: no control characters leak into the tab bar or the window title.
+9. A 5 000-character title set via OSC 2 shows in the tab bar capped at 200 characters, on one line, and the tab bar keeps its layout.
 
 ## Open questions
 

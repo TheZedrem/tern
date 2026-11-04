@@ -42,11 +42,11 @@ version measured ~1.07 s to first prompt on the reference machine, of which
 | Layer | Choice | Why |
 |---|---|---|
 | Language | Rust (edition 2024), single crate at the repo root | One language, one build, no bundler and no IPC |
-| Window + UI | `eframe` / `egui` (immediate mode) with the `wgpu` backend | Smallest API that gives a window, input, IME, clipboard and simple widgets on Linux and Windows; boots in tens of ms. `glow` (OpenGL) is the fallback backend if `wgpu` init costs > 50 ms of boot |
+| Window + UI | `eframe` / `egui` (immediate mode) with the `wgpu` backend | Smallest API that gives a window, input, IME, clipboard and simple widgets on Linux and Windows; boots in tens of ms. `wgpu` uses Vulkan/DX12 and falls back to its own OpenGL backend by default. If `wgpu` device creation costs > 50 ms of boot on the reference machine, T-010 switches eframe to its `glow` renderer: measured, not assumed |
 | Terminal state | `alacritty_terminal` | The VT parser, grid, scrollback, selection, search and OSC handling behind Alacritty and Zed; we don't write a VT parser |
 | PTY | `alacritty_terminal::tty` + its `event_loop` | Spawns the shell (Unix PTY, ConPTY on Windows) and reads/parses on its own thread; rendering reads the bounded grid, so a flood can't grow memory |
-| Terminal rendering | Our own `egui` widget: one text galley per visible row, monospace font, per-cell colors | Simplest thing that renders a grid; egui caches galleys by content. A glyph-atlas mesh is the fallback if a full-screen `cat` at 4K drops frames |
-| Fonts | One bundled monospace font (default); `font.family` from config resolved via `font-kit` (fontconfig / DirectWrite) | Boot never scans font directories; a system font costs one cached query, only when configured |
+| Terminal rendering | Our own `egui` widget: background rects, then runs of same-style cells painted at their grid positions; wide and fallback glyphs are placed per cell so the grid never drifts | Simplest thing that renders a grid; egui caches text layout by content. A glyph-atlas mesh is the fallback if a full-screen `cat` at 4K drops frames |
+| Fonts | egui's built-in Hack (monospace) with its Noto Emoji fallback, already in the binary; `font.family` from config resolved via `font-kit` (fontconfig / DirectWrite) | Boot never scans font directories; a system font costs one cached query, only when configured |
 | Config format | YAML, parsed with `serde-saphyr` | Owner's choice. Pure Rust, never panics while parsing, maintained (`serde_yaml` is archived) |
 | SSH (Phase 2) | System `ssh` binary spawned in a PTY | Owner's choice. Uses the user's `~/.ssh/config`, ProxyJump, agent, FIDO keys and known_hosts, with no crypto code of our own |
 | SFTP (Phase 2) | `ssh -s <host> sftp`, with the `russh-sftp` client speaking SFTP over its stdio | Same ssh config, agent, keys and known_hosts as terminal sessions; no SSH code of our own |
@@ -84,13 +84,20 @@ Load-bearing rules that code elsewhere depends on, plus the price we knowingly p
   tree, so tabs, splits and the palette are plain functions over the layout
   model. *Cost:* every frame re-lays-out the visible rows; cheap for a
   terminal, but keep per-frame work bounded by what is visible.
-- **One bundled font on the boot path.** The default font is embedded in
-  the binary, so the first frame needs no font lookup. *Cost:* binary size
-  (~100 KB per face), and a configured family adds one system query.
-- **Fixed window chrome.** The window is undecorated-agnostic: we take
-  whatever the platform gives (`eframe` default) and never load a desktop
-  theme engine; the title bar is the compositor's. *Cost:* no custom title
-  bar in Phase 1.
+- **Clipboard keys belong to us, not the toolkit [load-bearing].** eframe's
+  built-in clipboard shortcuts are switched off, because they turn plain
+  `Ctrl+C`/`Ctrl+X`/`Ctrl+V` into copy/cut/paste before the shell sees
+  them. Copy and paste are our own commands (spec 0004) and go through
+  egui's clipboard requests, so no extra crate is needed.
+  *Cost:* text fields (palette, search) get those keys wired by hand.
+- **The font on the boot path is already in memory.** The default is egui's
+  built-in Hack, so the first frame needs no font lookup. *Cost:* Hack is
+  the default look, and a configured family adds one system query.
+- **Window decorations come from `winit`.** Server-side where the
+  compositor offers them (KDE, COSMIC, Windows), `winit`'s own minimal
+  frame otherwise (GNOME). No desktop theme engine is ever loaded.
+  *Cost:* no custom title bar in Phase 1, and the frame won't match the
+  GTK theme on GNOME.
 - **A broken config never blocks boot.** Fall back to defaults and show the
   parse error with its line number. YAML's implicit typing (`no` → false) is
   contained by typed serde structs.

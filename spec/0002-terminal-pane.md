@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-010, T-002]
 related: [spec 0005, OQ-003 ✅, OQ-008 ✅]
@@ -34,7 +34,7 @@ works in a pane on Linux and Windows without glitches.
 - Multi-line paste warning, "process still running" close prompt: *Later*
 - SSH and agent specifics: Phase 2/3 specs
 - Persisting scrollback: never (`architecture.md` §Ground rules)
-- Ligatures, font fallback for CJK/emoji beyond what the bundled font covers: *Later* (OQ-011)
+- Ligatures, and glyphs beyond egui's built-in Hack and Noto Emoji (CJK, Nerd Font icons): *Later* (OQ-011)
 
 ## Design
 
@@ -66,17 +66,21 @@ Pane IDs are `u32`, unique per app run.
 
 1. **Resize:** the widget's allocated rect ÷ cell size gives cols/rows; the
    PTY is resized only when they change, at most once per frame.
-2. **Input:** key events map to bytes (`alacritty_terminal`'s key handling
-   conventions: application cursor mode, modifiers, bracketed paste). App
-   shortcuts are matched first (spec 0004); unbound keys always reach the
-   shell. IME commit text is written as-is.
+2. **Input:** our input module maps key events to bytes, following xterm
+   conventions and the terminal's mode flags (application cursor and
+   keypad, bracketed paste); `alacritty_terminal` has no key mapping of its
+   own. App shortcuts are matched first (spec 0004); unbound keys always
+   reach the shell, including plain `Ctrl+C`/`Ctrl+X`/`Ctrl+V`
+   **[load-bearing]** (architecture §Key decisions). IME commit text is
+   written as-is.
 3. **Output:** the pane's event loop thread parses PTY bytes into the grid
    and requests a repaint. The widget renders the visible rows as one galley
    each, so a flood costs one parse per byte and one layout per visible row
    per frame, and memory is bounded by `scrollback`.
 4. **Copy/paste:** `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C/V` on macOS).
-   With default bindings `Ctrl+C` reaches the shell. Clipboard goes through
-   `egui`'s clipboard (arboard). Paste is bracketed when the program asked
+   With default bindings `Ctrl+C` reaches the shell. Copy hands the
+   selection to egui's clipboard; paste requests the clipboard from egui and
+   writes the text it returns. Paste is bracketed when the program asked
    for it. Copy-on-select is a config option, default off. Mouse selection
    is `alacritty_terminal`'s (simple, word on double-click, line on triple).
 5. **Scrollback:** `config.scrollback` lines, default 10 000. Mouse wheel
@@ -126,12 +130,11 @@ tested on both.
 3. Multi-byte UTF-8 (emoji, CJK) split across read chunks renders correctly for characters the bundled font covers.
 4. `Ctrl+C` interrupts `sleep 100`. `Ctrl+Shift+C` copies the selection, and `Ctrl+Shift+V` pastes it as one bracketed paste when the program enabled it.
 5. Search finds a term 5 000 lines up in scrollback, highlights it, and `Esc` returns focus to the shell.
-6. A configured nonexistent shell shows an error in the pane instead of a blank pane or a crash.
-7. `exit 0` closes the pane under the default config. `exit 3` leaves it open showing code 3.
-8. Quitting the app leaves no child shell processes running.
-9. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on Ctrl+click, while an `https://` link opens in the browser.
-10. With the pwsh snippet sourced on Windows, `cd C:\Users` then split: the new pane starts in `C:\Users`.
-11. Typing with an IME (e.g. ibus with a CJK layout on Linux) delivers the committed text to the shell.
+6. A configured nonexistent shell shows an error in the pane instead of a blank pane or a crash. `exit 0` closes the pane under the default config, and `exit 3` leaves it open showing code 3.
+7. Quitting the app leaves no child shell processes running.
+8. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on Ctrl+click, while an `https://` link opens in the browser.
+9. With the pwsh snippet sourced on Windows, `cd C:\Users` then split: the new pane starts in `C:\Users`.
+10. Typing with an IME (e.g. ibus with a CJK layout on Linux) delivers the committed text to the shell.
 
 ## Open questions
 

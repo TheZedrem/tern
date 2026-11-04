@@ -38,10 +38,11 @@ Delete a subsection only when it genuinely has nothing to say (e.g. no IPC).
   missing file, dead process, Windows behaving differently. The failure
   paths are where the decisions are.
 - **Startup impact is mandatory.** State what the feature adds to the boot
-  path. The normal answer is "nothing, reached via `import()` on first use".
-  Anything else needs a TTFP measurement and the owner's OK.
+  path. The normal answer is "nothing, initialized on first use or after
+  the first frame". Anything else needs a TTFP measurement and the owner's OK.
 - **Platform notes are mandatory.** Linux and Windows must both work, so name
-  their differences (ConPTY, paths, keys, webview). macOS only needs to compile.
+  their differences (ConPTY, paths, keys, Wayland/X11, GPU backend). macOS
+  only needs to compile.
 - **Security & privacy:** list what gets stored, where, and for how long
   (or "nothing stored"), and which trust boundary from `architecture.md`
   §Security the feature crosses (or "none"). Check it against the ground

@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-010]
 related: [OQ-005 ✅, OQ-009 ✅, OQ-010 ✅]
@@ -76,17 +76,17 @@ TTFP measurement in the commit.
 7. Only after step 6, on the next frame, run deferred work: config watcher,
    OS theme detection, prefetching anything lazy.
 
-**Failure paths:** if `wgpu` can't create a device, `eframe` falls back to
-the `glow` backend and TTFP is still reported. If the PTY spawn fails,
+**Failure paths:** if no Vulkan/DX12 adapter exists, `wgpu` falls back to
+its OpenGL backend and TTFP is still reported. If the PTY spawn fails,
 render the error in the pane and report TTFP at that frame, so the bench
 never hangs.
 
 **Bench mode (`--bench-startup`):** the boot pane runs a minimal shell
 command (`sh -c 'echo ready'` / `cmd /c echo ready`) instead of the user's
 shell, so the number measures zed-term, not dotfiles. It prints one JSON
-line with all five marks and exits. `zed-term --bench-startup 10` runs the
-release binary ten times (one cold, N warm) by re-spawning itself and prints
-the median and p90 per mark; the default N is 10.
+line with all five marks and exits. `zed-term --bench-startup N` re-spawns
+itself once cold, then N times warm, and prints the median and p90 per
+mark.
 
 ### Startup impact
 
@@ -95,8 +95,9 @@ plus the bench; there is no bundle to size.
 
 ### Platform notes
 
-Linux: Wayland and X11 via `winit`; `wgpu` on Vulkan. Windows: `wgpu` on
-DX12, ConPTY via `alacritty_terminal`. macOS: compile-only.
+Linux: Wayland and X11 via `winit`; `wgpu` on Vulkan, OpenGL as fallback.
+Windows: `wgpu` on DX12, ConPTY via `alacritty_terminal`. macOS:
+compile-only.
 
 ### Security & privacy
 
@@ -112,7 +113,7 @@ DX12, ConPTY via `alacritty_terminal`. macOS: compile-only.
 4. A broken `config.yaml` (invalid YAML) still boots to a prompt with defaults and shows a notice naming the line.
 5. With networking disabled, startup time and behavior are unchanged, and no request is attempted before the first prompt.
 6. No white flash: the first painted frame is the theme background.
-7. With `wgpu` forced off (env `ZED_TERM_RENDERER=glow`), the app boots on the OpenGL backend and still reports TTFP.
+7. With `WGPU_BACKEND=gl`, the app boots on wgpu's OpenGL backend and still reports TTFP.
 8. The same binary and bench run on Windows and report all five marks.
 
 ## Open questions

@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-005]
 related: [spec 0001, spec 0003, spec 0004]
@@ -103,8 +103,9 @@ theme:
 - **Resolved at load** **[load-bearing]**: the UI only ever sees complete
   palettes, so the window's clear color is known before the window exists
   (spec 0001).
-- **Font** **[load-bearing]**: `font.family: null` (the default) uses the
-  font embedded in the binary and costs no lookup. A named family is
+- **Font** **[load-bearing]**: `font.family: null` (the default) uses egui's
+  built-in Hack with its Noto Emoji fallback, already in the binary, and
+  costs no lookup. A named family is
   resolved once at boot through the OS font database (`font-kit`); if it
   isn't found, the bundled font is used with a notice.
 - **`system`** **[load-bearing]**: boot always renders `dark`, with no OS
@@ -172,7 +173,6 @@ Notepad.
 ## Acceptance criteria
 
 1. With no config file, the app boots to the login shell on the `dark` theme with the bundled font and creates no file.
-10. `font.family: "Nonexistent Mono"` boots with the bundled font and a notice naming the family.
 2. "Open config file" creates a commented default that parses back to exactly the defaults.
 3. Opening the `htop` profile from the palette runs htop in a new tab, in the profile's cwd, with its env applied.
 4. A profile with `command: 42` is skipped with a notice naming it, and every other profile still opens.
@@ -181,6 +181,7 @@ Notepad.
 7. Changing `font.size` in an editor and saving updates every open pane within 1 s. Editing a color in `themes/<name>.yaml` for the active theme does the same.
 8. In the theme picker, `Esc` leaves the file untouched, and `Enter` changes only `theme.default` with comments intact.
 9. The window's first frame uses the resolved default theme's background (no white flash). With `system` on a light-mode OS, the first frame is `dark`, and the switch to `light` happens after the TTFP report.
+10. `font.family: "Nonexistent Mono"` boots with the bundled font and a notice naming the family.
 
 ## Open questions
 

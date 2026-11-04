@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-004]
 related: [spec 0002, spec 0003, spec 0005]
@@ -67,7 +67,7 @@ or punctuation key without `Shift`, because those belong to the shell and
 to readline/emacs/vim (`Ctrl+R`, `Alt+B`, `Alt+3` digit argument, `Ctrl+-`
 undo). The user may override this in config.
 
-Shortcuts match on the physical key (`winit`'s `PhysicalKey`), so
+Shortcuts match on the physical key (egui's `physical_key`), so
 `Ctrl+Shift+1` works even where `Shift+1` types `!` or another symbol.
 
 ### Flows
@@ -75,7 +75,9 @@ Shortcuts match on the physical key (`winit`'s `PhysicalKey`), so
 1. **Key event:** the app consumes `egui` key events before any pane sees
    them and matches them against the keymap. On a match the command runs
    and the event is consumed; otherwise it reaches the focused pane and
-   goes to the shell (spec 0002).
+   goes to the shell (spec 0002). When a text field (palette, search, tab
+   rename) has focus instead of a pane, plain `Ctrl+C`/`Ctrl+X`/`Ctrl+V`
+   act on that field's text.
 2. **Palette:** opens centered over the focused pane. Typing fuzzy-filters
    titles. `↑↓` moves the selection, `Enter` runs the command, `Esc` closes.
    Focus returns to the pane it came from.

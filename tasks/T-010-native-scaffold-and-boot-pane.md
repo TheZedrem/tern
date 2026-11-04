@@ -7,7 +7,8 @@ blocked-by: []
 Replace the removed Tauri app with the native stack from
 `spec/architecture.md`: `eframe`/`egui` window, one pane driven by
 `alacritty_terminal` (its `tty` + `event_loop`), a grid widget that renders
-visible rows with the bundled monospace font, key input to the PTY, resize,
+the visible grid with egui's built-in Hack font, key input to the PTY with
+eframe's clipboard shortcuts off (architecture §Key decisions), resize,
 exit handling, and the config read on the boot path. Ship the TTFP
 machinery: dev badge, stdout marks, `--bench-startup [N]` self-spawning
 bench. Record the first native TTFP numbers (Linux) in the task summary
