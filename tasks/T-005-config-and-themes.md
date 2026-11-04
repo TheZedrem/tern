@@ -1,6 +1,6 @@
 ---
-status: next
-blocked-by: [T-003]
+status: now
+blocked-by: []
 ---
 # T-005: YAML config, profiles, themes and hot reload
 

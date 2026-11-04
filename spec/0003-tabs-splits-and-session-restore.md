@@ -50,8 +50,10 @@ Node     = Split { direction: row|column, ratio, a: Node, b: Node }
          | Leaf  { id, pane: PaneId | null, profile, cwd? }  // null = not spawned yet
 ```
 
-The tree is binary: repeated splits nest. Ratios are clamped so no pane
-drops below 10 cols × 3 rows. Leaf IDs are stable across restarts;
+The tree is binary: repeated splits nest. No pane drops below 10 cols × 3
+rows: divider drags are clamped, a split without room for two such panes
+does nothing, and a shrinking window stops at the tree's minimum size.
+Leaf IDs are stable across restarts;
 **`PaneId` is per run and never written to `session.json`** **[load-bearing]**.
 
 A tab's title is the user's rename if set, else the focused pane's OSC
@@ -66,8 +68,8 @@ title, else the profile's display name.
 ### Flows
 
 1. **Split:** the new pane opens the source pane's profile in the source
-   pane's cwd (spec 0002) and takes focus. A new tab opens
-   `default_profile` (spec 0005).
+   pane's cwd (spec 0002) and takes focus; a cwd that no longer exists
+   falls back to home. A new tab opens `default_profile` (spec 0005).
 2. **Close pane:** the PTY is killed and the sibling takes the freed space.
    Closing the last pane closes the tab, and closing the last tab quits the
    app.
@@ -114,8 +116,10 @@ frame themselves. Windows 11 always draws its own frame.
   Overwritten on every save. Setting `restore_session: false` deletes it on
   the next quit.
 - Trust boundaries: crosses §Security 1, because tab titles come from
-  terminal output (OSC 0/2). They render as plain text, with control
-  characters stripped, capped at 200 characters.
+  terminal output (OSC 0/2). They render as plain text on one line, capped
+  at 200 characters, with control characters and invisible ones that could
+  hide or reorder text (zero-width spaces, direction overrides, tag
+  characters) stripped.
 
 ## Acceptance criteria
 

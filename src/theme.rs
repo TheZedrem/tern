@@ -42,8 +42,9 @@ pub fn hsla(rgb: u32) -> Hsla {
 }
 
 /// Writes `theme` into `gpui-component`'s global theme, on top of its dark
-/// mode, so widgets (toasts now, tab bar and palette later) match the
-/// terminal instead of using the library's own colors.
+/// mode, so widgets (toasts, the tab bar, the palette) match the terminal
+/// instead of using the library's own colors. The active tab shares the
+/// terminal's background, so it reads as part of the pane below it.
 pub fn apply_to_widgets(theme: &Theme, cx: &mut App) {
     use gpui_component::{Theme as WidgetTheme, ThemeMode};
 
@@ -59,4 +60,10 @@ pub fn apply_to_widgets(theme: &Theme, cx: &mut App) {
     colors.muted = raised;
     colors.muted_foreground = foreground.opacity(0.7);
     colors.border = background.blend(foreground.opacity(0.15));
+    colors.tab_bar = raised;
+    colors.tab = raised;
+    colors.tab_foreground = foreground.opacity(0.7);
+    colors.tab_active = background;
+    colors.tab_active_foreground = foreground;
+    colors.title_bar = raised;
 }

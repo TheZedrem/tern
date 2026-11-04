@@ -10,7 +10,7 @@ pub mod pty;
 use crate::config::{self, CloseOnExit, Config};
 use crate::theme::{self, Theme};
 use alacritty_terminal::event::{Event, Notify, OnResize};
-use alacritty_terminal::event_loop::Notifier;
+use alacritty_terminal::event_loop::{Msg, Notifier};
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::color::COUNT as COLOR_SLOTS;
@@ -18,11 +18,15 @@ use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use futures::StreamExt;
 use gpui::{
     App, Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement, KeyBinding,
-    KeyDownEvent, NoAction, ParentElement, Pixels, Render, SharedString, Size, Styled, Window, div,
-    font, px, size,
+    KeyDownEvent, MouseButton, NoAction, ParentElement, Pixels, Render, SharedString, Size, Styled,
+    Window, div, font, px, size,
 };
 use pty::{GridSize, Terminal};
 use std::borrow::Cow;
+use std::path::PathBuf;
+
+/// Longest tab title taken from a program (spec 0003).
+const MAX_TITLE_CHARS: usize = 200;
 
 /// The embedded default font (spec 0005).
 pub const DEFAULT_FONT_FAMILY: &str = "Lilex";
@@ -86,7 +90,7 @@ impl FontSettings {
     }
 
     /// The cell size of this font: the advance of `m` by the line height.
-    fn cell_size(&self, window: &Window) -> Size<Pixels> {
+    pub fn cell_size(&self, window: &Window) -> Size<Pixels> {
         let text_system = window.text_system();
         let font_id = text_system.resolve_font(&font(self.family.clone()));
         let width = text_system
@@ -102,6 +106,45 @@ pub enum PaneEvent {
     /// The first frame with the pane's output, or its spawn error, was
     /// drawn. This is the TTFP moment (spec 0001).
     FirstFrame,
+    /// The user clicked into the pane.
+    Focused,
+    /// The program set or reset its title.
+    TitleChanged,
+    /// The program exited and `close_on_exit` says the pane closes.
+    Exited,
+}
+
+/// A program's title as a tab shows it: control characters dropped, runs
+/// of whitespace collapsed, at most 200 characters (spec 0003).
+pub fn clean_title(title: &str) -> String {
+    title
+        .split(|c: char| c.is_whitespace() || c.is_control() || is_invisible_format(c))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAX_TITLE_CHARS)
+        .collect()
+}
+
+/// Invisible characters that could hide text or reorder what a tab shows:
+/// zero-width space, direction marks and overrides, invisible operators,
+/// byte-order mark, tag characters. They are treated like controls. The
+/// zero-width joiner and non-joiner stay: emoji sequences and several
+/// scripts need them.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}'
+            | '\u{200B}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+            | '\u{E0000}'..='\u{E007F}'
+    )
 }
 
 /// Whether a pane closes after its program exited with `code` (`None`:
@@ -132,6 +175,7 @@ struct Running {
     term: Terminal,
     notifier: Notifier,
     size: GridSize,
+    child_pid: Option<u32>,
 }
 
 pub struct TerminalPane {
@@ -145,6 +189,8 @@ pub struct TerminalPane {
     exited: bool,
     has_output: bool,
     first_frame_scheduled: bool,
+    /// The title the program set (OSC 0/2), already cleaned.
+    title: Option<String>,
 }
 
 impl EventEmitter<PaneEvent> for TerminalPane {}
@@ -184,6 +230,7 @@ impl TerminalPane {
                     term: session.term,
                     notifier: session.notifier,
                     size: session.size,
+                    child_pid: session.child_pid,
                 })
             }
             Err(error) => State::Failed(format!("Could not start {}: {error}", command.describe())),
@@ -198,11 +245,39 @@ impl TerminalPane {
             exited: false,
             has_output: false,
             first_frame_scheduled: false,
+            title: None,
         }
     }
 
     pub fn focus_handle(&self) -> &FocusHandle {
         &self.focus
+    }
+
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    /// The program's working directory, so a split starts in the same place
+    /// (spec 0003, flow 1). Read from `/proc` on Linux; elsewhere unknown
+    /// until OSC 7 tracking lands (T-002).
+    pub fn cwd(&self) -> Option<PathBuf> {
+        let State::Running(running) = &self.state else {
+            return None;
+        };
+        let pid = running.child_pid?;
+        if cfg!(target_os = "linux") {
+            std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Stops the program: the event loop exits, which hangs up the PTY.
+    pub fn shutdown(&mut self) {
+        if let State::Running(running) = &self.state {
+            // An error means the event loop already ended with the program.
+            let _ = running.notifier.0.send(Msg::Shutdown);
+        }
     }
 
     fn handle_event(&mut self, event: Event, cx: &mut Context<Self>) {
@@ -230,7 +305,15 @@ impl TerminalPane {
                     .notifier
                     .notify(format(running.size.window_size()).into_bytes());
             }
-            // Titles, bell and clipboard requests arrive with T-002 and T-003.
+            Event::Title(title) => {
+                self.title = Some(clean_title(&title)).filter(|title| !title.is_empty());
+                cx.emit(PaneEvent::TitleChanged);
+            }
+            Event::ResetTitle => {
+                self.title = None;
+                cx.emit(PaneEvent::TitleChanged);
+            }
+            // Bell and clipboard requests arrive with T-002.
             _ => {}
         }
     }
@@ -243,8 +326,7 @@ impl TerminalPane {
         }
         cx.notify();
         if !self.bench && closes_on_exit(self.close_on_exit, code) {
-            // One pane per window until T-003, so closing the pane quits.
-            cx.quit();
+            cx.emit(PaneEvent::Exited);
         }
     }
 
@@ -319,6 +401,13 @@ impl Render for TerminalPane {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|pane, _, window, cx| {
+                    window.focus(&pane.focus, cx);
+                    cx.emit(PaneEvent::Focused);
+                }),
+            )
             .child(content)
     }
 }
@@ -397,5 +486,86 @@ mod tests {
             ..config::Font::default()
         });
         assert_eq!(configured.family, "JetBrains Mono");
+    }
+
+    /// `raw` cleans to `words`, joined by single spaces or by nothing: a
+    /// control character may be dropped or become a space, but never stays.
+    fn assert_title(raw: &str, words: &[&str]) {
+        let title = clean_title(raw);
+        assert!(
+            title == words.join(" ") || title == words.concat(),
+            "{raw:?} became {title:?}"
+        );
+    }
+
+    #[test]
+    fn titles_lose_their_control_characters() {
+        assert_title("bell\x07here", &["bell", "here"]);
+        assert_title("esc\x1b[31mred", &["esc", "[31mred"]);
+        assert_title("one\ntwo\r\nthree", &["one", "two", "three"]);
+        assert_title("tab\there", &["tab", "here"]);
+        // NUL, DEL and the C1 control CSI.
+        assert_title("nul\0del\x7fcsi\u{9b}end", &["nul", "del", "csi", "end"]);
+    }
+
+    #[test]
+    fn title_whitespace_runs_collapse_to_one_space() {
+        assert_eq!(
+            clean_title("cargo   build \t\n  --release"),
+            "cargo build --release"
+        );
+        assert_eq!(clean_title("vim ~/notes.md"), "vim ~/notes.md");
+    }
+
+    /// AC9 (spec 0003): a 5 000-character title is capped at 200
+    /// characters, on one line.
+    #[test]
+    fn a_5000_character_title_is_capped_at_200_characters_on_one_line() {
+        assert_eq!(clean_title(&"x".repeat(5000)).chars().count(), 200);
+        // Characters, not bytes: two- and four-byte characters stay whole.
+        assert_eq!(clean_title(&"ä🦀".repeat(2500)), "ä🦀".repeat(100));
+        let lines = clean_title(&"line\n".repeat(1000));
+        assert_eq!(lines.chars().count(), 200);
+        assert!(!lines.contains(['\n', '\r']), "{lines:?}");
+        // The other Unicode line breaks: CR, VT, FF, NEL, LS and PS.
+        for separator in ["\r", "\u{0b}", "\u{0c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+            assert_title(&format!("first{separator}second"), &["first", "second"]);
+        }
+    }
+
+    /// A title can't reorder or hide text: a right-to-left override would
+    /// show `invoice\u{202E}fdp.exe` as "invoiceexe.pdf", zero-width
+    /// characters make different text look the same, and tag characters
+    /// carry text nobody sees.
+    #[test]
+    fn titles_lose_characters_that_hide_or_reorder_text() {
+        assert_title("invoice\u{202E}fdp.exe", &["invoice", "fdp.exe"]);
+        assert_title("ad\u{200B}min\u{FEFF}", &["ad", "min"]);
+        // "rm" spelled in tag characters.
+        assert_title("build\u{E0072}\u{E006D}", &["build"]);
+        let invisible = ['\u{061C}', '\u{200B}', '\u{200E}', '\u{200F}', '\u{FEFF}']
+            .into_iter()
+            .chain('\u{202A}'..='\u{202E}')
+            .chain('\u{2060}'..='\u{2064}')
+            .chain('\u{2066}'..='\u{2069}')
+            // The first tag character, tag "A", and the closing cancel tag.
+            .chain(['\u{E0000}', '\u{E0041}', '\u{E007F}']);
+        for c in invisible {
+            assert_title(&format!("before{c}after"), &["before", "after"]);
+        }
+    }
+
+    /// The zero-width joiner and non-joiner are part of the text: emoji
+    /// sequences and scripts like Persian need them.
+    #[test]
+    fn titles_keep_the_joiners_emoji_and_scripts_need() {
+        // 👨‍💻: man, zero-width joiner, laptop.
+        let technologist = "\u{1F468}\u{200D}\u{1F4BB}";
+        // Persian "mikhaham" (I want), a zero-width non-joiner after "mi".
+        let persian = "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}";
+        let both = format!("{technologist} {persian}");
+        for title in [technologist, persian, both.as_str()] {
+            assert_eq!(clean_title(title), title);
+        }
     }
 }

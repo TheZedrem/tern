@@ -1,6 +1,6 @@
 ---
 status: next
-blocked-by: [T-003, T-005]
+blocked-by: [T-005]
 ---
 # T-012: SSH profiles and connections
 

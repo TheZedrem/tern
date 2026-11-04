@@ -11,6 +11,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term};
 use alacritty_terminal::tty;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use std::path::Path;
 use std::sync::Arc;
 
 /// Padding around the grid inside its pane, in logical pixels.
@@ -151,13 +152,17 @@ pub struct Session {
     pub notifier: Notifier,
     pub events: UnboundedReceiver<Event>,
     pub size: GridSize,
+    /// The program's process ID, where the platform exposes it (Unix).
+    pub child_pid: Option<u32>,
 }
 
-/// Starts `command` in a new PTY of `size`. Output is parsed on the event
-/// loop's own thread from the first byte, even before any window exists.
+/// Starts `command` in a new PTY of `size`, in `cwd` or the home directory.
+/// Output is parsed on the event loop's own thread from the first byte,
+/// even before any window exists.
 pub fn spawn(
     command: &Command,
     size: GridSize,
+    cwd: Option<&Path>,
     scrollback: usize,
     timing: Arc<Timing>,
 ) -> Result<Session, String> {
@@ -170,7 +175,12 @@ pub fn spawn(
             command.program.clone(),
             command.args.clone(),
         )),
-        working_directory: dirs::home_dir(),
+        // A missing directory falls back to home: alacritty would otherwise
+        // silently start in zed-term's own working directory.
+        working_directory: cwd
+            .filter(|dir| dir.is_dir())
+            .map(Path::to_path_buf)
+            .or_else(dirs::home_dir),
         drain_on_exit: true,
         env: [
             ("TERM", "xterm-256color"),
@@ -183,6 +193,10 @@ pub fn spawn(
         ..Default::default()
     };
     let pty = tty::new(&options, size.window_size(), 0).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    let child_pid = Some(pty.child().id());
+    #[cfg(not(unix))]
+    let child_pid = None;
 
     let (tx, events) = unbounded();
     let proxy = EventProxy { tx, timing };
@@ -202,6 +216,7 @@ pub fn spawn(
         notifier,
         events,
         size,
+        child_pid,
     })
 }
 
@@ -290,7 +305,7 @@ mod tests {
             program: "/nonexistent/zed-term-test-shell".into(),
             args: vec![],
         };
-        match spawn(&missing, SMALL, 100, timing()) {
+        match spawn(&missing, SMALL, None, 100, timing()) {
             Ok(_) => panic!("spawned a program that doesn't exist"),
             Err(message) => assert!(!message.is_empty()),
         }
@@ -304,15 +319,17 @@ mod tests {
         }
     }
 
-    /// Starts `command` and collects its events until it exited and the UI
-    /// was woken after that, by which point all of its output is parsed.
+    /// Starts `command` in `cwd` (`None`: the home directory) and collects
+    /// its events until it exited and the UI was woken after that, by which
+    /// point all of its output is parsed.
     #[cfg(unix)]
     fn run_to_exit(
         command: &Command,
         size: GridSize,
+        cwd: Option<&Path>,
         timing: Arc<Timing>,
     ) -> (Session, Vec<Event>) {
-        let mut session = spawn(command, size, 100, timing).expect("spawn sh");
+        let mut session = spawn(command, size, cwd, 100, timing).expect("spawn sh");
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
         let mut events = Vec::new();
         loop {
@@ -338,7 +355,8 @@ mod tests {
     fn output_and_exit_code_reach_the_pane() {
         let timing = timing();
         // Returns only after a Wakeup, so the UI is told to redraw.
-        let (session, events) = run_to_exit(&sh("printf hi; exit 3"), SMALL, Arc::clone(&timing));
+        let (session, events) =
+            run_to_exit(&sh("printf hi; exit 3"), SMALL, None, Arc::clone(&timing));
         let exit = events.iter().find_map(|event| match event {
             Event::ChildExit(status) => Some(status.code()),
             _ => None,
@@ -359,7 +377,7 @@ mod tests {
         };
         let script =
             r#"printf '%s %s %s\n' "$TERM" "$COLORTERM" "$TERM_PROGRAM"; stty size; pwd -P"#;
-        let (session, _) = run_to_exit(&sh(script), size, timing());
+        let (session, _) = run_to_exit(&sh(script), size, None, timing());
         let screen = crate::terminal::tests::screen(&*session.term.lock());
         assert_eq!(screen[0], "xterm-256color truecolor zed-term");
         assert_eq!(screen[1], "4 100");
@@ -368,5 +386,62 @@ mod tests {
             .canonicalize()
             .expect("home exists");
         assert_eq!(std::path::Path::new(&screen[2]), home);
+    }
+
+    /// A split starts in its source pane's directory (spec 0003, flow 1).
+    #[cfg(unix)]
+    #[test]
+    fn the_program_starts_in_the_directory_it_was_given() {
+        let dir = std::env::temp_dir().join(format!("zed-term-cwd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create a temp dir");
+        let expected = dir.canonicalize().expect("the temp dir exists");
+        // Wide enough that the path fits on one row.
+        let wide = GridSize {
+            cols: 400,
+            rows: 2,
+            ..SMALL
+        };
+        let (session, _) = run_to_exit(&sh("pwd -P"), wide, Some(&dir), timing());
+        let _ = std::fs::remove_dir(&dir);
+        let screen = crate::terminal::tests::screen(&*session.term.lock());
+        assert_eq!(Path::new(&screen[0]), expected);
+    }
+
+    /// The pane finds the program's cwd through this ID (spec 0002), so it
+    /// must be the program's own process.
+    #[cfg(unix)]
+    #[test]
+    fn child_pid_is_the_programs_process_id() {
+        let (session, _) = run_to_exit(&sh("echo $$"), SMALL, None, timing());
+        let screen = crate::terminal::tests::screen(&*session.term.lock());
+        let printed = screen[0].parse().expect("sh printed its PID");
+        assert_eq!(session.child_pid, Some(printed));
+    }
+
+    /// A directory that is gone starts the program at home, not in
+    /// zed-term's own working directory, also when it is spelled the way
+    /// `/proc` reports a removed one (spec 0003, flow 1).
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_directory_starts_the_program_at_home() {
+        let removed = std::env::temp_dir().join(format!("zed-term-removed-{}", std::process::id()));
+        std::fs::create_dir_all(&removed).expect("create a temp dir");
+        std::fs::remove_dir(&removed).expect("remove it again");
+        let mut deleted = removed.clone().into_os_string();
+        deleted.push(" (deleted)");
+        let home = dirs::home_dir()
+            .expect("home dir")
+            .canonicalize()
+            .expect("home exists");
+        let wide = GridSize {
+            cols: 400,
+            rows: 2,
+            ..SMALL
+        };
+        for missing in [removed.as_path(), Path::new(&deleted)] {
+            let (session, _) = run_to_exit(&sh("pwd -P"), wide, Some(missing), timing());
+            let screen = crate::terminal::tests::screen(&*session.term.lock());
+            assert_eq!(Path::new(&screen[0]), home, "started in {missing:?}");
+        }
     }
 }

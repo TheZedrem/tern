@@ -27,6 +27,9 @@ The TTFP badge in the window corner is the startup time of this run. See
 use `cargo build --release && target/release/zed-term --bench-startup 10`
 for numbers you can compare.
 
+To try the title bar zed-term draws on GNOME (spec 0003) on any other
+Wayland compositor, start it with `ZED_TERM_CLIENT_DECORATIONS=1`.
+
 ## Tests
 
 `cargo test` runs everything that needs no window. `cargo test -- --ignored`

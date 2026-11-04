@@ -10,12 +10,13 @@ mod theme;
 mod timing;
 
 use bench::Mode;
+use gpui::WindowDecorations;
 use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 use std::ffi::OsStr;
 use std::sync::Arc;
 use std::time::Instant;
+use terminal::FontSettings;
 use terminal::pty::{self, Command, GridSize};
-use terminal::{FontSettings, TerminalPane};
 use timing::{Mark, Timing};
 
 /// Initial window size in logical pixels, until session restore (T-006)
@@ -64,6 +65,7 @@ fn main() {
     let session = pty::spawn(
         &command,
         grid,
+        None,
         config.scrollback as usize,
         Arc::clone(&timing),
     );
@@ -76,6 +78,7 @@ fn main() {
         if let Err(error) = terminal::init(cx) {
             boot_notices.push(format!("The default font could not be loaded: {error}"));
         }
+        layout::init(cx);
         gpui_component::init(cx);
         theme::apply_to_widgets(&theme, cx);
         cx.on_window_closed(|cx, _| {
@@ -96,13 +99,18 @@ fn main() {
                 ..Default::default()
             }),
             app_id: Some("zed-term".into()),
+            // Dev only: draw our own title bar even where the compositor
+            // would draw one, to check the GNOME path (spec 0003, flow 8).
+            window_decorations: std::env::var_os("ZED_TERM_CLIENT_DECORATIONS")
+                .map(|_| WindowDecorations::Client),
             ..Default::default()
         };
         let opened = cx.open_window(options, |window, cx| {
-            let pane = cx.new(|cx| TerminalPane::new(session, &command, &config, theme, bench, cx));
             let workspace = cx.new(|cx| {
                 layout::Workspace::new(
-                    pane,
+                    session,
+                    &command,
+                    config,
                     theme,
                     boot_notices,
                     Arc::clone(&timing),
