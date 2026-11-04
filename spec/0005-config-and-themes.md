@@ -103,11 +103,11 @@ theme:
 - **Resolved at load** **[load-bearing]**: the UI only ever sees complete
   palettes, so the window's clear color is known before the window exists
   (spec 0001).
-- **Font** **[load-bearing]**: `font.family: null` (the default) uses egui's
-  built-in Hack with its Noto Emoji fallback, already in the binary, and
-  costs no lookup. A named family is
-  resolved once at boot through the OS font database (`font-kit`); if it
-  isn't found, the bundled font is used with a notice.
+- **Font** **[load-bearing]**: `font.family: null` (the default) uses Lilex,
+  embedded in the binary and registered with GPUI's text system at boot. A
+  named family must match an installed font's exact name, because GPUI has
+  no generic names like `monospace`. If it isn't found, Lilex is used with
+  a notice.
 - **`system`** **[load-bearing]**: boot always renders `dark`, with no OS
   query on the boot path. After the first frame, the app reads the OS
   light/dark setting. If it's light, every pane using the default theme and
@@ -124,7 +124,7 @@ still applies.
 - `config::load(path) -> Loaded { config, profiles, notices }`, used at boot and by the watcher
 - `theme::list() -> Vec<ThemeSummary>`, `theme::resolve(name) -> Theme`
 - `config::open_in_editor()`: create the commented default if it's missing, then open it with the OS default handler
-- Hot reload uses the `notify` crate; a reload replaces the shared config and raises a repaint
+- Hot reload uses the `notify` crate; a reload replaces the shared config and notifies the views that read it
 
 ### Flows
 
@@ -149,8 +149,9 @@ still applies.
 ### Startup impact
 
 One synchronous read of `config.yaml`, plus one small read per theme file a
-boot pane uses, plus one font-database query only if `font.family` is set.
-No writes, no watcher and no OS theme query at boot. `system` detection runs
+boot pane uses. A named `font.family` adds no lookup of its own, because
+GPUI has already loaded the system fonts. No writes, no watcher and no OS
+theme query at boot. `system` detection runs
 after the first frame. The picker state is built on first open.
 
 ### Platform notes

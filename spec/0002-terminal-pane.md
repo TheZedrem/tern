@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-010, T-002]
-related: [spec 0005, OQ-003 ✅, OQ-008 ✅]
+related: [spec 0005, OQ-003 ✅, OQ-008 ✅, OQ-011 ✅]
 ---
 
 # Spec: Terminal pane
@@ -18,15 +18,15 @@ as a native terminal: correct sizing, no garbled output, familiar clipboard
 keys, fast search.
 
 Done means: daily driving `vim`, `htop`, `tmux`, `less`, and a large `cat`
-works in a pane on Linux and Windows without glitches.
+works in a pane on Linux and Windows 11 without glitches.
 
 ## Scope
 
 **In scope:**
 
 - Spawning by profile ID (spec 0005): command, environment, working directory
-- Parsing and rendering, input, resize, exit handling
-- Copy/paste, scrollback, search, clickable links
+- Parsing and rendering, input and IME, resize, exit handling
+- Copy/paste (plus the primary selection on Linux), scrollback, search, clickable links
 - A `command` override on spawn, so Phase 2 (`ssh …`) and Phase 3 (agents) reuse panes unchanged
 
 **Out of scope:**
@@ -34,20 +34,20 @@ works in a pane on Linux and Windows without glitches.
 - Multi-line paste warning, "process still running" close prompt: *Later*
 - SSH and agent specifics: Phase 2/3 specs
 - Persisting scrollback: never (`architecture.md` §Ground rules)
-- Ligatures, and glyphs beyond egui's built-in Hack and Noto Emoji (CJK, Nerd Font icons): *Later* (OQ-011)
+- Ligatures: *Later*
 
 ## Design
 
 ### Affected areas
 
-- `src/terminal/` (pane, grid widget, input, search)
+- `src/terminal/` (pane, terminal element, input, search)
 
 ### Model
 
-`Pane { id, term: alacritty_terminal::Term, event_loop handle, title, cwd?, exit? }`.
-`alacritty_terminal` owns the VT state (grid, scrollback, selection,
-damage) and the PTY; we own the widget that draws the grid and maps input.
-Pane IDs are `u32`, unique per app run.
+`Pane { id, term, event loop handle, title, cwd?, exit? }`, one GPUI entity
+per pane. `alacritty_terminal` owns the VT state (grid, scrollback,
+selection) and the PTY; we own the element that draws the grid and the
+mapping from keys to bytes. Pane IDs are `u32`, unique per app run.
 
 - **Resolved from config [load-bearing]:** the caller names a profile; the
   pane module resolves command, cwd and env from config (spec 0005).
@@ -61,28 +61,32 @@ Pane IDs are `u32`, unique per app run.
   unknown on Windows without OSC 7. The app ships opt-in shell-integration
   snippets for bash, zsh and pwsh under `shell-integration/`, which the user
   sources from their rc file (OQ-008). Nothing is injected automatically.
+- **Glyphs:** the default font is the embedded Lilex. Characters it lacks
+  (CJK, emoji, Nerd Font icons) fall back per glyph to installed fonts
+  through GPUI's text system (OQ-011).
 
 ### Flows
 
-1. **Resize:** the widget's allocated rect ÷ cell size gives cols/rows; the
-   PTY is resized only when they change, at most once per frame.
-2. **Input:** our input module maps key events to bytes, following xterm
-   conventions and the terminal's mode flags (application cursor and
-   keypad, bracketed paste); `alacritty_terminal` has no key mapping of its
-   own. App shortcuts are matched first (spec 0004); unbound keys always
-   reach the shell, including plain `Ctrl+C`/`Ctrl+X`/`Ctrl+V`
-   **[load-bearing]** (architecture §Key decisions). IME commit text is
-   written as-is.
+1. **Resize:** the element's bounds ÷ cell size gives cols/rows; the PTY is
+   resized only when they change, at most once per frame.
+2. **Input:** key events that no action claims (spec 0004) reach the pane,
+   which maps them to bytes following xterm conventions and the terminal's
+   mode flags (application cursor and keypad, bracketed paste);
+   `alacritty_terminal` has no key mapping of its own. With default
+   bindings, plain `Ctrl+C`/`Ctrl+X`/`Ctrl+V` reach the shell
+   **[load-bearing]** (architecture §Key decisions). The pane implements
+   GPUI's input handler, so IME preedit shows at the cursor and committed
+   text is written as-is.
 3. **Output:** the pane's event loop thread parses PTY bytes into the grid
-   and requests a repaint. The widget renders the visible rows as one galley
-   each, so a flood costs one parse per byte and one layout per visible row
-   per frame, and memory is bounded by `scrollback`.
-4. **Copy/paste:** `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C/V` on macOS).
-   With default bindings `Ctrl+C` reaches the shell. Copy hands the
-   selection to egui's clipboard; paste requests the clipboard from egui and
-   writes the text it returns. Paste is bracketed when the program asked
-   for it. Copy-on-select is a config option, default off. Mouse selection
-   is `alacritty_terminal`'s (simple, word on double-click, line on triple).
+   and wakes the pane, which redraws on the next frame. Only visible rows
+   are shaped, so a flood costs one parse per byte and one layout per
+   visible row per frame, and memory is bounded by `scrollback`.
+4. **Copy/paste:** `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C/V` on macOS)
+   through GPUI's clipboard. With default bindings `Ctrl+C` reaches the
+   shell. Paste is bracketed when the program asked for it. On Linux every
+   selection also becomes the primary selection, and middle-click pastes
+   it. Copy-on-select is a config option, default off. Mouse selection is
+   `alacritty_terminal`'s (simple, word on double-click, line on triple).
 5. **Scrollback:** `config.scrollback` lines, default 10 000. Mouse wheel
    and `Shift+PageUp/PageDown` scroll; any input snaps back to the bottom.
 6. **Search:** `Ctrl+Shift+F` opens an inline search bar. It supports
@@ -107,10 +111,11 @@ search bar and link detection initialize on first use.
 
 ### Platform notes
 
-Windows: ConPTY via `alacritty_terminal::tty`. ConPTY rewrites output and
+Windows 11: ConPTY via `alacritty_terminal::tty`. ConPTY rewrites output and
 can reflow-redraw on resize, so verify resize behavior with `vim` on Windows
 explicitly. Key mapping differs (no `$SHELL`, AltGr), so the input map is
-tested on both.
+tested on both. Linux: the primary selection and middle-click paste exist
+only there.
 
 ### Security & privacy
 
@@ -125,17 +130,17 @@ tested on both.
 
 ## Acceptance criteria
 
-1. Resizing the window while `vim` is open redraws vim at the new size with no stale rows or wrapping artifacts (Linux and Windows).
+1. Resizing the window while `vim` is open redraws vim at the new size with no stale rows or wrapping artifacts (Linux and Windows 11).
 2. `cat` of a 50 MB text file finishes without freezing the UI (tab switching stays responsive during it), the last line shown matches the file's last line, and memory doesn't grow by more than the scrollback.
-3. Multi-byte UTF-8 (emoji, CJK) split across read chunks renders correctly for characters the bundled font covers.
-4. `Ctrl+C` interrupts `sleep 100`. `Ctrl+Shift+C` copies the selection, and `Ctrl+Shift+V` pastes it as one bracketed paste when the program enabled it.
+3. Multi-byte UTF-8 split across read chunks renders correctly, and CJK and emoji render through installed fallback fonts.
+4. `Ctrl+C` interrupts `sleep 100`. `Ctrl+Shift+C` copies the selection, `Ctrl+Shift+V` pastes it as one bracketed paste when the program enabled it, and on Linux middle-click pastes the last selection.
 5. Search finds a term 5 000 lines up in scrollback, highlights it, and `Esc` returns focus to the shell.
 6. A configured nonexistent shell shows an error in the pane instead of a blank pane or a crash. `exit 0` closes the pane under the default config, and `exit 3` leaves it open showing code 3.
 7. Quitting the app leaves no child shell processes running.
 8. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on Ctrl+click, while an `https://` link opens in the browser.
-9. With the pwsh snippet sourced on Windows, `cd C:\Users` then split: the new pane starts in `C:\Users`.
-10. Typing with an IME (e.g. ibus with a CJK layout on Linux) delivers the committed text to the shell.
+9. With the pwsh snippet sourced on Windows 11, `cd C:\Users` then split: the new pane starts in `C:\Users`.
+10. Typing with an IME (e.g. ibus with a CJK layout on Linux) shows the preedit at the cursor and delivers the committed text to the shell.
 
 ## Open questions
 
-- [OQ-011](open-questions.md): font fallback for glyphs the bundled font lacks.
+- None.

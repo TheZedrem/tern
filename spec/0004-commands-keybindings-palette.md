@@ -42,11 +42,13 @@ palette, and bindable in `config.yaml`.
 
 ### Model
 
-Commands are one `enum` (`Tab::New`, `Pane::SplitRight`, `Terminal::Search`,
-`App::OpenConfig`, …) with a stable string ID per variant (`tab.new`,
+Commands are GPUI actions, one type each (`NewTab`, `SplitRight`,
+`Search`, `OpenConfig`, …), each with a stable ID (`tab.new`,
 `pane.splitRight`) used in config and shown in the palette. A typo in a
 default binding is a compile error. Config-provided bindings are parsed at
-runtime, and unknown IDs produce a notice.
+runtime, and unknown IDs produce a notice. Bindings live in key contexts:
+`Workspace` for app actions, plus `Palette`, `Search` and `TextField` for
+focused inputs. The terminal's own context binds nothing that a shell needs.
 
 **Default bindings (Linux/Windows; macOS swaps `Ctrl+Shift` → `Cmd`):**
 
@@ -67,17 +69,17 @@ or punctuation key without `Shift`, because those belong to the shell and
 to readline/emacs/vim (`Ctrl+R`, `Alt+B`, `Alt+3` digit argument, `Ctrl+-`
 undo). The user may override this in config.
 
-Shortcuts match on the physical key (egui's `physical_key`), so
-`Ctrl+Shift+1` works even where `Shift+1` types `!` or another symbol.
+Digit shortcuts must not depend on the keyboard layout: `Ctrl+Shift+1`
+works even where `Shift+1` types `!` or another symbol.
 
 ### Flows
 
-1. **Key event:** the app consumes `egui` key events before any pane sees
-   them and matches them against the keymap. On a match the command runs
-   and the event is consumed; otherwise it reaches the focused pane and
-   goes to the shell (spec 0002). When a text field (palette, search, tab
-   rename) has focus instead of a pane, plain `Ctrl+C`/`Ctrl+X`/`Ctrl+V`
-   act on that field's text.
+1. **Key event:** GPUI matches it against the bindings of the focused
+   element's key contexts, innermost first. On a match the action runs and
+   the key is consumed; otherwise the focused pane receives it and sends it
+   to the shell (spec 0002). When a text field (palette, search, tab
+   rename) has focus, its `TextField` context binds plain
+   `Ctrl+C`/`Ctrl+X`/`Ctrl+V` to that field's copy, cut and paste.
 2. **Palette:** opens centered over the focused pane. Typing fuzzy-filters
    titles. `↑↓` moves the selection, `Enter` runs the command, `Esc` closes.
    Focus returns to the pane it came from.
@@ -93,7 +95,7 @@ most). The palette's entry list and matcher state are built on first open.
 
 ### Platform notes
 
-Windows: `Alt` combinations can collide with window-menu accelerators, so
+Windows 11: `Alt` combinations can collide with window-menu accelerators, so
 verify `Alt+arrows` there. Non-US layouts (German, French) put symbols on
 `Shift+digit`; check `Ctrl+Shift+1` on one. macOS: `Cmd` variants only.
 

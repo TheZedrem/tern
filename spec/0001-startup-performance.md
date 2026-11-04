@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-010]
-related: [OQ-005 ✅, OQ-009 ✅, OQ-010 ✅]
+related: [OQ-005 ✅, OQ-009 ✅, OQ-010 ✅, OQ-013 ✅]
 ---
 
 # Spec: Startup performance and time-to-first-prompt
@@ -17,17 +17,17 @@ Slow boot is the reason this product exists (Tabby, T3 Code). Speed is a
 feature that rots one innocent initialization at a time, so the budget
 needs a number, a measurement and a guard.
 
-Done means: a release build reaches a usable prompt in **< 150 ms median
-on a warm start** on the owner's Fedora machine, and every dev run shows its
-TTFP. Cold starts are measured and reported, with no hard limit. The native
-spike (OQ-010) measured 68 ms, so the budget leaves room for a real UI
-without inviting rot.
+Done means: a release build reaches a usable prompt in **< 500 ms median
+on a warm start** on the owner's Fedora machine (Wayland), and every dev run
+shows its TTFP. Cold starts are measured and reported, with no hard limit.
+The GPUI spike measured 333 ms warm and 811 ms cold there, so the budget
+leaves room for a real UI on top of it (OQ-013).
 
 ## Scope
 
 **In scope:**
 
-- Boot path rules
+- Boot path rules, including the Wayland check
 - TTFP definition, dev badge, stdout report, `--bench-startup`
 - Bench runner built into the binary (no scripts, works on Windows)
 
@@ -44,14 +44,16 @@ without inviting rot.
 
 ### Model
 
-**TTFP** = time from `main()` entry to the first frame presented that
-contains output from the first pane. First shell output is the practical
-proxy for "prompt visible". Time spent before `main()` (exec, dynamic
-linking) isn't counted; that's accepted as a small constant.
+**TTFP** = time from `main()` entry to the first frame drawn that contains
+output from the first pane, taken in GPUI's next-frame callback after that
+render. First shell output is the practical proxy for "prompt visible".
+Time spent before `main()` (exec, dynamic linking) isn't counted; that's
+accepted as a small constant.
 
-Marks, all relative to `main()`: `config` (config and session read),
-`pty` (active tab's PTYs spawned), `window` (window created), `first_byte`
-(first PTY output parsed), `rendered` (first frame with output presented).
+Marks, all relative to `main()`: `config` (config and session read), `pty`
+(active tab's PTYs spawned), `platform` (GPUI up: Wayland connection and
+system fonts), `window` (window and GPU device created), `first_byte`
+(first PTY output parsed), `rendered` (first frame with output drawn).
 
 ### Flows
 
@@ -59,45 +61,46 @@ Boot path, in order. **[load-bearing]** Nothing may be added to it without a
 TTFP measurement in the commit.
 
 1. `main()` records the start instant.
-2. Read `config.yaml` and `session.json` synchronously (both small). On a
+2. Linux: without `WAYLAND_DISPLAY`, print `zed-term needs a Wayland session
+   (X11 is not supported)` to stderr and exit with code 1. GPUI would
+   otherwise start headless and hang with no window.
+3. Read `config.yaml` and `session.json` synchronously (both small). On a
    missing or broken config, use defaults and queue a notice (architecture
    §Key decisions). A missing or broken session means one fresh tab
    (spec 0003). Never write files on the boot path.
-3. Spawn the active tab's PTY(s) at the grid size implied by the saved
-   window size (default 1000×640 logical px) and the font's cell size. Each
-   pane's event loop starts parsing immediately (architecture §Key
-   decisions). The shell boots while the window comes up.
-4. Create the window with its clear color set to the theme background, so
-   there's no white flash. The bundled font is already in memory; no font
-   lookup happens unless `font.family` is configured.
-5. First frame: render the layout and every visible pane's grid.
-6. The first frame that includes PTY output records `rendered` and prints
+4. Spawn the active tab's PTY(s) at the grid size implied by the saved
+   window size (default 1000×640 logical px) and the default font's cell
+   size. Each pane's event loop starts parsing immediately (architecture
+   §Key decisions). The shell boots while GPUI comes up.
+5. Start GPUI's platform and register the embedded default font.
+6. Open the window with the theme background as its clear color, so
+   there's no white flash.
+7. The first frame that includes PTY output records `rendered` and prints
    the report.
-7. Only after step 6, on the next frame, run deferred work: config watcher,
-   OS theme detection, prefetching anything lazy.
+8. Only after step 7 run deferred work: config watcher, OS theme detection.
 
-**Failure paths:** if no Vulkan/DX12 adapter exists, `wgpu` falls back to
-its OpenGL backend and TTFP is still reported. If the PTY spawn fails,
-render the error in the pane and report TTFP at that frame, so the bench
-never hangs.
+**Failure paths:** if the PTY spawn fails, render the error in the pane and
+report TTFP at that frame, so the bench never hangs. If GPUI can't create a
+window or GPU device, print its error to stderr and exit with code 1; no
+software rendering path is promised.
 
 **Bench mode (`--bench-startup`):** the boot pane runs a minimal shell
 command (`sh -c 'echo ready'` / `cmd /c echo ready`) instead of the user's
 shell, so the number measures zed-term, not dotfiles. It prints one JSON
-line with all five marks and exits. `zed-term --bench-startup N` re-spawns
+line with all six marks and exits. `zed-term --bench-startup N` re-spawns
 itself once cold, then N times warm, and prints the median and p90 per
 mark.
 
 ### Startup impact
 
 This spec *is* the startup path. The guard is the dev badge on every run
-plus the bench; there is no bundle to size.
+plus the bench. The largest fixed cost we don't control is GPUI's system
+font scan on Linux, which the `platform` mark makes visible.
 
 ### Platform notes
 
-Linux: Wayland and X11 via `winit`; `wgpu` on Vulkan, OpenGL as fallback.
-Windows: `wgpu` on DX12, ConPTY via `alacritty_terminal`. macOS:
-compile-only.
+Linux: Wayland only; GPUI renders through wgpu on Vulkan. Windows 11:
+DirectX 11, ConPTY via `alacritty_terminal`. macOS: compile-only.
 
 ### Security & privacy
 
@@ -108,13 +111,13 @@ compile-only.
 ## Acceptance criteria
 
 1. A dev run (`cargo run`) shows a TTFP badge in a corner of the window and prints the marks to stdout.
-2. A release build launched with `--bench-startup` prints one JSON line with all five marks and exits with code 0, with no window interaction.
-3. On the owner's Fedora machine, `zed-term --bench-startup 10` reports a warm-start median TTFP under 150 ms. The first (cold) run is reported separately.
+2. A release build launched with `--bench-startup` prints one JSON line with all six marks and exits with code 0, with no window interaction.
+3. On the owner's Fedora machine, `zed-term --bench-startup 10` reports a warm-start median TTFP under 500 ms. The first (cold) run is reported separately.
 4. A broken `config.yaml` (invalid YAML) still boots to a prompt with defaults and shows a notice naming the line.
 5. With networking disabled, startup time and behavior are unchanged, and no request is attempted before the first prompt.
 6. No white flash: the first painted frame is the theme background.
-7. With `WGPU_BACKEND=gl`, the app boots on wgpu's OpenGL backend and still reports TTFP.
-8. The same binary and bench run on Windows and report all five marks.
+7. Started with `WAYLAND_DISPLAY` unset, zed-term prints that it needs a Wayland session and exits with code 1 instead of hanging.
+8. The same binary and bench run on Windows 11 and report all six marks.
 
 ## Open questions
 

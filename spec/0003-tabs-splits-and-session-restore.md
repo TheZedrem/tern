@@ -27,6 +27,7 @@ immediately.
 - Tabs: new, close, reorder (drag), rename, next/prev/go-to-N, title from the shell (OSC 0/2) or the user
 - Splits: split right/down, close pane, resize by dragging a divider, directional focus, zoom (maximize) a pane
 - Session restore: layout, titles and cwd per pane
+- Title bar: on compositors that draw no window frame (GNOME), the tab bar doubles as the title bar
 
 **Out of scope:**
 
@@ -38,7 +39,7 @@ immediately.
 
 ### Affected areas
 
-- `src/layout/` (model, tab bar, split view), `src/session.rs`
+- `src/layout/` (model, tab bar, title bar, split view), `src/session.rs`
 
 ### Model
 
@@ -86,17 +87,24 @@ title, else the profile's display name.
    normal case and leaves no `.bad` file. A corrupt or unknown-version file is renamed
    `session.json.bad` (overwritten on the next occurrence) so the user's
    next save doesn't silently discard it.
+8. **Title bar:** when GPUI reports client-side decorations (the compositor
+   draws no frame), the tab bar becomes the title bar. Dragging its empty
+   area moves the window, double-clicking it toggles maximize, it shows
+   minimize, maximize and close buttons at the end, and the window edges
+   resize. With server-side decorations none of this is drawn.
 
 ### Startup impact
 
-The first frame draws the tab bar and split view; they are plain functions
-over the layout model and cost nothing to initialize. Restore adds one
+The first frame draws the tab bar and split view; they are GPUI views over
+the layout model and cost nothing to initialize. Restore adds one
 small file read and N PTY spawns for the active tab only. The TTFP report
 covers a restored 4-pane tab (spec 0001).
 
 ### Platform notes
 
-None beyond spec 0002.
+GNOME offers no server-side decorations to Wayland clients, so it is where
+the title-bar flow runs; KDE, COSMIC and wlroots compositors draw the
+frame themselves. Windows 11 always draws its own frame.
 
 ### Security & privacy
 
@@ -119,6 +127,7 @@ None beyond spec 0002.
 7. TTFP with a restored 4-pane active tab stays under budget (spec 0001).
 8. `session.json` contains no scrollback, commands or environment variables.
 9. A 5 000-character title set via OSC 2 shows in the tab bar capped at 200 characters, on one line, and the tab bar keeps its layout.
+10. On GNOME, the window moves by dragging the tab bar's empty area, resizes from its edges, and closes from its close button.
 
 ## Open questions
 

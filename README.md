@@ -1,8 +1,9 @@
 # zed-term
 
 A fast terminal emulator with built-in SSH/SFTP and one-click AI coding
-agents. Tabby's feature set, with a prompt in under 150 ms. Pure Rust:
-`egui` for the window, `alacritty_terminal` for the terminal.
+agents. Tabby's feature set, with a prompt in under 500 ms. Pure Rust:
+GPUI, Zed's UI framework, for the window and `alacritty_terminal` for the
+terminal. Runs on Linux (Wayland) and Windows 11.
 
 **Status:** Phase 1 (core terminal) is specified; the native implementation
 starts with T-010. A Tauri/WebKitGTK version was built and measured first

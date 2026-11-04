@@ -38,15 +38,16 @@ verdict.
 ## Rust
 
 - `cargo fmt` and `cargo clippy --all-targets -- -D warnings` clean.
-- Modules are plain Rust that is testable without a window; `egui` code is
-  a thin layer that reads state and emits commands.
+- Modules are plain Rust that is testable without a window; GPUI views are
+  a thin layer that reads state and dispatches actions.
 - No `unwrap`/`expect` outside tests, except on the boot path where the
   alternative is "cannot run at all" (e.g. no window). Everything else
   returns `Result<T, String>` with a message a user can read.
 - The UI thread never blocks: file IO and PTY writes go to threads or the
   pane's event loop.
-- Enums over string IDs. A command, a theme name that we define, a profile
-  type: all enums; serde maps them to the strings in `config.yaml`.
+- Types over string IDs. A command is a GPUI action type; a theme name we
+  define and a profile type are enums. serde maps them to the strings in
+  `config.yaml`.
 
 ## CI
 

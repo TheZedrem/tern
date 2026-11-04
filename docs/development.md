@@ -8,11 +8,12 @@ How to get a working dev setup. Day-to-day commands are in
 - Rust (stable, edition 2024) with `rustfmt` and `clippy`
   - **Fedora:** `sudo dnf install rust cargo rustfmt clippy`
   - elsewhere: `rustup component add rustfmt clippy`
-- Linux build dependencies for `winit`/`wgpu`:
-  - **Fedora:** `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXcursor-devel libXrandr-devel libXi-devel mesa-vulkan-drivers`
-  - **Debian/Ubuntu:** `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev mesa-vulkan-drivers`
-- **Windows:** the MSVC toolchain (Visual Studio Build Tools). ConPTY needs
-  Windows 10 1809 or newer.
+- **Linux:** a Wayland session (X11 is not supported) and a Vulkan driver.
+  The build links only `libxkbcommon`; the Wayland client and the Vulkan
+  loader are loaded at runtime.
+  - **Fedora:** `sudo dnf install libxkbcommon-devel vulkan-loader mesa-vulkan-drivers`
+  - **Debian/Ubuntu:** `sudo apt install libxkbcommon-dev libvulkan1 mesa-vulkan-drivers`
+- **Windows 11:** the MSVC toolchain (Visual Studio Build Tools).
 - **macOS:** Xcode Command Line Tools (compile-only platform).
 
 ## First run

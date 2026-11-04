@@ -40,9 +40,10 @@ Delete a subsection only when it genuinely has nothing to say (e.g. no IPC).
 - **Startup impact is mandatory.** State what the feature adds to the boot
   path. The normal answer is "nothing, initialized on first use or after
   the first frame". Anything else needs a TTFP measurement and the owner's OK.
-- **Platform notes are mandatory.** Linux and Windows must both work, so name
-  their differences (ConPTY, paths, keys, Wayland/X11, GPU backend). macOS
-  only needs to compile.
+- **Platform notes are mandatory.** Linux (Wayland) and Windows 11 must both
+  work, so name their differences (ConPTY, paths, keys, compositor
+  decorations, GPU backend). macOS only needs to compile. Never add a code
+  path for X11, XWayland or Windows 10.
 - **Security & privacy:** list what gets stored, where, and for how long
   (or "nothing stored"), and which trust boundary from `architecture.md`
   §Security the feature crosses (or "none"). Check it against the ground

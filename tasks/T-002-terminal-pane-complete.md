@@ -4,7 +4,8 @@ blocked-by: [T-010]
 ---
 # T-002: Finish the terminal pane
 
-Mouse selection and clipboard, copy-on-select option, scrollback
+Mouse selection and clipboard (with the primary selection and middle-click
+paste on Linux), copy-on-select option, scrollback
 navigation, inline search bar, OSC 8 and detected links, exit handling per
 `close_on_exit`, cwd tracking (OSC 7 + `/proc` fallback) with the opt-in
 bash/zsh/pwsh snippets under `shell-integration/` (OQ-008), IME input, and

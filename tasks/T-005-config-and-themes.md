@@ -6,8 +6,8 @@ blocked-by: [T-004]
 
 `config.yaml` with per-key fallback and notices, `local` profiles with
 `default_profile` and palette entries, built-in, file and inline themes
-(partial themes via `base`) resolved at load, bundled default font with
-`font.family` lookup via `font-kit`, "Open config file", watcher after the
+(partial themes via `base`) resolved at load, `font.family` by exact
+installed name with Lilex as the fallback, "Open config file", watcher after the
 first frame, palette theme picker with live preview and a
 comment-preserving write. Area: src.
 

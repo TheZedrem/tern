@@ -2,18 +2,19 @@
 status: now
 blocked-by: []
 ---
-# T-010: Native scaffold and boot to a measured prompt
+# T-010: GPUI scaffold and boot to a measured prompt
 
-Replace the removed Tauri app with the native stack from
-`spec/architecture.md`: `eframe`/`egui` window, one pane driven by
-`alacritty_terminal` (its `tty` + `event_loop`), a grid widget that renders
-the visible grid with egui's built-in Hack font, key input to the PTY with
-eframe's clipboard shortcuts off (architecture §Key decisions), resize,
-exit handling, and the config read on the boot path. Ship the TTFP
-machinery: dev badge, stdout marks, `--bench-startup [N]` self-spawning
-bench. Record the first native TTFP numbers (Linux) in the task summary
-against the 150 ms budget; the throwaway spike on `spike/native-ttfp`
-measured 68 ms with a bare window. Area: src.
+Replace the removed Tauri app with the stack from `spec/architecture.md`:
+`gpui-pre` plus `gpui-pre-platform` with only its `wayland` feature, the
+Wayland check before GPUI starts, Lilex embedded and registered as the
+default font, one pane driven by `alacritty_terminal` (its `tty` +
+`event_loop`), a terminal element that shapes the visible rows, key input
+to the PTY, resize, exit handling, and the config read on the boot path.
+Ship the TTFP machinery: dev badge, stdout marks (six, including
+`platform`), `--bench-startup [N]` self-spawning bench. Record the first
+TTFP numbers (Linux) in the task summary against the 500 ms budget. The
+throwaway spike on `spike/gpui-ttfp` measured 333 ms warm (811 ms cold)
+with a bare GPUI window. Area: src.
 
 Keep `config.rs`, `theme.rs` and `timing.rs` from the Tauri version; they
 were never webview-specific.

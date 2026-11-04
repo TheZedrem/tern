@@ -11,9 +11,8 @@ zed-term is a desktop terminal emulator with built-in SSH/SFTP and one-click
 AI coding agents (Claude Code, Hermes Agent, …) — Tabby's feature set, minus
 Tabby's boot time. It is for developers who live in terminals and remote
 hosts and are tired of waiting for Electron. The constraint that shapes
-everything: **a usable shell prompt in under 150 ms** from launch, the way a
-native terminal feels. It is a local, single-user app: no accounts, no
-backend, no telemetry.
+everything: **a usable shell prompt in under 500 ms** from launch. It is a
+local, single-user app: no accounts, no backend, no telemetry.
 
 ## Roadmap
 
@@ -29,24 +28,33 @@ row until they start.
 
 ## Platforms
 
-Linux and Windows are **required**: every feature ships working on both.
-macOS is **compile-only**: keep the code building there, with no CI builds,
-no signing, and no blocking on it.
+**Modern platforms only [load-bearing].** zed-term takes no dependency on
+deprecated or end-of-life technology. That rules out X11 and XWayland on
+Linux and Windows 10, and it rules out adding a dependency just to keep one
+of them alive.
+
+| Platform | Support | Notes |
+|---|---|---|
+| Linux, Wayland session | Required | Any compositor with `xdg-shell`. Needs a Vulkan driver (Mesa or NVIDIA) |
+| Windows 11 | Required | DirectX 11, ConPTY |
+| macOS | Compile-only | No CI builds, no signing, no blocking on it |
+| X11 or XWayland sessions, Windows 10 and older | Not supported | In an X11 session zed-term exits with a clear message (spec 0001) |
 
 ## Stack
 
-Pure Rust, one process, one binary. No webview: the Tauri + WebKitGTK
-version measured ~1.07 s to first prompt on the reference machine, of which
-~800 ms was the webview; a native window measured 68 ms (OQ-009, OQ-010).
+Pure Rust, one process, one binary, on Zed's UI framework. On the reference
+machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
+(OQ-009), a bare native window 68 ms (OQ-010), and GPUI 333 ms warm
+(OQ-013).
 
 | Layer | Choice | Why |
 |---|---|---|
 | Language | Rust (edition 2024), single crate at the repo root | One language, one build, no bundler and no IPC |
-| Window + UI | `eframe` / `egui` (immediate mode) with the `wgpu` backend | Smallest API that gives a window, input, IME, clipboard and simple widgets on Linux and Windows; boots in tens of ms. `wgpu` uses Vulkan/DX12 and falls back to its own OpenGL backend by default. If `wgpu` device creation costs > 50 ms of boot on the reference machine, T-010 switches eframe to its `glow` renderer: measured, not assumed |
-| Terminal state | `alacritty_terminal` | The VT parser, grid, scrollback, selection, search and OSC handling behind Alacritty and Zed; we don't write a VT parser |
-| PTY | `alacritty_terminal::tty` + its `event_loop` | Spawns the shell (Unix PTY, ConPTY on Windows) and reads/parses on its own thread; rendering reads the bounded grid, so a flood can't grow memory |
-| Terminal rendering | Our own `egui` widget: background rects, then runs of same-style cells painted at their grid positions; wide and fallback glyphs are placed per cell so the grid never drifts | Simplest thing that renders a grid; egui caches text layout by content. A glyph-atlas mesh is the fallback if a full-screen `cat` at 4K drops frames |
-| Fonts | egui's built-in Hack (monospace) with its Noto Emoji fallback, already in the binary; `font.family` from config resolved via `font-kit` (fontconfig / DirectWrite) | Boot never scans font directories; a system font costs one cached query, only when configured |
+| Window, UI, rendering | GPUI, Zed's GPU UI framework, as the exact-pinned `gpui-pre` snapshot of Zed's main branch plus `gpui-pre-platform` built with only its `wayland` feature | Owner's choice: the stack Zed ships. GPU text and layout, IME, clipboard, accessibility, actions and key contexts come with it. It renders through wgpu on Vulkan on Linux, and DirectX 11 with DirectWrite on Windows. The official `gpui` crate (0.2.2, 2025-10) no longer compiles against current dependencies, so the weekly snapshot is the maintained channel |
+| Terminal state | `alacritty_terminal` | The VT parser, grid, scrollback, selection, search and OSC handling behind Alacritty and Zed's terminal; we don't write a VT parser |
+| PTY | `alacritty_terminal::tty` + its `event_loop` | Spawns the shell (Unix PTY, ConPTY on Windows) and reads and parses on its own thread; the grid is bounded by scrollback, so a flood can't grow memory |
+| Terminal rendering | Our own GPUI element: each visible row shaped once as styled runs at the cell width; cell backgrounds, cursor and selection as quads | How Zed's terminal works. Zed's terminal code is GPL, so it is a design reference only; `gpui-terminal` (MIT/Apache) may be reused with attribution |
+| Fonts | Lilex (Zed's monospace, OFL) embedded and registered at boot as the default; `font.family` names any installed font | GPUI resolves exact family names only, and falls back per glyph to installed fonts for CJK and emoji |
 | Config format | YAML, parsed with `serde-saphyr` | Owner's choice. Pure Rust, never panics while parsing, maintained (`serde_yaml` is archived) |
 | SSH (Phase 2) | System `ssh` binary spawned in a PTY | Owner's choice. Uses the user's `~/.ssh/config`, ProxyJump, agent, FIDO keys and known_hosts, with no crypto code of our own |
 | SFTP (Phase 2) | `ssh -s <host> sftp`, with the `russh-sftp` client speaking SFTP over its stdio | Same ssh config, agent, keys and known_hosts as terminal sessions; no SSH code of our own |
@@ -59,45 +67,49 @@ version measured ~1.07 s to first prompt on the reference machine, of which
 One crate. `src/main.rs` is the boot path and does only what the first
 frame needs. Everything else is a module under `src/`:
 
-- `terminal/` — the pane: PTY lifecycle, grid widget, input mapping, search
-- `layout/` — tabs, split tree, session restore
-- `commands/` — command registry, keymap, palette
+- `terminal/` — the pane: PTY lifecycle, terminal element, input mapping, search
+- `layout/` — tabs, title bar, split tree, session restore
+- `commands/` — actions, keymap, palette
 - `config.rs`, `theme.rs`, `session.rs` — files on disk
 - `timing.rs` — TTFP marks and the bench
 
-Modules are plain Rust that is testable without a window; the `egui`
-widgets are thin over them.
+Modules are plain Rust that is testable without a window; GPUI views are a
+thin layer over them.
 
 ## Key decisions and their costs
 
 Load-bearing rules that code elsewhere depends on, plus the price we knowingly pay.
 
+- **GPUI's Wayland backend is opt-in [load-bearing].** `gpui-pre-platform`
+  ships with no windowing backend. Without its `wayland` feature GPUI
+  compiles fine and then runs headless: no window, no error. We enable
+  exactly `wayland`, and boot refuses to start GPUI without a Wayland
+  session. *Cost:* none, as long as nobody "simplifies" the feature list.
+- **GPUI is pinned exactly and bumped on purpose.** `gpui-pre` is a weekly
+  snapshot of Zed's main branch published by the author of
+  `gpui-component`, not by Zed. A bump is its own commit with a TTFP
+  measurement and a look at the Zed commits it pulls in.
+  *Cost:* API churn arrives in bulk at each bump, and one third-party
+  publisher sits in the supply chain.
 - **The UI thread never waits for a PTY.** Each pane's `alacritty_terminal`
-  event loop runs on its own thread and owns the PTY. The grid sits behind
-  alacritty's fair mutex; the UI thread locks it only to render a frame and
-  to hand over input. A PTY started before the window exists just keeps
-  parsing; the first frame renders whatever has arrived.
-  *Cost:* rendering is a snapshot. Output that arrives between frames is
-  only seen on the next repaint, which the event loop requests.
-- **Immediate mode.** `egui` rebuilds the UI every frame from state, and
-  repaints only on input or when a PTY asks. There is no retained widget
-  tree, so tabs, splits and the palette are plain functions over the layout
-  model. *Cost:* every frame re-lays-out the visible rows; cheap for a
-  terminal, but keep per-frame work bounded by what is visible.
-- **Clipboard keys belong to us, not the toolkit [load-bearing].** eframe's
-  built-in clipboard shortcuts are switched off, because they turn plain
-  `Ctrl+C`/`Ctrl+X`/`Ctrl+V` into copy/cut/paste before the shell sees
-  them. Copy and paste are our own commands (spec 0004) and go through
-  egui's clipboard requests, so no extra crate is needed.
-  *Cost:* text fields (palette, search) get those keys wired by hand.
-- **The font on the boot path is already in memory.** The default is egui's
-  built-in Hack, so the first frame needs no font lookup. *Cost:* Hack is
-  the default look, and a configured family adds one system query.
-- **Window decorations come from `winit`.** Server-side where the
-  compositor offers them (KDE, COSMIC, Windows), `winit`'s own minimal
-  frame otherwise (GNOME). No desktop theme engine is ever loaded.
-  *Cost:* no custom title bar in Phase 1, and the frame won't match the
-  GTK theme on GNOME.
+  event loop runs on its own thread and owns the PTY. Its wakeups reach the
+  pane's GPUI entity through a channel and `notify`, so GPUI redraws only
+  that view, only when something changed. The grid lock is held just long
+  enough to snapshot the visible rows. *Cost:* output that arrives between
+  frames shows on the next frame.
+- **Keys go to the shell unless an action claims them [load-bearing].** App
+  shortcuts are GPUI actions bound in key contexts (workspace, palette,
+  search). The terminal's context binds no plain `Ctrl`/`Alt` letters, so
+  `Ctrl+C`, `Ctrl+V` and `Ctrl+R` reach the shell (spec 0004).
+- **System fonts load at boot on Linux.** GPUI scans the installed fonts
+  when its platform starts: ~21 ms warm and ~135 ms cold on the reference
+  machine. Accepted, because the same scan gives per-glyph fallback.
+  *Cost:* a machine with thousands of fonts boots slower; it is measured by
+  the `platform` mark, not guarded.
+- **Window decorations follow the compositor.** Where the compositor offers
+  server-side decorations (KDE, COSMIC, wlroots-based), it draws the frame.
+  GNOME doesn't, so there the tab bar doubles as the title bar (spec 0003).
+  Windows draws its own frame. *Cost:* we own a minimal title bar.
 - **A broken config never blocks boot.** Fall back to defaults and show the
   parse error with its line number. YAML's implicit typing (`no` → false) is
   contained by typed serde structs.
@@ -105,7 +117,7 @@ Load-bearing rules that code elsewhere depends on, plus the price we knowingly p
   "connected", "auth failed" and password prompts must be inferred from the
   PTY output or the exit code. Stored passwords reach `ssh` via
   `SSH_ASKPASS` (our binary as the askpass helper), never by typing into the
-  PTY. Requires an `ssh` binary (shipped with Windows 10+, but it can be
+  PTY. Requires an `ssh` binary (shipped with Windows 11, but it can be
   disabled).
 
 ## Data stores
@@ -126,12 +138,12 @@ disk — it can contain secrets the user typed or printed.
 
 ## Cross-cutting rules
 
-- **Startup budget (load-bearing).** Time-to-first-prompt (TTFP) < 150 ms
+- **Startup budget (load-bearing).** Time-to-first-prompt (TTFP) < 500 ms
   warm median on a release build on the reference machine. The boot path
-  is: `main` → read config and session → spawn the active tab's PTYs →
-  create the window → first frame with output. Everything else happens
-  after that frame. Full rules and measurement in
-  [spec 0001](0001-startup-performance.md).
+  is: `main` → check for Wayland → read config and session → spawn the
+  active tab's PTYs → start GPUI → open the window → first frame with
+  output. Everything else happens after that frame. Full rules and
+  measurement in [spec 0001](0001-startup-performance.md).
 - **Lazy by default.** A feature that is not needed for the first frame is
   initialized on first use or after the first frame — never before it.
   "It's only a few ms" is how boot paths rot.

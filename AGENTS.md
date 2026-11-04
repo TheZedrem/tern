@@ -8,15 +8,15 @@ represented in `tasks/`. Read this file fully before your first task.
 
 A desktop terminal emulator with built-in SSH/SFTP and one-click AI coding
 agents. Think Tabby's feature set with the boot time of a native terminal.
-It's pure Rust: `egui` for the window and chrome, `alacritty_terminal` for
-the terminal itself, for developers who open a terminal fifty times a day
-and notice every 10 ms.
+It's pure Rust on GPUI, Zed's GPU UI framework, with `alacritty_terminal`
+for the terminal itself, for developers who open a terminal fifty times a
+day and notice every 100 ms.
 
 ## What we can never compromise on
 
-- **A prompt in under 150 ms.** Slow boot is why this product exists. A
-  native spike measured 68 ms; a webview version measured 1.07 s and was
-  dropped (OQ-010). Every feature that isn't the first frame initializes
+- **A prompt in under 500 ms.** Slow boot is why this product exists. A
+  GPUI spike measured 333 ms warm; a webview version measured 1.07 s and
+  was dropped (OQ-010, OQ-013). Every feature that isn't the first frame initializes
   after it. The boot path is defined in
   [spec 0001](spec/0001-startup-performance.md), and adding anything to it
   requires a TTFP measurement in the commit.
@@ -26,40 +26,46 @@ and notice every 10 ms.
 - **Nothing leaves the machine unless the user starts it.** No telemetry, no
   network at startup, no CDNs. Secrets go only in the OS keychain.
   Scrollback is never written to disk.
-- **Linux and Windows both work, always.** A feature that only works on the
-  dev's own OS isn't done. macOS only needs to compile.
+- **Modern platforms only, and every one of them works.** Linux means
+  Wayland and Windows means Windows 11. X11, XWayland and Windows 10 are not
+  supported, and we take no dependency on deprecated or end-of-life
+  technology. A feature that only works on the dev's own OS isn't done.
+  macOS only needs to compile.
 
 ## Owner's note
 
 Simple beats clever: the simplest design that meets the budget wins, and a
 design that needs a paragraph to justify itself is the wrong one. YAGNI
-unless a spec says otherwise. Types do the heavy lifting: enums over
-stringly-typed IDs, inferred types over annotations. Tests are focused on
-behavior, not smoke for its own sake. Comments explain *why* at function
-and module level, and stay in sync with the code. These are good defaults.
-If one fights the task, say so and ask.
+unless a spec says otherwise. Types do the heavy lifting: enums and action
+types over stringly-typed IDs, inferred types over annotations. Tests are
+focused on behavior, not smoke for its own sake. Comments explain *why* at
+function and module level, and stay in sync with the code. These are good
+defaults. If one fights the task, say so and ask.
 
 ## The ways to hurt this project (worst first)
 
-1. **Work before the first frame.** Anything `main.rs` does before
-   `eframe::run_native` presents a frame is on every launch. Font database
-   scans, theme engines, watchers, network: all after the first frame.
-   The dev badge shows the TTFP of every run; watch it.
-2. **Blocking the UI thread.** The `egui` update loop is the UI thread.
-   File IO, PTY writes and anything that can wait go to a thread; the
-   update function only locks a pane's grid long enough to draw it.
+1. **Work before the first frame.** Anything `main.rs` does before the
+   window's first frame is on every launch. Watchers, theme detection,
+   network, extra font loading: all after the first frame. The dev badge
+   shows the TTFP of every run; watch it.
+2. **Blocking the UI thread.** GPUI's foreground thread runs every view
+   update and render. File IO, PTY writes and anything that can wait go to
+   the background executor or a thread; a render only locks a pane's grid
+   long enough to snapshot the visible rows.
 3. **Killing the wrong process.** Never `pkill zed-term` / `pkill -f`. The
    owner may be daily-driving a zed-term build, and that kills every shell
    they have open. Kill only a PID you captured at spawn.
 4. **Logging terminal bytes.** PTY output carries passwords, tokens and
    private data. Never log it, even at debug level, and never persist it.
-5. **Per-frame work that scales with scrollback.** Immediate mode redraws
-   every frame. Only visible rows are laid out; never iterate the whole
-   grid or re-layout unchanged rows.
-6. **Holding the grid lock across a frame.** `alacritty_terminal`'s event
-   loop thread needs the lock to parse. Snapshot what the frame needs,
-   release, draw.
-7. **ConPTY is not a Unix PTY.** Windows rewrites output and redraws on
+5. **Dropping GPUI's `wayland` feature.** `gpui-pre-platform` builds fine
+   without it and then runs headless: no window, no error. The feature list
+   in `Cargo.toml` is load-bearing.
+6. **Per-frame work that scales with scrollback.** Only visible rows are
+   shaped; never iterate the whole grid or re-shape unchanged rows.
+7. **Bumping GPUI in passing.** `gpui-pre` is exact-pinned and its API
+   churns weekly. A bump is its own commit with a TTFP measurement
+   (architecture §Key decisions).
+8. **ConPTY is not a Unix PTY.** Windows rewrites output and redraws on
    resize. Resize, cursor and exit behavior must be checked on Windows, not
    inferred from Linux.
 
@@ -78,12 +84,13 @@ Report the TTFP the badge shows whenever you touched the boot path.
 
 ## Architecture in one paragraph
 
-One Rust binary. `src/main.rs` is the boot path: read config and session,
-spawn the active tab's PTYs, open the window, draw. `alacritty_terminal`
-owns each pane's PTY and VT state on its own thread; `egui` draws the grid,
-tabs, splits and palette every frame from plain Rust state. The stack and
-every decision live in [`spec/architecture.md`](spec/architecture.md).
-Don't restate them elsewhere; link.
+One Rust binary. `src/main.rs` is the boot path: check for Wayland, read
+config and session, spawn the active tab's PTYs, start GPUI, open the
+window. `alacritty_terminal` owns each pane's PTY and VT state on its own
+thread; GPUI views draw the grid, tabs, splits and palette, and redraw only
+when notified. The stack and every decision live in
+[`spec/architecture.md`](spec/architecture.md). Don't restate them
+elsewhere; link.
 
 | Path | What it is |
 |---|---|
@@ -141,7 +148,8 @@ and say so in the summary.
   `// TODO(OQ-nnn)` at the site, and keep moving.
 - **Stop and ask** before: new crates, anything added to the boot path,
   outbound network calls, writing outside the app's config/data dirs, and
-  history rewrites.
+  history rewrites. A crate that exists to support a deprecated platform
+  is a no without asking.
 - Bugs you find but don't fix: file a `type: bug` task.
 
 ## Ground rules (binding)
@@ -153,7 +161,7 @@ Each spec's **Security & privacy** section says which of them it touches.
 
 ## Definition of Done
 
-- Implemented per the spec, on Linux, with Windows behavior considered (and checked when the task touches PTY, keys or paths).
+- Implemented per the spec on Linux (Wayland), with Windows 11 behavior considered (and checked when the task touches PTY, keys or paths).
 - Tests written and passing; `cargo fmt`, `clippy` and `cargo test` green.
 - TTFP reported if the boot path was touched.
 - Docs and specs updated where reality diverged, and the backlog updated.
