@@ -108,7 +108,8 @@ theme:
   embedded in the binary and registered with GPUI's text system at boot. A
   named family must match an installed font's exact name, because GPUI has
   no generic names like `monospace`. If it isn't found, Lilex is used with
-  a notice.
+  a notice. `font.size` is clamped to 4–200 and `font.line_height` to
+  0.5–4, so a nonsense value can't size the grid at billions of cells.
 - **`system`** **[load-bearing]**: boot always renders `dark`, with no OS
   query on the boot path. After the first frame, the app reads the OS
   light/dark setting. If it's light, every pane using the default theme and

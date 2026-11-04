@@ -1,33 +1,58 @@
 //! Time-to-first-prompt marks (spec 0001). Every mark is a duration since
 //! `main()` entry, recorded once; later calls for the same mark are ignored,
-//! so a dev reload can't overwrite the boot numbers.
+//! so nothing after boot can overwrite the boot numbers.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 pub enum Mark {
+    /// Config (and later session) read.
     Config,
+    /// Active tab's PTYs spawned.
     Pty,
+    /// GPUI platform up: Wayland connection and system fonts.
+    Platform,
+    /// Window and GPU device created.
     Window,
+    /// First PTY output parsed.
     FirstByte,
+    /// First frame with output drawn.
     Rendered,
 }
 
+const MARKS: usize = 6;
+
 pub struct Timing {
     start: Instant,
-    marks: [OnceLock<Duration>; 5],
+    marks: [OnceLock<Duration>; MARKS],
 }
 
 /// Milliseconds since `main()` per mark; `None` if the mark was never reached.
-#[derive(Serialize, Clone, Debug, PartialEq)]
+/// Printed as one JSON line, which the bench runner parses back.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct TtfpReport {
     pub config: Option<f64>,
     pub pty: Option<f64>,
+    pub platform: Option<f64>,
     pub window: Option<f64>,
     pub first_byte: Option<f64>,
     pub rendered: Option<f64>,
+}
+
+impl TtfpReport {
+    /// Mark names and values in boot order, for printing tables.
+    pub fn marks(&self) -> [(&'static str, Option<f64>); MARKS] {
+        [
+            ("config", self.config),
+            ("pty", self.pty),
+            ("platform", self.platform),
+            ("window", self.window),
+            ("first_byte", self.first_byte),
+            ("rendered", self.rendered),
+        ]
+    }
 }
 
 impl Timing {
@@ -52,6 +77,7 @@ impl Timing {
         TtfpReport {
             config: ms(Mark::Config),
             pty: ms(Mark::Pty),
+            platform: ms(Mark::Platform),
             window: ms(Mark::Window),
             first_byte: ms(Mark::FirstByte),
             rendered: ms(Mark::Rendered),
@@ -69,7 +95,7 @@ mod tests {
         assert!(timing.mark(Mark::Pty));
         let first = timing.report().pty.expect("pty mark reached");
 
-        // A second call (dev reload) is ignored and keeps the first value.
+        // A second call is ignored and keeps the first value.
         assert!(!timing.mark(Mark::Pty));
         assert_eq!(timing.report().pty, Some(first));
 

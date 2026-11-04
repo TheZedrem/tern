@@ -1,6 +1,6 @@
 ---
 status: next
-blocked-by: [T-010]
+blocked-by: []
 ---
 # T-003: Tabs and split panes
 

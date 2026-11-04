@@ -27,6 +27,12 @@ The TTFP badge in the window corner is the startup time of this run. See
 use `cargo build --release && target/release/zed-term --bench-startup 10`
 for numbers you can compare.
 
+## Tests
+
+`cargo test` runs everything that needs no window. `cargo test -- --ignored`
+adds the live startup test, which opens a real window and needs a Wayland
+session.
+
 ## Where things are written at runtime
 
 | File | Path (Linux / Windows) |

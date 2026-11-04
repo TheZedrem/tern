@@ -4,10 +4,16 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# The UI stack (eframe/egui, alacritty_terminal) lands with T-010; see
-# spec/architecture.md §Stack.
-
 [dependencies]
+# GPUI and its widgets are pinned exactly and bumped together, in their own
+# commit with a TTFP measurement (spec/architecture.md §Key decisions).
+gpui = { package = "gpui-pre", version = "=0.3.11" }
+# Wayland only. Without this feature GPUI builds fine and runs headless.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["wayland"] }
+gpui-component = "=0.9.0"
+gpui-kit-assets = "=0.9.0"
+alacritty_terminal = "0.26"
+futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde-saphyr = "2"

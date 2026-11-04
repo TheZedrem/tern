@@ -4,10 +4,10 @@
 //! defaults plus a notice naming the line. Per-key fallback, profiles and
 //! hot reload arrive with T-005.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Config {
     pub font: Font,
@@ -15,7 +15,7 @@ pub struct Config {
     pub close_on_exit: CloseOnExit,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Font {
     /// `None` means the font bundled in the binary (spec 0005).
@@ -24,7 +24,7 @@ pub struct Font {
     pub line_height: f64,
 }
 
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CloseOnExit {
     Always,
@@ -75,7 +75,9 @@ pub fn load(path: &Path) -> Loaded {
         },
         Err(e) => Loaded {
             config: Config::default(),
-            notices: vec![format!("config.yaml could not be read ({e}); using defaults")],
+            notices: vec![format!(
+                "config.yaml could not be read ({e}); using defaults"
+            )],
         },
     }
 }

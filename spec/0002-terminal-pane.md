@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-010, T-002]
+tasks: [T-010, T-011, T-002]
 related: [spec 0005, OQ-003 ✅, OQ-008 ✅, OQ-011 ✅]
 ---
 
@@ -55,7 +55,8 @@ mapping from keys to bytes. Pane IDs are `u32`, unique per app run.
   started as a login shell) or, on Windows, the first one found of `pwsh`,
   `powershell.exe`, `cmd.exe`.
 - **Environment:** inherit, then the profile's `env`, plus `TERM=xterm-256color`,
-  `COLORTERM=truecolor`, `TERM_PROGRAM=zed-term`.
+  `COLORTERM=truecolor`, `TERM_PROGRAM=zed-term`. `alacritty_terminal`
+  also sets `WINDOWID` and `ALACRITTY_WINDOW_ID`.
 - **cwd:** explicit, else the home directory. Tracked live from OSC 7 (an
   `alacritty_terminal` event), with a fallback to `/proc/<pid>/cwd` on Linux;
   unknown on Windows without OSC 7. The app ships opt-in shell-integration

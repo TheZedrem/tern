@@ -72,7 +72,7 @@ frame needs. Everything else is a module under `src/`:
 - `layout/` — tabs, title bar, split tree, session restore
 - `commands/` — actions, keymap, palette
 - `config.rs`, `theme.rs`, `session.rs` — files on disk
-- `timing.rs` — TTFP marks and the bench
+- `timing.rs`, `bench.rs` — TTFP marks and the `--bench-startup` runner
 
 Modules are plain Rust that is testable without a window; GPUI views are a
 thin layer over them.
@@ -107,6 +107,9 @@ Load-bearing rules that code elsewhere depends on, plus the price we knowingly p
   shortcuts are GPUI actions bound in key contexts (workspace, palette,
   search). The terminal's context binds no plain `Ctrl`/`Alt` letters, so
   `Ctrl+C`, `Ctrl+V` and `Ctrl+R` reach the shell (spec 0004).
+  `gpui-component`'s `Root` binds `tab`, `shift-tab` and `ctrl-c` above
+  every pane; the terminal's context unbinds them with GPUI's `NoAction`,
+  and every library bump re-checks `Root`'s bindings.
 - **System fonts load at boot on Linux.** GPUI scans the installed fonts
   when its platform starts: ~21 ms warm and ~135 ms cold on the reference
   machine. Accepted, because the same scan gives per-glyph fallback.
@@ -158,7 +161,8 @@ disk — it can contain secrets the user typed or printed.
   modal at boot.
 - **Notices.** Non-fatal problems (broken config, skipped profile, bad
   keybinding, failed write) become notices: plain-text toasts stacked in
-  the window's bottom-right corner, dismissed by click or after 10 s. Boot
+  the window's bottom-right corner, dismissed by click or after 5 s (the
+  widget library's fixed timeout). Boot
   notices are collected before the window exists and shown on the first
   frame. A notice never takes keyboard focus from the pane.
 - **ACP readiness (Phase 4).** A pane's content source is an abstraction

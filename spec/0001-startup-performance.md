@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-010]
+tasks: [T-010, T-011]
 related: [OQ-005 ✅, OQ-009 ✅, OQ-010 ✅, OQ-012 ✅, OQ-013 ✅]
 ---
 
