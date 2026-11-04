@@ -66,4 +66,5 @@ pub fn apply_to_widgets(theme: &Theme, cx: &mut App) {
     colors.tab_active = background;
     colors.tab_active_foreground = foreground;
     colors.title_bar = raised;
+    colors.drag_border = hsla(theme.cursor);
 }

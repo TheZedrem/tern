@@ -58,20 +58,24 @@ focused inputs. The terminal's own context binds nothing that a shell needs.
 | Connect to host (spec 0006) | `Ctrl+Shift+H` |
 | New tab / close pane | `Ctrl+Shift+T` / `Ctrl+Shift+W` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
-| Go to tab 1–9 | `Ctrl+Shift+1` … `Ctrl+Shift+9` |
+| Go to tab 1–9 | `Alt+1` … `Alt+9` (macOS: `Cmd+1` … `Cmd+9`) |
 | Split right / down | `Ctrl+Shift+D` / `Ctrl+Shift+E` |
 | Focus pane | `Alt+←↑→↓` |
 | Zoom pane | `Ctrl+Shift+Z` |
 | Copy / paste / search | `Ctrl+Shift+C` / `Ctrl+Shift+V` / `Ctrl+Shift+F` |
-| Font size + / − / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` |
+| Font size + / − / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` (OQ-015) |
 
 **[load-bearing]** Defaults never bind `Ctrl` or `Alt` plus a letter, digit
 or punctuation key without `Shift`, because those belong to the shell and
 to readline/emacs/vim (`Ctrl+R`, `Alt+B`, `Alt+3` digit argument, `Ctrl+-`
-undo). The user may override this in config.
+undo). The user may override this in config. The one exception is
+go-to-tab on `Alt+1`–`9`, which takes readline's digit argument (OQ-014).
 
-Digit shortcuts must not depend on the keyboard layout: `Ctrl+Shift+1`
-works even where `Shift+1` types `!` or another symbol.
+Digit shortcuts must not depend on the keyboard layout. GPUI on Linux
+reports Shift plus a digit as the symbol the layout types there
+(`Ctrl+Shift+2` arrives as `Ctrl+"` on a German layout), so no
+`Ctrl+Shift+digit` binding can match. `Alt+digit` matches the digit as
+typed, on layouts that type digits with Shift (French) too.
 
 ### Flows
 
@@ -97,8 +101,8 @@ most). The palette's entry list and matcher state are built on first open.
 ### Platform notes
 
 Windows 11: `Alt` combinations can collide with window-menu accelerators, so
-verify `Alt+arrows` there. Non-US layouts (German, French) put symbols on
-`Shift+digit`; check `Ctrl+Shift+1` on one. macOS: `Cmd` variants only.
+verify `Alt+arrows` and `Alt+digits` there. Non-US layouts (German, French)
+put symbols on `Shift+digit`; check `Alt+1` on one. macOS: `Cmd` variants only.
 
 ### Security & privacy
 
@@ -113,7 +117,7 @@ verify `Alt+arrows` there. Non-US layouts (German, French) put symbols on
 3. Rebinding `pane.splitRight` to `Alt+Shift+D` in config works after hot reload, and the old key goes to the shell.
 4. A binding for unknown command `tab.explode` produces a notice, and all other bindings still work.
 5. With default config, `Ctrl+R` in bash reaches readline (reverse search), `Alt+B` moves back a word, and `Ctrl+-` undoes the last edit.
-6. On a German keyboard layout, `Ctrl+Shift+2` goes to tab 2.
+6. On a German keyboard layout, `Alt+2` goes to tab 2.
 7. Every Phase 1 action from specs 0002/0003/0005 appears in the palette.
 
 ## Open questions

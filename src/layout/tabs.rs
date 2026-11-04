@@ -433,7 +433,7 @@ mod tests {
         let (mut tabs, _) = Tabs::new();
         tabs.new_tab();
         tabs.activate(0);
-        // Ctrl+Shift+9 with two tabs.
+        // Alt+9 with two tabs.
         tabs.activate(8);
         assert_eq!(tabs.active_index(), 0);
     }

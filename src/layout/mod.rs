@@ -25,8 +25,9 @@ use gpui_component::tab::{Tab, TabBar};
 // Component icons only: `gpui_kit_assets::IconName` names the whole Lucide
 // catalog, but the registered `Assets` bundle holds just these, and anything
 // else renders blank.
-use gpui_component::{IconName, Sizable, WindowExt, window_border};
+use gpui_component::{ActiveTheme, IconName, Sizable, WindowExt, window_border};
 use std::cell::Cell;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -81,6 +82,23 @@ macro_rules! shortcut {
     };
 }
 
+/// A go-to-tab digit: `Alt` on Linux and Windows, `Cmd` on macOS. Not
+/// `Ctrl+Shift`: GPUI on Linux reports Shift plus a digit as the symbol the
+/// layout types there (`Ctrl+Shift+2` arrives as `ctrl-"` on a German
+/// layout), so a `ctrl-shift-2` binding never matches (OQ-014).
+#[cfg(not(target_os = "macos"))]
+macro_rules! tab_key {
+    ($digit:literal) => {
+        concat!("alt-", $digit)
+    };
+}
+#[cfg(target_os = "macos")]
+macro_rules! tab_key {
+    ($digit:literal) => {
+        concat!("cmd-", $digit)
+    };
+}
+
 /// Binds spec 0004's default keys for the tab and split actions. T-004
 /// adds config overrides on top.
 pub fn init(cx: &mut App) {
@@ -97,15 +115,15 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-up", FocusUp, workspace),
         KeyBinding::new("alt-down", FocusDown, workspace),
         KeyBinding::new(shortcut!("z"), ZoomPane, workspace),
-        KeyBinding::new(shortcut!("1"), GoToTab(0), workspace),
-        KeyBinding::new(shortcut!("2"), GoToTab(1), workspace),
-        KeyBinding::new(shortcut!("3"), GoToTab(2), workspace),
-        KeyBinding::new(shortcut!("4"), GoToTab(3), workspace),
-        KeyBinding::new(shortcut!("5"), GoToTab(4), workspace),
-        KeyBinding::new(shortcut!("6"), GoToTab(5), workspace),
-        KeyBinding::new(shortcut!("7"), GoToTab(6), workspace),
-        KeyBinding::new(shortcut!("8"), GoToTab(7), workspace),
-        KeyBinding::new(shortcut!("9"), GoToTab(8), workspace),
+        KeyBinding::new(tab_key!("1"), GoToTab(0), workspace),
+        KeyBinding::new(tab_key!("2"), GoToTab(1), workspace),
+        KeyBinding::new(tab_key!("3"), GoToTab(2), workspace),
+        KeyBinding::new(tab_key!("4"), GoToTab(3), workspace),
+        KeyBinding::new(tab_key!("5"), GoToTab(4), workspace),
+        KeyBinding::new(tab_key!("6"), GoToTab(5), workspace),
+        KeyBinding::new(tab_key!("7"), GoToTab(6), workspace),
+        KeyBinding::new(tab_key!("8"), GoToTab(7), workspace),
+        KeyBinding::new(tab_key!("9"), GoToTab(8), workspace),
         KeyBinding::new("escape", CancelRename, Some(RENAME_CONTEXT)),
     ]);
 }
@@ -125,14 +143,18 @@ struct DraggedDivider(Vec<bool>);
 struct TabGhost(SharedString);
 
 impl Render for TabGhost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
         div()
             .px(px(10.))
             .py(px(4.))
             .rounded(px(4.))
-            .bg(gpui::black().opacity(0.6))
-            .text_color(gpui::white())
+            .border_1()
+            .border_color(theme.drag_border)
+            .bg(theme.tab_active)
+            .text_color(theme.tab_active_foreground)
             .text_size(px(12.))
+            .shadow_md()
             .child(self.0.clone())
     }
 }
@@ -580,8 +602,9 @@ impl Workspace {
         let renaming = self.rename.as_ref().map(|rename| rename.tab);
         let tabs = self.tabs.tabs().iter().enumerate().map(|(ix, tab)| {
             let title = self.tab_title(tab, cx);
+            let is_renaming = renaming == Some(tab.id);
             let label = match &self.rename {
-                Some(rename) if renaming == Some(tab.id) => div()
+                Some(rename) if is_renaming => div()
                     .key_context(RENAME_CONTEXT)
                     .on_action(cx.listener(|this, _: &CancelRename, window, cx| {
                         this.finish_rename(None, window, cx);
@@ -590,21 +613,9 @@ impl Workspace {
                     .child(Input::new(&rename.input).xsmall())
                     .into_any_element(),
                 _ => div()
-                    .id(("tab-label", tab.id))
                     .max_w(px(220.))
                     .truncate()
                     .child(title.clone())
-                    .on_drag(
-                        DraggedTab {
-                            index: ix,
-                            title: title.clone(),
-                        },
-                        |tab, _, _, cx| cx.new(|_| TabGhost(tab.title.clone())),
-                    )
-                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
-                        this.tabs.move_tab(dragged.index, ix);
-                        cx.notify();
-                    }))
                     .into_any_element(),
             };
             let close = Button::new(("close-tab", tab.id))
@@ -615,15 +626,38 @@ impl Workspace {
                     cx.stop_propagation();
                     this.close_tab(ix, window, cx);
                 }));
-            Tab::new().child(label).suffix(close).on_click(cx.listener(
-                move |this, event: &ClickEvent, window, cx| {
+            Tab::new()
+                .child(label)
+                .suffix(close)
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     if event.click_count() >= 2 {
                         this.start_rename(ix, window, cx);
                     } else {
                         this.switch_tab(|tabs| tabs.activate(ix), window, cx);
                     }
-                },
-            ))
+                }))
+                // The whole tab is the drag handle, except while its rename
+                // field needs the mouse for selecting text.
+                .when(!is_renaming, |this| {
+                    this.on_drag(DraggedTab { index: ix, title }, |tab, _, _, cx| {
+                        cx.new(|_| TabGhost(tab.title.clone()))
+                    })
+                })
+                // Mark the side the dragged tab lands on (`Tabs::move_tab`
+                // puts it at this tab's index). Tabs have a clear 1px border
+                // on each side, so the marker takes both and the width holds.
+                .drag_over::<DraggedTab>(move |style, dragged, _, cx| {
+                    let marker = cx.theme().drag_border;
+                    match dragged.index.cmp(&ix) {
+                        Ordering::Less => style.border_l_0().border_r_2().border_color(marker),
+                        Ordering::Greater => style.border_l_2().border_r_0().border_color(marker),
+                        Ordering::Equal => style,
+                    }
+                })
+                .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                    this.tabs.move_tab(dragged.index, ix);
+                    cx.notify();
+                }))
         });
 
         let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
