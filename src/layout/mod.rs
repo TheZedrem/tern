@@ -22,8 +22,10 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::notification::Notification;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{Sizable, WindowExt, window_border};
-use gpui_kit_assets::IconName;
+// Component icons only: `gpui_kit_assets::IconName` names the whole Lucide
+// catalog, but the registered `Assets` bundle holds just these, and anything
+// else renders blank.
+use gpui_component::{IconName, Sizable, WindowExt, window_border};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -606,7 +608,7 @@ impl Workspace {
                     .into_any_element(),
             };
             let close = Button::new(("close-tab", tab.id))
-                .icon(IconName::X)
+                .icon(IconName::Close)
                 .ghost()
                 .xsmall()
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -679,9 +681,9 @@ impl Workspace {
     fn window_controls(window: &Window) -> impl IntoElement {
         let supported = window.window_controls();
         let maximize_icon = if window.is_maximized() {
-            IconName::Minimize2
+            IconName::WindowRestore
         } else {
-            IconName::Maximize2
+            IconName::WindowMaximize
         };
         div()
             .flex()
@@ -689,7 +691,7 @@ impl Workspace {
             .when(supported.minimize, |controls| {
                 controls.child(
                     Button::new("minimize-window")
-                        .icon(IconName::Minus)
+                        .icon(IconName::WindowMinimize)
                         .ghost()
                         .small()
                         .on_click(|_, window, _| window.minimize_window()),
@@ -706,7 +708,7 @@ impl Workspace {
             })
             .child(
                 Button::new("close-window")
-                    .icon(IconName::X)
+                    .icon(IconName::WindowClose)
                     .ghost()
                     .small()
                     .on_click(|_, window, _| window.remove_window()),
