@@ -14,8 +14,12 @@ resizing the window with `vim` open redraws cleanly under ConPTY, and
 keys work and `Alt+1`–`9` and `Alt+arrows` hit no window-menu accelerator,
 dragging a divider redraws both panes cleanly, closing a pane ends its
 shell, and a split opens in the home directory (there is no `/proc` cwd).
-Fix what fails. Area: src.
+For T-005: the config is read from `%APPDATA%\zed-term\config.yaml`, saving
+it from VS Code and from Notepad reloads it within a second, and a profile
+with `command: [htop]`-style program names resolves through `PATH` and
+`PATHEXT`. Fix what fails. Area: src.
 
 Spec: ../spec/0001-startup-performance.md (AC8)
 Spec: ../spec/0002-terminal-pane.md (spawn, input, resize, exit on Windows)
 Spec: ../spec/0003-tabs-splits-and-session-restore.md (keys, resize, close)
+Spec: ../spec/0005-config-and-themes.md (paths, watcher, PATHEXT)

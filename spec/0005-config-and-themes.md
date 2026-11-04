@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-005]
+tasks: [T-005, T-004, T-002, T-011]
 related: [spec 0001, spec 0003, spec 0004]
 ---
 
@@ -97,10 +97,16 @@ theme:
   notice naming its ID; the other profiles still load. Phase 1 launches only
   `local`.
 - **Theme** = 16 ANSI colors, foreground, background, cursor, selection,
-  UI accent. A theme may be partial: missing colors come from `base`.
+  UI accent. Its keys are `background`, `foreground`, `cursor`,
+  `selection`, `accent`, `black` … `white` and `bright_black` …
+  `bright_white`, each a quoted `"#rrggbb"`. A theme may be partial:
+  missing colors come from `base`.
 - **Theme lookup** **[load-bearing]**: inline `theme.custom` → `themes/<name>.yaml`
-  → built-in. The first match wins. Built-ins are `dark` and `light`, embedded
-  in the binary with `include_str!`.
+  → built-in. The first match wins. Built-ins are `dark` and `light`,
+  complete palettes compiled into the binary: every partial theme resolves
+  down to one, so they can't fail to load. A theme named like its base (an
+  inline `dark` with no other `base`) builds on the next source down, so it
+  can adjust the built-in.
 - **Resolved at load** **[load-bearing]**: the UI only ever sees complete
   palettes, so the window's clear color is known before the window exists
   (spec 0001). The same palette is written into `gpui-component`'s theme,
@@ -118,16 +124,19 @@ theme:
   Because detection is off the boot path, it may use the slower but correct
   source (the XDG settings portal on Linux, the registry on Windows).
 
-Unknown keys produce a notice, not an error. A wrong type on one key makes
-that key fall back to its default, with a notice; the rest of the file
-still applies.
+Unknown keys produce a notice, not an error. A value of the wrong type
+makes its top-level key fall back to its default (`font.size: large` resets
+all of `font`), with a notice; the rest of the file still applies. A
+profile or inline theme that doesn't fit is skipped on its own, and there
+an unknown key counts as not fitting: a typo like `comand` would otherwise
+silently run the login shell.
 
 ### Module surface
 
-- `config::load(path) -> Loaded { config, profiles, notices }`, used at boot and by the watcher
-- `theme::list() -> Vec<ThemeSummary>`, `theme::resolve(name) -> Theme`
-- `config::open_in_editor()`: create the commented default if it's missing, then open it with the OS default handler
-- Hot reload uses the `notify` crate; a reload replaces the shared config and notifies the views that read it
+- `config::load(path) -> Loaded { config, notices }`, used at boot and by the watcher
+- `theme::Library::new(custom, dir).resolve(name, &mut notices) -> Theme`; the picker's `theme::list()` arrives with T-004
+- `config::ensure_exists(path)`: create the commented default if it's missing; the "Open config file" action then opens it with the OS default handler
+- Hot reload uses the `notify` crate; a reload replaces the shared config and notifies the views that read it. It watches the config directory, its parent (so a directory created later is picked up) and, where `config.yaml` or a theme file is a link (into a dotfiles repo, say), the directory it points into
 
 ### Flows
 
@@ -139,7 +148,8 @@ still applies.
    merged over the inherited environment. A missing cwd falls back to home.
    A non-`local` profile in Phase 1 shows a notice and doesn't open.
 3. **Hot reload:** the watcher on `config.yaml` and `themes/` starts after
-   the first frame (spec 0001), debounced at 200 ms. Problems surface as notices
+   the first frame (spec 0001), or a second after boot for a program that
+   prints nothing, and is debounced at 200 ms. Problems surface as notices
    (architecture §Cross-cutting rules). Font, themes, cursor, scrollback and keybindings apply live to
    all open panes. Profile changes apply to newly opened panes; running
    panes keep what they were started with.

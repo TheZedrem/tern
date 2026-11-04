@@ -30,6 +30,10 @@ for numbers you can compare.
 To try the title bar zed-term draws on GNOME (spec 0003) on any other
 Wayland compositor, start it with `ZED_TERM_CLIENT_DECORATIONS=1`.
 
+To try a config without touching your own, point `XDG_CONFIG_HOME`
+elsewhere (Linux): `XDG_CONFIG_HOME=/tmp/zt cargo run` reads and watches
+`/tmp/zt/zed-term/config.yaml`.
+
 ## Tests
 
 `cargo test` runs everything that needs no window. `cargo test -- --ignored`

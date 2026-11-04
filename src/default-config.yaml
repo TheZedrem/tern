@@ -1,0 +1,42 @@
+# zed-term settings. Every key is optional: the values below are the
+# defaults, and a key you delete keeps its default. Changes apply when you
+# save, without a restart. A mistake never stops zed-term from starting:
+# the broken part falls back to its default and a notice says why.
+
+# The profile new tabs open. Missing: the first profile below.
+# default_profile: shell
+
+# Profiles: what a pane runs. With none here, there is one `shell` profile,
+# your login shell. The key is the profile's ID.
+# profiles:
+#   shell:
+#     type: local
+#     env: { EDITOR: nvim }       # set on top of the usual environment
+#   htop:
+#     name: Htop                  # shown in the tab; defaults to the ID
+#     type: local
+#     command: [htop]             # program and arguments
+#     cwd: ~/projects             # default: your home directory
+#     theme: light                # just for this profile's panes
+
+font:
+  family: null      # an installed font's exact name; null = the bundled Lilex
+  size: 13
+  line_height: 1.2  # a multiple of the font size
+
+scrollback: 10000   # lines each pane keeps
+close_on_exit: clean  # always | clean (exit code 0) | never
+
+theme:
+  default: dark     # dark | light | system | a theme name
+  # Your own themes. A theme can also be a file, themes/<name>.yaml next to
+  # this one, with the same keys. Colors you leave out come from `base`.
+  # custom:
+  #   midnight:
+  #     base: dark
+  #     background: "#1e1e2e"   # quote colors: an unquoted # starts a comment
+  #     foreground: "#cdd6f4"
+  #     cursor: "#f5c2e7"
+  #     # Also: selection, accent, and the 16 terminal colors black, red,
+  #     # green, yellow, blue, magenta, cyan, white, bright_black, ...,
+  #     # bright_white.

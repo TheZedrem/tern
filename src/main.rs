@@ -51,21 +51,32 @@ fn main() {
             config: config::Config::default(),
             notices: vec![],
         });
+    // Resolved now, so the first frame has its colors. `system` is `dark`
+    // until the OS is asked, after the first frame (spec 0005).
+    let profile = config.default_profile();
+    let (theme, pane_theme) = {
+        let dir = config::themes_dir();
+        let library = theme::Library::new(&config.theme.custom, dir.as_deref());
+        let mut resolve =
+            |name: &str| library.resolve(theme::effective(name, false), &mut boot_notices);
+        let theme = resolve(&config.theme.default);
+        let pane_theme = profile.theme.as_deref().map_or(theme, &mut resolve);
+        (theme, pane_theme)
+    };
     timing.mark(Mark::Config);
 
     // The shell starts now and boots while GPUI comes up.
-    let theme = theme::DARK;
     let command = if bench {
         Command::bench()
     } else {
-        Command::default_shell()
+        Command::of_profile(&profile)
     };
     let font = FontSettings::from_config(&config.font);
     let grid = GridSize::fit(WINDOW_SIZE, font.estimated_cell());
     let session = pty::spawn(
         &command,
         grid,
-        None,
+        profile.cwd.as_deref(),
         config.scrollback as usize,
         Arc::clone(&timing),
     );
@@ -78,6 +89,8 @@ fn main() {
         if let Err(error) = terminal::init(cx) {
             boot_notices.push(format!("The default font could not be loaded: {error}"));
         }
+        let (font, font_notice) = FontSettings::checked(&config.font, cx);
+        boot_notices.extend(font_notice);
         layout::init(cx);
         gpui_component::init(cx);
         theme::apply_to_widgets(&theme, cx);
@@ -105,12 +118,18 @@ fn main() {
                 .map(|_| WindowDecorations::Client),
             ..Default::default()
         };
+        let boot = layout::BootPane {
+            session,
+            command,
+            profile: (&profile).into(),
+            theme: pane_theme,
+        };
         let opened = cx.open_window(options, |window, cx| {
             let workspace = cx.new(|cx| {
                 layout::Workspace::new(
-                    session,
-                    &command,
+                    boot,
                     config,
+                    font,
                     theme,
                     boot_notices,
                     Arc::clone(&timing),

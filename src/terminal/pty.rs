@@ -3,6 +3,7 @@
 //! parser; the UI only locks the grid to draw it (architecture §Key
 //! decisions).
 
+use crate::config::Profile;
 use crate::timing::{Mark, Timing};
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, Notifier};
@@ -11,6 +12,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term};
 use alacritty_terminal::tty;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -64,11 +66,13 @@ impl Dimensions for GridSize {
     }
 }
 
-/// What a pane runs: a program and its arguments.
+/// What a pane runs: a program, its arguments and the environment it gets
+/// on top of the inherited one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Command {
     pub program: String,
     pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
 }
 
 impl Command {
@@ -84,6 +88,7 @@ impl Command {
             Self {
                 program: shell,
                 args: vec!["-l".into()],
+                env: BTreeMap::new(),
             }
         }
         #[cfg(windows)]
@@ -94,7 +99,25 @@ impl Command {
             Self {
                 program: found.unwrap_or("cmd.exe").into(),
                 args: vec![],
+                env: BTreeMap::new(),
             }
+        }
+    }
+
+    /// What `profile` runs: its command, or the login shell, with its env.
+    /// On Windows the program resolves through `PATH` and `PATHEXT`.
+    pub fn of_profile(profile: &Profile) -> Self {
+        let shell = match profile.command.as_deref() {
+            Some([program, args @ ..]) => Self {
+                program: program.clone(),
+                args: args.to_vec(),
+                env: BTreeMap::new(),
+            },
+            _ => Self::default_shell(),
+        };
+        Self {
+            env: profile.env.clone(),
+            ..shell
         }
     }
 
@@ -108,6 +131,7 @@ impl Command {
         Self {
             program: program.into(),
             args: args.map(String::from).to_vec(),
+            env: BTreeMap::new(),
         }
     }
 
@@ -182,6 +206,7 @@ pub fn spawn(
             .map(Path::to_path_buf)
             .or_else(dirs::home_dir),
         drain_on_exit: true,
+        // The profile's env goes on top of ours: the user knows best.
         env: [
             ("TERM", "xterm-256color"),
             ("COLORTERM", "truecolor"),
@@ -189,6 +214,7 @@ pub fn spawn(
         ]
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .chain(command.env.clone())
         .collect(),
         ..Default::default()
     };
@@ -266,11 +292,13 @@ mod tests {
         let shell = Command {
             program: "/usr/bin/zsh".into(),
             args: vec!["-l".into()],
+            env: BTreeMap::new(),
         };
         assert_eq!(shell.describe(), "/usr/bin/zsh -l");
         let bare = Command {
             program: "cmd.exe".into(),
             args: vec![],
+            env: BTreeMap::new(),
         };
         assert_eq!(bare.describe(), "cmd.exe");
     }
@@ -285,8 +313,23 @@ mod tests {
         let expected = Command {
             program: program.into(),
             args: vec![flag.into(), "echo ready".into()],
+            env: BTreeMap::new(),
         };
         assert_eq!(Command::bench(), expected);
+    }
+
+    #[test]
+    fn a_profile_without_a_command_runs_the_login_shell_with_its_env() {
+        let env = BTreeMap::from([("EDITOR".to_owned(), "nvim".to_owned())]);
+        let profile = Profile {
+            env: env.clone(),
+            ..Profile::shell()
+        };
+        let expected = Command {
+            env,
+            ..Command::default_shell()
+        };
+        assert_eq!(Command::of_profile(&profile), expected);
     }
 
     #[cfg(unix)]
@@ -304,6 +347,7 @@ mod tests {
         let missing = Command {
             program: "/nonexistent/zed-term-test-shell".into(),
             args: vec![],
+            env: BTreeMap::new(),
         };
         match spawn(&missing, SMALL, None, 100, timing()) {
             Ok(_) => panic!("spawned a program that doesn't exist"),
@@ -316,6 +360,7 @@ mod tests {
         Command {
             program: "sh".into(),
             args: vec!["-c".into(), script.into()],
+            env: BTreeMap::new(),
         }
     }
 
@@ -443,5 +488,66 @@ mod tests {
             let screen = crate::terminal::tests::screen(&*session.term.lock());
             assert_eq!(Path::new(&screen[0]), home, "started in {missing:?}");
         }
+    }
+
+    /// AC3 (spec 0005), the config's part: the profile's program gets its
+    /// arguments, starts in its cwd, and sees its env on top of the
+    /// inherited environment (spec 0005, flow 2).
+    #[cfg(unix)]
+    #[test]
+    fn a_profiles_command_args_env_and_cwd_reach_the_program() {
+        let dir = crate::config::tests::TempDir::new("profile-cwd");
+        let cwd = dir.path().canonicalize().expect("the temp dir exists");
+        // The inherited PATH comes back as `$3`, to compare it in the shell.
+        let inherited = std::env::var("PATH").expect("PATH is set");
+        let script = r#"echo "$0 $1 $2"; echo "$GREETING"; [ "$PATH" = "$3" ] && echo inherited || echo replaced; pwd -P"#;
+        let command = ["sh", "-c", script, "probe", "first", "second"]
+            .map(String::from)
+            .into_iter()
+            .chain([inherited])
+            .collect();
+        let profile = Profile {
+            id: "probe".into(),
+            command: Some(command),
+            cwd: Some(dir.path().to_path_buf()),
+            env: BTreeMap::from([("GREETING".into(), "hello".into())]),
+            ..Profile::shell()
+        };
+        let wide = GridSize {
+            cols: 400,
+            rows: 6,
+            ..SMALL
+        };
+        let (session, _) = run_to_exit(
+            &Command::of_profile(&profile),
+            wide,
+            profile.cwd.as_deref(),
+            timing(),
+        );
+        let screen = crate::terminal::tests::screen(&*session.term.lock());
+        let cwd = cwd.to_str().expect("a UTF-8 temp dir");
+        assert_eq!(
+            screen[..4],
+            ["probe first second", "hello", "inherited", cwd]
+        );
+    }
+
+    /// The user knows best: a profile may set TERM itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_profiles_env_wins_over_zed_terms_own_terminal_variables() {
+        let profile = Profile {
+            command: Some(
+                ["sh", "-c", r#"echo "$TERM $COLORTERM $TERM_PROGRAM""#]
+                    .map(String::from)
+                    .to_vec(),
+            ),
+            env: BTreeMap::from([("TERM".into(), "dumb".into())]),
+            ..Profile::shell()
+        };
+        let wide = GridSize { cols: 100, ..SMALL };
+        let (session, _) = run_to_exit(&Command::of_profile(&profile), wide, None, timing());
+        let screen = crate::terminal::tests::screen(&*session.term.lock());
+        assert_eq!(screen[0], "dumb truecolor zed-term");
     }
 }

@@ -6,17 +6,19 @@
 pub mod tabs;
 pub mod tree;
 
-use crate::config::Config;
+use crate::config::{self, Config, Profile};
 use crate::terminal::pty::{self, Command, GridSize};
-use crate::terminal::{FontSettings, PaneEvent, TerminalPane};
+use crate::terminal::{FontSettings, PaneEvent, PaneProfile, PaneSettings, TerminalPane};
 use crate::theme::{self, Theme};
 use crate::timing::{Mark, Timing};
+use futures::StreamExt;
+use futures::channel::mpsc::unbounded;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, Anchor, AnyElement, App, AppContext, ClickEvent, Context, Decorations, Div,
     DragMoveEvent, ElementId, Entity, InteractiveElement, IntoElement, KeyBinding, MouseButton,
     ParentElement, Pixels, Render, SharedString, Size, StatefulInteractiveElement, Styled,
-    Subscription, Window, actions, canvas, div, px,
+    Subscription, Window, WindowAppearance, actions, canvas, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -28,10 +30,11 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme, IconName, Sizable, WindowExt, window_border};
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 use tabs::{Closed, TabId, Tabs};
 use tree::{Axis, Direction, LeafId, Node};
 
@@ -43,6 +46,12 @@ const RENAME_CONTEXT: &str = "TabRename";
 const DIVIDER: f32 = 4.0;
 /// The smallest pane a divider may leave (spec 0003).
 const MIN_PANE_CELLS: (f32, f32) = (10.0, 3.0);
+/// How long config changes must settle before a reload: editors save in
+/// bursts (spec 0005, flow 3).
+const RELOAD_DEBOUNCE: Duration = Duration::from_millis(200);
+/// How long boot waits for the first frame with output before starting
+/// what waits for it anyway.
+const SILENT_BOOT_WAIT: Duration = Duration::from_secs(1);
 
 actions!(
     zed_term,
@@ -59,6 +68,9 @@ actions!(
         FocusDown,
         ZoomPane,
         CancelRename,
+        /// Opens `config.yaml` in the OS's editor, creating it first if it's
+        /// missing (spec 0005). The palette lists it (T-004).
+        OpenConfig,
     ]
 );
 
@@ -174,12 +186,33 @@ struct Rename {
     input: Entity<InputState>,
 }
 
+/// The first pane, its program started before the window existed (spec
+/// 0001).
+pub struct BootPane {
+    pub session: Result<pty::Session, String>,
+    pub command: Command,
+    pub profile: PaneProfile,
+    pub theme: Theme,
+}
+
 pub struct Workspace {
     tabs: Tabs,
     panes: HashMap<LeafId, Entity<TerminalPane>>,
     pane_subscriptions: HashMap<LeafId, Subscription>,
     config: Config,
+    /// The font of every pane, its family checked (spec 0005).
+    font: FontSettings,
+    /// `theme.default`, resolved.
     theme: Theme,
+    /// The themes profiles name, resolved so far, by the name as written.
+    themes: HashMap<String, Theme>,
+    /// The OS is in light mode, which `system` follows. Dark until the
+    /// first frame is on screen (spec 0005).
+    light: bool,
+    /// Kept alive so config edits keep arriving.
+    watcher: Option<config::Watcher>,
+    /// What waits for the first frame has run.
+    booted: bool,
     timing: Arc<Timing>,
     bench: bool,
     /// Boot notices, shown once the first frame is on screen.
@@ -195,13 +228,12 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// A workspace with one tab running `boot`, the session started before
-    /// the window existed (spec 0001).
+    /// A workspace with one tab, showing `boot`.
     #[allow(clippy::too_many_arguments, reason = "one call, from the boot path")]
     pub fn new(
-        boot: Result<pty::Session, String>,
-        command: &Command,
+        boot: BootPane,
         config: Config,
+        font: FontSettings,
         theme: Theme,
         notices: Vec<String>,
         timing: Arc<Timing>,
@@ -210,12 +242,23 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let (tabs, leaf) = Tabs::new();
+        let themes = boot
+            .profile
+            .theme
+            .iter()
+            .map(|name| (name.clone(), boot.theme))
+            .collect();
         let mut workspace = Self {
             tabs,
             panes: HashMap::new(),
             pane_subscriptions: HashMap::new(),
             config,
+            font,
             theme,
+            themes,
+            light: false,
+            watcher: None,
+            booted: false,
             timing,
             bench,
             notices,
@@ -225,21 +268,39 @@ impl Workspace {
             title_bar_pressed: false,
             content_size: Rc::default(),
         };
-        workspace.add_pane(leaf, boot, command, window, cx);
+        let BootPane {
+            session,
+            command,
+            profile,
+            theme,
+        } = boot;
+        workspace.add_pane(leaf, session, &command, profile, theme, window, cx);
         workspace.focus_active(window, cx);
+        if !bench {
+            // A program that prints nothing never makes the first frame
+            // with output; what waits for that frame starts anyway.
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(SILENT_BOOT_WAIT).await;
+                let _ = this.update_in(cx, |this, window, cx| this.after_first_frame(window, cx));
+            })
+            .detach();
+        }
         workspace
     }
 
+    #[allow(clippy::too_many_arguments, reason = "a pane's parts, used once each")]
     fn add_pane(
         &mut self,
         leaf: LeafId,
         session: Result<pty::Session, String>,
         command: &Command,
+        profile: PaneProfile,
+        theme: Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (config, theme, bench) = (&self.config, self.theme, self.bench);
-        let pane = cx.new(|cx| TerminalPane::new(session, command, config, theme, bench, cx));
+        let (settings, bench) = (self.pane_settings(theme), self.bench);
+        let pane = cx.new(|cx| TerminalPane::new(session, command, profile, settings, bench, cx));
         let subscription = cx.subscribe_in(&pane, window, move |this, _, event, window, cx| {
             this.pane_event(leaf, event, window, cx);
         });
@@ -247,21 +308,33 @@ impl Workspace {
         self.pane_subscriptions.insert(leaf, subscription);
     }
 
-    /// Starts the default shell for `leaf`, in `cwd` or the home directory.
-    /// Profiles arrive with T-005.
+    /// What a pane with `theme` takes from the current config.
+    fn pane_settings(&self, theme: Theme) -> PaneSettings {
+        PaneSettings {
+            font: self.font.clone(),
+            theme,
+            close_on_exit: self.config.close_on_exit,
+            scrollback: self.config.scrollback as usize,
+        }
+    }
+
+    /// Starts `profile` for `leaf` in `cwd`, else the profile's own cwd,
+    /// else the home directory (spec 0005, flow 2).
     fn spawn_pane(
         &mut self,
         leaf: LeafId,
+        profile: Profile,
         cwd: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let command = Command::default_shell();
-        let font = FontSettings::from_config(&self.config.font);
+        let command = Command::of_profile(&profile);
+        let cwd = cwd.or_else(|| profile.cwd.clone());
+        let theme = self.theme_for(profile.theme.as_deref(), window, cx);
         let viewport = window.viewport_size();
         let grid = GridSize::fit(
             (f32::from(viewport.width), f32::from(viewport.height)),
-            font.estimated_cell(),
+            self.font.estimated_cell(),
         );
         let session = pty::spawn(
             &command,
@@ -270,7 +343,35 @@ impl Workspace {
             self.config.scrollback as usize,
             Arc::clone(&self.timing),
         );
-        self.add_pane(leaf, session, &command, window, cx);
+        let profile = PaneProfile::from(&profile);
+        self.add_pane(leaf, session, &command, profile, theme, window, cx);
+    }
+
+    /// The palette of a pane whose profile names theme `name` (`None`:
+    /// `theme.default`). A name met for the first time is resolved now,
+    /// which reads its theme file if it has one: a small read, next to the
+    /// fork of the pane's program.
+    fn theme_for(
+        &mut self,
+        name: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Theme {
+        let Some(name) = name else {
+            return self.theme;
+        };
+        if let Some(theme) = self.themes.get(name) {
+            return *theme;
+        }
+        let mut notices = Vec::new();
+        let dir = config::themes_dir();
+        let library = theme::Library::new(&self.config.theme.custom, dir.as_deref());
+        let theme = library.resolve(theme::effective(name, self.light), &mut notices);
+        self.themes.insert(name.to_owned(), theme);
+        for notice in notices {
+            show_notice(notice, window, cx);
+        }
+        theme
     }
 
     fn pane_event(
@@ -308,13 +409,147 @@ impl Workspace {
             return;
         }
         self.ttfp = report.rendered;
-        for notice in self.notices.drain(..) {
-            let notice = Notification::new()
-                .message(notice)
-                .placement(Anchor::BottomRight);
-            window.push_notification(notice, cx);
+        self.after_first_frame(window, cx);
+    }
+
+    /// What waits for the first frame (spec 0001): the boot notices and
+    /// config reloads. Runs once, at the first frame with output, or
+    /// [`SILENT_BOOT_WAIT`] after boot if the program prints nothing.
+    fn after_first_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.booted, true) {
+            return;
+        }
+        for notice in std::mem::take(&mut self.notices) {
+            show_notice(notice, window, cx);
+        }
+        self.start_reloads(window, cx);
+        cx.notify();
+    }
+
+    /// Reloads the config whenever `config.yaml` or a theme file changes,
+    /// and whenever the OS switches between light and dark while a theme in
+    /// use is `system` (spec 0005). Starts after the first frame.
+    fn start_reloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (reload, mut reloads) = unbounded();
+        if let Some(dir) = config::default_dir() {
+            match config::Watcher::start(dir, reload.clone()) {
+                Ok(watcher) => self.watcher = Some(watcher),
+                Err(error) => show_notice(
+                    format!("Config changes apply after a restart: {error}"),
+                    window,
+                    cx,
+                ),
+            }
+        }
+        self.light = is_light(window.appearance());
+        if self.light && self.uses_system() {
+            let _ = reload.unbounded_send(());
+        }
+        cx.observe_window_appearance(window, move |this, window, _| {
+            let light = is_light(window.appearance());
+            if light != this.light {
+                this.light = light;
+                if this.uses_system() {
+                    let _ = reload.unbounded_send(());
+                }
+            }
+        })
+        .detach();
+        cx.spawn_in(window, async move |this, cx| {
+            while reloads.next().await.is_some() {
+                cx.background_executor().timer(RELOAD_DEBOUNCE).await;
+                while reloads.try_recv().is_ok() {}
+                let Ok(job) = this.update(cx, |this, _| this.reload_job()) else {
+                    break;
+                };
+                let reloaded = cx.background_spawn(async move { job.run() }).await;
+                let applied = this.update_in(cx, |this, window, cx| {
+                    this.apply_reload(reloaded, window, cx);
+                });
+                if applied.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Whether `system` decides any theme on screen.
+    fn uses_system(&self) -> bool {
+        self.config.theme.default == "system" || self.themes.contains_key("system")
+    }
+
+    /// What a reload reads: the config file, then every theme the new
+    /// config's profiles and the open panes name.
+    fn reload_job(&self) -> ReloadJob {
+        ReloadJob {
+            light: self.light,
+            pane_themes: self.themes.keys().cloned().collect(),
+        }
+    }
+
+    /// Swaps in a reloaded config: font, themes, scrollback and
+    /// `close_on_exit` change in every open pane, while profiles apply to
+    /// panes opened from now on (spec 0005, flow 3).
+    fn apply_reload(&mut self, reloaded: Reloaded, window: &mut Window, cx: &mut Context<Self>) {
+        let Reloaded {
+            config,
+            theme,
+            themes,
+            mut notices,
+        } = reloaded;
+        if let Some(watcher) = &mut self.watcher {
+            watcher.arm();
+        }
+        let (font, font_notice) = FontSettings::checked(&config.font, cx);
+        notices.extend(font_notice);
+        self.config = config;
+        self.font = font;
+        self.theme = theme;
+        self.themes = themes;
+        theme::apply_to_widgets(&self.theme, cx);
+        for pane in self.panes.values() {
+            let name = pane.read(cx).profile().theme.clone();
+            let theme = name
+                .and_then(|name| self.themes.get(&name).copied())
+                .unwrap_or(self.theme);
+            let settings = self.pane_settings(theme);
+            pane.update(cx, |pane, cx| pane.apply(settings, cx));
+        }
+        for notice in notices {
+            show_notice(notice, window, cx);
         }
         cx.notify();
+    }
+
+    /// Opens `config.yaml` with the OS's default handler, first writing the
+    /// commented defaults if there is no config yet (spec 0005).
+    fn open_config(&mut self, _: &OpenConfig, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = config::default_path() else {
+            show_notice("This system has no config directory.".into(), window, cx);
+            return;
+        };
+        let created = cx.background_spawn({
+            let path = path.clone();
+            async move { config::ensure_exists(&path) }
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = created.await;
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => {
+                    if let Some(watcher) = &mut this.watcher {
+                        watcher.arm();
+                    }
+                    cx.open_with_system(&path);
+                }
+                Err(error) => show_notice(
+                    format!("config.yaml could not be created: {error}"),
+                    window,
+                    cx,
+                ),
+            });
+        })
+        .detach();
     }
 
     /// Moves keyboard focus to the active tab's focused pane.
@@ -357,22 +592,26 @@ impl Workspace {
     }
 
     /// The tab's title: the user's name, else the focused pane's title, else
-    /// the profile's name (`shell` until profiles land with T-005).
+    /// the name of the pane's profile (spec 0003).
     fn tab_title(&self, tab: &tabs::Tab, cx: &App) -> SharedString {
-        tab.name
-            .clone()
-            .or_else(|| {
-                self.panes
-                    .get(&tab.focused)
-                    .and_then(|pane| pane.read(cx).title().map(str::to_owned))
-            })
-            .unwrap_or_else(|| "shell".to_owned())
+        if let Some(name) = &tab.name {
+            return name.clone().into();
+        }
+        let Some(pane) = self.panes.get(&tab.focused) else {
+            return SharedString::default();
+        };
+        let pane = pane.read(cx);
+        pane.title()
+            .unwrap_or(&pane.profile().name)
+            .to_owned()
             .into()
     }
 
+    /// A tab running `default_profile` (spec 0005).
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let leaf = self.tabs.new_tab();
-        self.spawn_pane(leaf, None, window, cx);
+        let profile = self.config.default_profile();
+        self.spawn_pane(leaf, profile, None, window, cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -384,6 +623,8 @@ impl Workspace {
 
     /// Splits the focused pane, unless that would leave either half below
     /// the minimum pane size (spec 0003); then the shortcut does nothing.
+    /// The new pane opens the same profile, as configured now, in the same
+    /// directory.
     fn split(&mut self, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(size) = self.content_size.get() {
             let area = (f32::from(size.width), f32::from(size.height));
@@ -395,9 +636,18 @@ impl Workspace {
             }
         }
         let source = self.tabs.active().focused;
-        let cwd = self.panes.get(&source).and_then(|pane| pane.read(cx).cwd());
+        let (profile, cwd) = match self.panes.get(&source) {
+            Some(pane) => {
+                let pane = pane.read(cx);
+                (
+                    self.config.profile_or_default(&pane.profile().id),
+                    pane.cwd(),
+                )
+            }
+            None => (self.config.default_profile(), None),
+        };
         let leaf = self.tabs.split(axis);
-        self.spawn_pane(leaf, cwd, window, cx);
+        self.spawn_pane(leaf, profile, cwd, window, cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -509,7 +759,7 @@ impl Workspace {
     /// The smallest pane in pixels: `MIN_PANE_CELLS` of the current font,
     /// plus the grid's padding.
     fn pane_min(&self, window: &Window) -> (f32, f32) {
-        let cell = FontSettings::from_config(&self.config.font).cell_size(window);
+        let cell = self.font.cell_size(window);
         (
             MIN_PANE_CELLS.0 * f32::from(cell.width) + 2.0 * pty::PADDING,
             MIN_PANE_CELLS.1 * f32::from(cell.height) + 2.0 * pty::PADDING,
@@ -755,6 +1005,83 @@ impl Workspace {
     }
 }
 
+/// The half of a reload that reads files, run on the background executor.
+struct ReloadJob {
+    /// The OS is in light mode, so `system` reads as `light`.
+    light: bool,
+    /// The theme names open panes use.
+    pane_themes: Vec<String>,
+}
+
+/// A reloaded config with every theme it needs resolved.
+struct Reloaded {
+    config: Config,
+    /// `theme.default`.
+    theme: Theme,
+    themes: HashMap<String, Theme>,
+    notices: Vec<String>,
+}
+
+impl ReloadJob {
+    fn run(self) -> Reloaded {
+        let config::Loaded {
+            config,
+            mut notices,
+        } = config::default_path()
+            .map(|path| config::load(&path))
+            .unwrap_or_else(|| config::Loaded {
+                config: Config::default(),
+                notices: vec![],
+            });
+        let (theme, themes) = {
+            let dir = config::themes_dir();
+            let library = theme::Library::new(&config.theme.custom, dir.as_deref());
+            let mut resolve =
+                |name: &str| library.resolve(theme::effective(name, self.light), &mut notices);
+            let theme = resolve(&config.theme.default);
+            let names: BTreeSet<String> = config
+                .profiles
+                .iter()
+                .filter_map(|profile| profile.theme.clone())
+                .chain(self.pane_themes)
+                .collect();
+            let themes = names
+                .into_iter()
+                .map(|name| {
+                    let theme = resolve(&name);
+                    (name, theme)
+                })
+                .collect();
+            (theme, themes)
+        };
+        // Several names can lead to the same broken theme.
+        let mut seen = std::collections::HashSet::new();
+        notices.retain(|notice| seen.insert(notice.clone()));
+        Reloaded {
+            config,
+            theme,
+            themes,
+            notices,
+        }
+    }
+}
+
+/// Shows `notice` as a toast in the window's bottom-right corner
+/// (architecture §Cross-cutting rules).
+fn show_notice(notice: String, window: &mut Window, cx: &mut App) {
+    let notice = Notification::new()
+        .message(notice)
+        .placement(Anchor::BottomRight);
+    window.push_notification(notice, cx);
+}
+
+fn is_light(appearance: WindowAppearance) -> bool {
+    matches!(
+        appearance,
+        WindowAppearance::Light | WindowAppearance::VibrantLight
+    )
+}
+
 /// An invisible element covering its parent that records the parent's size
 /// at every layout.
 fn measure_size(size: Rc<Cell<Option<Size<Pixels>>>>) -> impl IntoElement {
@@ -798,6 +1125,7 @@ impl Render for Workspace {
             .key_context(CONTEXT)
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::close_focused_pane))
+            .on_action(cx.listener(Self::open_config))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.switch_tab(Tabs::next_tab, window, cx);
             }))

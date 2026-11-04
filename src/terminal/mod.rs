@@ -7,13 +7,13 @@ pub mod grid;
 pub mod input;
 pub mod pty;
 
-use crate::config::{self, CloseOnExit, Config};
+use crate::config::{self, CloseOnExit, Profile};
 use crate::theme::{self, Theme};
 use alacritty_terminal::event::{Event, Notify, OnResize};
 use alacritty_terminal::event_loop::{Msg, Notifier};
 use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::color::COUNT as COLOR_SLOTS;
+use alacritty_terminal::term::{Config as TermConfig, TermMode};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use futures::StreamExt;
 use gpui::{
@@ -70,15 +70,51 @@ pub struct FontSettings {
 impl FontSettings {
     /// Out-of-range sizes are clamped: a `font.size` of 0 would otherwise
     /// size the grid at billions of cells and never reach the first frame.
+    /// YAML's `.nan`, which `clamp` lets through, means the default.
     pub fn from_config(font: &config::Font) -> Self {
+        let defaults = config::Font::default();
+        let number = |value: f64, default: f64| if value.is_nan() { default } else { value };
         Self {
             family: font
                 .family
                 .clone()
                 .unwrap_or_else(|| DEFAULT_FONT_FAMILY.to_owned())
                 .into(),
-            size: px((font.size as f32).clamp(4.0, 200.0)),
-            line_height: (font.line_height as f32).clamp(0.5, 4.0),
+            size: px((number(font.size, defaults.size) as f32).clamp(4.0, 200.0)),
+            line_height: (number(font.line_height, defaults.line_height) as f32).clamp(0.5, 4.0),
+        }
+    }
+
+    /// `font` with its family checked against the installed fonts: one that
+    /// isn't installed falls back to the bundled font, with a notice (spec
+    /// 0005). GPUI on its own would quietly substitute some other font.
+    pub fn checked(font: &config::Font, cx: &App) -> (Self, Option<String>) {
+        if font.family.is_none() {
+            return (Self::from_config(font), None);
+        }
+        let installed = cx.text_system().all_font_names();
+        Self::checked_with(font, |family| {
+            installed
+                .binary_search_by(|name| name.as_str().cmp(family))
+                .is_ok()
+        })
+    }
+
+    /// [`Self::checked`], given whether a family is installed.
+    pub fn checked_with(
+        font: &config::Font,
+        installed: impl Fn(&str) -> bool,
+    ) -> (Self, Option<String>) {
+        let mut settings = Self::from_config(font);
+        match &font.family {
+            Some(family) if !installed(family) => {
+                settings.family = DEFAULT_FONT_FAMILY.into();
+                let notice = format!(
+                    "Font `{family}` isn't installed; using the bundled {DEFAULT_FONT_FAMILY}."
+                );
+                (settings, Some(notice))
+            }
+            _ => (settings, None),
         }
     }
 
@@ -98,6 +134,38 @@ impl FontSettings {
             .map(|advance| advance.width)
             .unwrap_or(self.size * 0.6);
         size(width, (self.size * self.line_height).round())
+    }
+}
+
+/// What a pane takes from the config. A reload replaces it while the pane
+/// runs (spec 0005, flow 3).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaneSettings {
+    pub font: FontSettings,
+    pub theme: Theme,
+    pub close_on_exit: CloseOnExit,
+    pub scrollback: usize,
+}
+
+/// The profile a pane was started from, as it was then: profile edits
+/// apply to new panes only (spec 0005).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaneProfile {
+    /// For splits, which open the same profile (spec 0003).
+    pub id: String,
+    /// The tab title until the program sets one.
+    pub name: String,
+    /// The pane's theme; `None` follows `theme.default`.
+    pub theme: Option<String>,
+}
+
+impl From<&Profile> for PaneProfile {
+    fn from(profile: &Profile) -> Self {
+        Self {
+            id: profile.id.clone(),
+            name: profile.display_name().to_owned(),
+            theme: profile.theme.clone(),
+        }
     }
 }
 
@@ -181,9 +249,8 @@ struct Running {
 pub struct TerminalPane {
     focus: FocusHandle,
     state: State,
-    font: FontSettings,
-    theme: Theme,
-    close_on_exit: CloseOnExit,
+    profile: PaneProfile,
+    settings: PaneSettings,
     /// Bench panes never close on exit; the bench quits after the first frame.
     bench: bool,
     exited: bool,
@@ -201,8 +268,8 @@ impl TerminalPane {
     pub fn new(
         session: Result<pty::Session, String>,
         command: &pty::Command,
-        config: &Config,
-        theme: Theme,
+        profile: PaneProfile,
+        settings: PaneSettings,
         bench: bool,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -238,9 +305,8 @@ impl TerminalPane {
         Self {
             focus: cx.focus_handle(),
             state,
-            font: FontSettings::from_config(&config.font),
-            theme,
-            close_on_exit: config.close_on_exit,
+            profile,
+            settings,
             bench,
             exited: false,
             has_output: false,
@@ -255,6 +321,25 @@ impl TerminalPane {
 
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    pub fn profile(&self) -> &PaneProfile {
+        &self.profile
+    }
+
+    /// Takes the settings of a reloaded config: font, theme and scrollback
+    /// apply at once, `close_on_exit` at the next exit.
+    pub fn apply(&mut self, settings: PaneSettings, cx: &mut Context<Self>) {
+        if let State::Running(running) = &self.state
+            && settings.scrollback != self.settings.scrollback
+        {
+            running.term.lock().set_options(TermConfig {
+                scrolling_history: settings.scrollback,
+                ..TermConfig::default()
+            });
+        }
+        self.settings = settings;
+        cx.notify();
     }
 
     /// The program's working directory, so a split starts in the same place
@@ -297,7 +382,7 @@ impl TerminalPane {
             Event::PtyWrite(text) => running.notifier.notify(text.into_bytes()),
             Event::ColorRequest(slot, format) if slot < COLOR_SLOTS => {
                 let color = running.term.lock().colors()[slot]
-                    .unwrap_or_else(|| colors::default_for_slot(slot, &self.theme));
+                    .unwrap_or_else(|| colors::default_for_slot(slot, &self.settings.theme));
                 running.notifier.notify(format(color).into_bytes());
             }
             Event::TextAreaSizeRequest(format) => {
@@ -325,7 +410,7 @@ impl TerminalPane {
             parser.advance(&mut *running.term.lock(), exit_notice(code).as_bytes());
         }
         cx.notify();
-        if !self.bench && closes_on_exit(self.close_on_exit, code) {
+        if !self.bench && closes_on_exit(self.settings.close_on_exit, code) {
             cx.emit(PaneEvent::Exited);
         }
     }
@@ -382,16 +467,16 @@ impl Render for TerminalPane {
             State::Running(running) => element::TerminalElement::new(
                 cx.entity(),
                 running.term.clone(),
-                self.font.clone(),
-                self.theme,
+                self.settings.font.clone(),
+                self.settings.theme,
                 self.focus.is_focused(window),
             )
             .into_any_element(),
             State::Failed(message) => div()
                 .p(px(pty::PADDING))
-                .font_family(self.font.family.clone())
-                .text_size(self.font.size)
-                .text_color(theme::hsla(self.theme.ansi[1]))
+                .font_family(self.settings.font.family.clone())
+                .text_size(self.settings.font.size)
+                .text_color(theme::hsla(self.settings.theme.ansi[1]))
                 .child(message.clone())
                 .into_any_element(),
         };
@@ -415,6 +500,7 @@ impl Render for TerminalPane {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
@@ -486,6 +572,69 @@ mod tests {
             ..config::Font::default()
         });
         assert_eq!(configured.family, "JetBrains Mono");
+    }
+
+    /// AC10 (spec 0005).
+    #[test]
+    fn a_font_family_that_isnt_installed_falls_back_to_lilex_with_a_notice_naming_it() {
+        let font = config::Font {
+            family: Some("Nonexistent Mono".into()),
+            size: 16.0,
+            ..config::Font::default()
+        };
+        let (settings, notice) = FontSettings::checked_with(&font, |name| name == "JetBrains Mono");
+        assert_eq!(settings.family, "Lilex");
+        assert_eq!(settings.size, px(16.0), "only the family falls back");
+        let notice = notice.expect("a notice");
+        assert!(notice.contains("Nonexistent Mono"), "{notice}");
+    }
+
+    #[test]
+    fn an_installed_font_family_is_kept_without_a_notice() {
+        let font = config::Font {
+            family: Some("JetBrains Mono".into()),
+            ..config::Font::default()
+        };
+        let (settings, notice) = FontSettings::checked_with(&font, |name| name == "JetBrains Mono");
+        assert_eq!(settings.family, "JetBrains Mono");
+        assert_eq!(notice, None);
+    }
+
+    /// So a nonsense size can't make a grid of billions of cells (spec 0005).
+    #[test]
+    fn font_size_and_line_height_are_clamped_to_their_ranges() {
+        let cases = [
+            ((0.0, 0.0), (4.0, 0.5)),
+            ((-5.0, -1.0), (4.0, 0.5)),
+            ((1e12, 100.0), (200.0, 4.0)),
+            ((f64::INFINITY, f64::INFINITY), (200.0, 4.0)),
+            ((13.0, 1.2), (13.0, 1.2)),
+        ];
+        for ((size, line_height), (clamped_size, clamped_line_height)) in cases {
+            let font = config::Font {
+                family: None,
+                size,
+                line_height,
+            };
+            let settings = FontSettings::from_config(&font);
+            assert_eq!(
+                (settings.size, settings.line_height),
+                (px(clamped_size), clamped_line_height),
+                "size {size}, line height {line_height}"
+            );
+        }
+    }
+
+    /// `.nan` is a YAML float, and `clamp` would pass NaN through.
+    #[test]
+    fn a_nan_font_size_from_the_config_means_the_default() {
+        let loaded = config::parse("font:\n  size: .nan\n  line_height: .nan\n");
+        let settings = FontSettings::from_config(&loaded.config.font);
+        let defaults = FontSettings::from_config(&config::Font::default());
+        assert_eq!(
+            (settings.size, settings.line_height),
+            (defaults.size, defaults.line_height)
+        );
     }
 
     /// `raw` cleans to `words`, joined by single spaces or by nothing: a
