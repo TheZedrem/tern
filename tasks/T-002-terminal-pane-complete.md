@@ -1,5 +1,5 @@
 ---
-status: now
+status: next
 blocked-by: []
 ---
 # T-002: Finish the terminal pane
