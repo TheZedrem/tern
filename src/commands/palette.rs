@@ -1,14 +1,17 @@
 //! The command palette (spec 0004): gpui-component's command list over the
-//! app commands and profiles, or over the themes as the theme picker,
-//! ranked by [`fuzzy`] instead of the list's own substring filter.
+//! app commands and profiles, over the themes as the theme picker, or over
+//! the hosts, grouped, as the host picker (spec 0006). Ranked by [`fuzzy`]
+//! instead of the list's own substring filter.
 
 use super::{AppCommand, fuzzy};
+use crate::ssh::Host;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render,
     SharedString, Styled, Window, div, px,
 };
-use gpui_component::command::{Command, CommandItem, CommandState};
+use gpui_component::command::{Command, CommandGroup, CommandItem, CommandState};
 use gpui_component::{ActiveTheme, Disableable, IndexPath};
+use std::borrow::Cow;
 
 /// One line of the palette.
 pub enum Entry {
@@ -22,6 +25,8 @@ pub enum Entry {
     Profile { id: String, title: String },
     /// A theme of the theme picker; `current` is the one saved.
     Theme { name: String, current: bool },
+    /// Connects to the host in a new tab (spec 0006).
+    Host(Host),
 }
 
 impl Entry {
@@ -30,6 +35,25 @@ impl Entry {
             Entry::Command { title, .. } => title,
             Entry::Profile { title, .. } => title,
             Entry::Theme { name, .. } => name,
+            Entry::Host(host) => &host.label,
+        }
+    }
+
+    /// What a query is matched against: a host by its label, where it
+    /// connects and its group (spec 0006, flow 1).
+    fn haystack(&self) -> Cow<'_, str> {
+        match self {
+            Entry::Host(host) => {
+                format!("{} {} {}", host.label, host.destination, host.group).into()
+            }
+            entry => entry.title().into(),
+        }
+    }
+
+    fn group(&self) -> Option<&str> {
+        match self {
+            Entry::Host(host) => Some(&host.group),
+            _ => None,
         }
     }
 
@@ -49,6 +73,7 @@ impl Entry {
             Entry::Theme { name, current } => {
                 CommandItem::new().label(name.clone()).checked(*current)
             }
+            Entry::Host(host) => CommandItem::new().label(host.label.clone()),
         }
     }
 }
@@ -76,6 +101,8 @@ pub struct Palette {
     /// The entry to highlight once the list has been drawn.
     pending: Option<usize>,
     placeholder: SharedString,
+    /// What an empty list says.
+    empty: SharedString,
 }
 
 impl EventEmitter<PaletteEvent> for Palette {}
@@ -99,16 +126,56 @@ impl Palette {
             highlighted: None,
             pending: highlight,
             placeholder: placeholder.into(),
+            empty: "Nothing matches".into(),
         }
     }
 
+    /// What the list says when it has nothing to show.
+    pub fn with_empty(mut self, empty: impl Into<SharedString>) -> Self {
+        self.empty = empty.into();
+        self
+    }
+
     fn rank(&mut self, query: &str) {
-        self.shown = fuzzy::rank(query, self.entries.iter().map(Entry::title));
+        let haystacks: Vec<Cow<str>> = self.entries.iter().map(Entry::haystack).collect();
+        self.shown = fuzzy::rank(query, haystacks.iter().map(|haystack| &**haystack));
+    }
+
+    /// The shown entries by group, a group where its best match ranks.
+    /// Entries without a group come first, as the list draws them.
+    fn sections(&self) -> Vec<(Option<&str>, Vec<usize>)> {
+        let mut sections: Vec<(Option<&str>, Vec<usize>)> = Vec::new();
+        for &ix in &self.shown {
+            let group = self.entries.get(ix).and_then(Entry::group);
+            match sections.iter_mut().find(|(known, _)| *known == group) {
+                Some((_, entries)) => entries.push(ix),
+                None => sections.push((group, vec![ix])),
+            }
+        }
+        sections.sort_by_key(|(group, _)| group.is_some());
+        sections
     }
 
     /// The `entries` index of the list row `index`.
     fn entry_ix(&self, index: IndexPath) -> Option<usize> {
-        self.shown.get(index.row).copied()
+        let sections = self.sections();
+        let (_, entries) = sections.get(index.section)?;
+        entries.get(index.row).copied()
+    }
+
+    /// The list row of entry `ix`.
+    fn index_of(&self, ix: usize) -> Option<IndexPath> {
+        self.sections()
+            .iter()
+            .enumerate()
+            .find_map(|(section, (_, entries))| {
+                let row = entries.iter().position(|&entry| entry == ix)?;
+                Some(IndexPath {
+                    section,
+                    row,
+                    column: 0,
+                })
+            })
     }
 
     fn highlight(&mut self, index: IndexPath, cx: &mut Context<Self>) {
@@ -124,6 +191,7 @@ impl Palette {
     fn confirm(&mut self, index: IndexPath, cx: &mut Context<Self>) {
         match self.entry_ix(index).and_then(|ix| self.entries.get(ix)) {
             Some(Entry::Profile { id, .. }) => cx.emit(PaletteEvent::OpenProfile(id.clone())),
+            Some(Entry::Host(host)) => cx.emit(PaletteEvent::OpenProfile(host.id.clone())),
             Some(Entry::Theme { name, .. }) => cx.emit(PaletteEvent::ChooseTheme(name.clone())),
             // A command has run through its action already.
             Some(Entry::Command { .. }) | None => {}
@@ -134,39 +202,47 @@ impl Palette {
 
 impl Render for Palette {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(entry) = self.pending.take()
-            && let Some(row) = self.shown.iter().position(|&ix| ix == entry)
-        {
+        if let Some(index) = self.pending.take().and_then(|entry| self.index_of(entry)) {
             // The list knows its rows only after it has been drawn once.
             let state = self.state.clone();
             window.on_next_frame(move |window, cx| {
                 state.update(cx, |state, cx| {
-                    let index = IndexPath {
-                        section: 0,
-                        row,
-                        column: 0,
-                    };
                     state.set_selected_index(Some(index), window, cx);
                 });
             });
         }
         let palette = cx.entity().downgrade();
-        let items = self
-            .shown
-            .iter()
-            .filter_map(|&ix| self.entries.get(ix))
-            .map(Entry::item);
-        // The ID `keybindings:` in config.yaml binds keys to.
-        let id = self.highlighted.and_then(|ix| match self.entries.get(ix) {
-            Some(Entry::Command { command, .. }) => Some(command.id),
-            _ => None,
-        });
+        // Under the list: a command's ID, which `keybindings:` in
+        // config.yaml binds keys to, or where a host connects.
+        let footer: SharedString = match self.highlighted.and_then(|ix| self.entries.get(ix)) {
+            Some(Entry::Command { command, .. }) => command.id.into(),
+            Some(Entry::Host(host)) => host.destination.clone().into(),
+            _ => SharedString::default(),
+        };
         let muted = cx.theme().muted_foreground;
-        Command::new(&self.state)
-            .items(items)
-            .filterable(false)
+        let mut list = Command::new(&self.state);
+        for (group, entries) in self.sections() {
+            let items = entries
+                .iter()
+                .filter_map(|&ix| self.entries.get(ix))
+                .map(Entry::item);
+            list = match group {
+                Some(group) => list.group(CommandGroup::new().label(group.to_owned()).items(items)),
+                None => list.items(items),
+            };
+        }
+        let empty = self.empty.clone();
+        list.filterable(false)
             .placeholder(self.placeholder.clone())
             .max_h(px(360.))
+            .empty(move |_: &CommandState, _: &mut Window, _: &mut App| {
+                div()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .text_sm()
+                    .text_color(muted)
+                    .child(empty.clone())
+            })
             .on_query({
                 let palette = palette.clone();
                 move |query: &str, _: &mut Window, cx: &mut App| {
@@ -199,7 +275,7 @@ impl Render for Palette {
                     .py(px(6.))
                     .text_xs()
                     .text_color(muted)
-                    .child(id.unwrap_or_default())
+                    .child(footer.clone())
             })
     }
 }

@@ -122,6 +122,7 @@ pub fn defaults() -> Vec<(String, &'static str)> {
     };
     let mut keys = vec![
         (format!("{app}-p"), "palette.open"),
+        (format!("{app}-h"), "host.connect"),
         (format!("{app}-t"), "tab.new"),
         (format!("{app}-w"), "pane.close"),
         (format!("{app}-d"), "pane.splitRight"),
@@ -410,13 +411,13 @@ mod tests {
     }
 
     /// The default keys of spec 0004 §Model on Linux and Windows. Copy,
-    /// paste and search arrive with T-002, connecting to a host with spec
-    /// 0006.
+    /// paste and search arrive with T-002.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn the_defaults_are_the_spec_table() {
         let table = [
             ("ctrl-shift-p", "palette.open"),
+            ("ctrl-shift-h", "host.connect"),
             ("ctrl-shift-t", "tab.new"),
             ("ctrl-shift-w", "pane.close"),
             ("ctrl-tab", "tab.next"),

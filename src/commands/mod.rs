@@ -32,6 +32,8 @@ actions!(
         /// Opens `config.yaml` in the OS's editor, creating it first if it's
         /// missing (spec 0005).
         OpenConfig,
+        /// Opens the host picker (spec 0006).
+        ConnectToHost,
     ]
 );
 
@@ -85,6 +87,9 @@ pub const COMMANDS: &[AppCommand] = &[
     }),
     command("font.reset", Some("Reset font size"), || {
         Box::new(ResetFontSize)
+    }),
+    command("host.connect", Some("Connect to host…"), || {
+        Box::new(ConnectToHost)
     }),
     command("theme.select", Some("Select theme"), || {
         Box::new(SelectTheme)
@@ -183,5 +188,25 @@ mod tests {
             let command = by_id(id).unwrap_or_else(|| panic!("no command has the ID `{id}`"));
             assert!(command.title.is_some(), "`{id}` isn't in the palette");
         }
+    }
+
+    /// Spec 0006, flow 1: "Connect to host…" is in the palette, bindable
+    /// as `host.connect`, and opens the host picker.
+    #[test]
+    fn connecting_to_a_host_is_in_the_palette_and_bindable_as_host_connect() {
+        let command = by_id("host.connect").expect("no command has the ID `host.connect`");
+        assert!(
+            command
+                .title
+                .is_some_and(|title| title.starts_with("Connect to host")),
+            "titled {:?}",
+            command.title
+        );
+        let action = (command.action)();
+        assert!(
+            action.as_any().downcast_ref::<ConnectToHost>().is_some(),
+            "runs {}",
+            action.name()
+        );
     }
 }

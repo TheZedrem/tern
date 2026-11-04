@@ -50,8 +50,10 @@ arguments, the environment or a log.
 - **Host** = id, label, group, destination. From a profile: the profile ID,
   its `name` (default: the ID), its `group` (default: "Hosts"). From
   `~/.ssh/config`: one host per `Host` alias without wildcards (`*`, `?`,
-  `!`), in group "SSH config", following `Include`. A profile whose `host`
-  is an alias hides that alias, so each destination is listed once.
+  `!`) and not starting with `-` (ssh would read it as an option), in
+  group "SSH config", following `Include`; its ID is `ssh:<alias>`, which
+  splits and session restore open again. A profile whose `host` is an
+  alias hides that alias, so each destination is listed once.
 - **Command [load-bearing]:** a config alias connects as `ssh <alias>`; a
   profile as `ssh [-l user] [-p port] [-i identity_file] <host>`, with only
   the options the profile sets, so `~/.ssh/config` still applies to it.

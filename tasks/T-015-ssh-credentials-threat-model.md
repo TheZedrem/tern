@@ -1,5 +1,5 @@
 ---
-status: next
+status: now
 blocked-by: []
 ---
 # T-015: Threat model for SSH credentials

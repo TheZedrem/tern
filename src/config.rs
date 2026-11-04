@@ -120,7 +120,13 @@ pub struct SshProfile {
     pub port: Option<NonZeroU16>,
     /// With `~` expanded.
     pub identity_file: Option<PathBuf>,
+    /// The host picker's group; `None` is "Hosts".
+    pub group: Option<String>,
 }
+
+/// What the ID of a host from `~/.ssh/config` starts with: `ssh:<alias>`.
+/// Splits and session restore find the host again by it (spec 0006).
+pub const ALIAS_PREFIX: &str = "ssh:";
 
 impl Default for Config {
     fn default() -> Self {
@@ -173,6 +179,7 @@ impl Config {
             .find(|profile| profile.id == id)
             .cloned()
             .or_else(|| (id == SHELL).then(Profile::shell))
+            .or_else(|| id.strip_prefix(ALIAS_PREFIX).and_then(Profile::ssh_alias))
     }
 
     fn configures(&self, id: &str) -> bool {
@@ -209,6 +216,24 @@ impl Profile {
             theme: None,
             kind: ProfileKind::Local(LocalProfile::default()),
         }
+    }
+
+    /// The profile of a `Host` alias from `~/.ssh/config`: plain
+    /// `ssh <alias>`, so the alias's own settings apply. `None` for an
+    /// alias ssh would read as an option.
+    pub fn ssh_alias(alias: &str) -> Option<Self> {
+        (!alias.is_empty() && !alias.starts_with('-')).then(|| Self {
+            id: format!("{ALIAS_PREFIX}{alias}"),
+            name: Some(alias.to_owned()),
+            theme: None,
+            kind: ProfileKind::Ssh(SshProfile {
+                host: alias.to_owned(),
+                user: None,
+                port: None,
+                identity_file: None,
+                group: None,
+            }),
+        })
     }
 
     /// The name tab titles and the palette show: `name`, else the ID.
@@ -913,6 +938,7 @@ impl Attempt<'_> {
                 ("user", raw.user.is_some()),
                 ("port", raw.port.is_some()),
                 ("identity_file", raw.identity_file.is_some()),
+                ("group", raw.group.is_some()),
             ]
             .into_iter()
             .filter_map(|(key, set)| set.then_some(key))
@@ -957,6 +983,7 @@ impl Attempt<'_> {
                     user: raw.user,
                     port: raw.port,
                     identity_file: raw.identity_file.as_deref().map(expand_home),
+                    group: raw.group.filter(|group| !group.trim().is_empty()),
                 })
             }
         };
@@ -996,9 +1023,7 @@ struct RawProfile {
     user: Option<String>,
     port: Option<NonZeroU16>,
     identity_file: Option<String>,
-    /// The host picker's group, read with T-013.
-    #[serde(rename = "group")]
-    _group: Option<IgnoredAny>,
+    group: Option<String>,
     /// Only checked for, never kept: secrets belong in the OS keychain.
     password: Option<IgnoredAny>,
 }
@@ -1183,6 +1208,7 @@ pub(crate) mod tests {
             user: None,
             port: None,
             identity_file: None,
+            group: None,
         }
     }
 
@@ -1640,8 +1666,7 @@ theme:
 "##;
 
     /// The keys later tasks read (cursor, copy_on_select, restore_session)
-    /// pass silently, and so does the ssh profile's `group`, which the host
-    /// picker reads (T-013).
+    /// pass silently.
     #[test]
     fn the_spec_example_loads_every_profile_without_a_notice() {
         let Loaded { config, notices } = parse(SPEC_EXAMPLE);
@@ -1681,6 +1706,7 @@ theme:
                         user: Some("myuser".into()),
                         port: NonZeroU16::new(22),
                         identity_file: Some(home.join(".ssh/id_ed25519")),
+                        group: Some("Production".into()),
                     }),
                     ..Profile::shell()
                 },
@@ -1918,6 +1944,44 @@ theme:
         assert_eq!(unnamed.profile_or_default("gone"), Profile::shell());
     }
 
+    /// A host from `~/.ssh/config` opens by its ID, `ssh:<alias>`, as
+    /// plain `ssh <alias>` (spec 0006 §Model). Splits and restored tabs
+    /// find it again by that ID.
+    #[test]
+    fn an_ssh_alias_id_is_an_ssh_profile_for_that_alias_with_no_options() {
+        let profile = Config::default()
+            .profile("ssh:web")
+            .expect("`ssh:web` is a profile");
+        assert_eq!(profile.id, "ssh:web");
+        assert_eq!(profile.kind, ProfileKind::Ssh(ssh_to("web")));
+    }
+
+    /// ssh reads an argument that starts with `-` as an option.
+    #[test]
+    fn an_ssh_alias_id_whose_alias_starts_with_a_dash_is_no_profile() {
+        let id = "ssh:-oProxyCommand=echo pwned";
+        assert_eq!(Config::default().profile(id), None);
+    }
+
+    /// Like `shell`, an `ssh:` ID is the configured profile if there is one.
+    #[test]
+    fn a_configured_profile_wins_over_an_ssh_alias_id() {
+        let Loaded { config, notices } = parse(concat!(
+            "profiles:\n",
+            "  \"ssh:web\":\n",
+            "    type: ssh\n",
+            "    host: web.example.com\n",
+            "    user: alice\n",
+        ));
+        let configured = ProfileKind::Ssh(SshProfile {
+            user: Some("alice".into()),
+            ..ssh_to("web.example.com")
+        });
+        let kind = config.profile("ssh:web").map(|profile| profile.kind);
+        assert_eq!(kind, Some(configured));
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
     #[test]
     fn an_unknown_top_level_key_is_a_notice_naming_its_line_not_a_fallback() {
         let loaded = parse("scrollback: 500\ncolour_scheme: solarized\nclose_on_exit: never\n");
@@ -2120,6 +2184,21 @@ theme:
         assert!(notices.is_empty(), "{notices:?}");
     }
 
+    /// An empty `group` puts the host in the default group, "Hosts" (spec
+    /// 0005 §Model).
+    #[test]
+    fn an_empty_group_counts_as_none() {
+        for group in ["", "\"\"", "\"   \""] {
+            let Loaded { config, notices } = parse(&format!(
+                "profiles:\n  prod:\n    type: ssh\n    host: prod.example.com\n    group: {group}\n"
+            ));
+            let kinds: Vec<_> = config.profiles.iter().map(|p| &p.kind).collect();
+            let ungrouped = ProfileKind::Ssh(ssh_to("prod.example.com"));
+            assert_eq!(kinds, [&ungrouped], "group: {group}");
+            assert!(notices.is_empty(), "group: {group}: {notices:?}");
+        }
+    }
+
     /// The palette lists profiles in file order (spec 0005), whatever their
     /// type.
     #[test]
@@ -2314,6 +2393,7 @@ theme:
             "    user: alice\n",
             "    port: 2222\n",
             "    identity_file: ~/.ssh/id_ed25519\n",
+            "    group: Tools\n",
         ));
         assert_eq!(profile_ids(&config), ["htop"], "{notices:?}");
         let runs = Command {
@@ -2323,7 +2403,7 @@ theme:
         };
         assert_eq!(Command::of_profile(&config.profiles[0]), runs);
         assert_eq!(notices.len(), 1, "{notices:?}");
-        for name in ["htop", "host", "user", "port", "identity_file"] {
+        for name in ["htop", "host", "user", "port", "identity_file", "group"] {
             assert!(notices[0].contains(name), "no `{name}`: {}", notices[0]);
         }
     }

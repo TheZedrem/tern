@@ -1,6 +1,6 @@
 ---
 status: next
-blocked-by: [T-012, T-015]
+blocked-by: [T-015]
 ---
 # T-014: SSH prompts in the app and remembered passwords
 

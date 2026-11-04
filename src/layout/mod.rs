@@ -8,11 +8,12 @@ pub mod tree;
 
 use crate::commands::palette::{Entry, Palette, PaletteEvent};
 use crate::commands::{
-    self, ClosePane, CloseTab, DecreaseFontSize, FocusDown, FocusLeft, FocusRight, FocusUp,
-    GoToTab, IncreaseFontSize, NewTab, NextTab, OpenConfig, OpenPalette, PreviousTab, RenameTab,
-    ResetFontSize, SelectTheme, SplitDown, SplitRight, ZoomPane,
+    self, ClosePane, CloseTab, ConnectToHost, DecreaseFontSize, FocusDown, FocusLeft, FocusRight,
+    FocusUp, GoToTab, IncreaseFontSize, NewTab, NextTab, OpenConfig, OpenPalette, PreviousTab,
+    RenameTab, ResetFontSize, SelectTheme, SplitDown, SplitRight, ZoomPane,
 };
 use crate::config::{self, Config, Profile};
+use crate::ssh;
 use crate::terminal::pty::{self, Command, GridSize};
 use crate::terminal::{
     FONT_SIZES, FontSettings, Launch, PaneEvent, PaneProfile, PaneSettings, Start, TerminalPane,
@@ -511,14 +512,36 @@ impl Workspace {
             id: profile.id,
         });
         let entries = commands.chain(profiles).collect();
-        self.show_palette(
-            entries,
-            "Run a command or open a profile",
-            None,
-            None,
-            window,
-            cx,
-        );
+        self.show_palette(None, window, cx, |window, cx| {
+            Palette::new(entries, "Run a command or open a profile", None, window, cx)
+        });
+    }
+
+    /// Opens the host picker over the SSH profiles and the hosts of
+    /// `~/.ssh/config`, which is read each time, off the UI thread, so its
+    /// edits show (spec 0006, flow 1).
+    fn connect_to_host(&mut self, _: &ConnectToHost, window: &mut Window, cx: &mut Context<Self>) {
+        let profiles = self.config.profiles.clone();
+        let found = cx.background_spawn(async move {
+            let path = ssh::config_path().unwrap_or_default();
+            ssh::hosts(&profiles, &path)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let (hosts, notices) = found.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                for notice in notices {
+                    show_notice(notice, window, cx);
+                }
+                let entries = hosts.into_iter().map(Entry::Host).collect();
+                this.show_palette(None, window, cx, |window, cx| {
+                    Palette::new(entries, "Connect to a host", None, window, cx).with_empty(
+                        "No hosts yet: add `type: ssh` profiles to config.yaml, \
+                         or hosts to ~/.ssh/config",
+                    )
+                });
+            });
+        })
+        .detach();
     }
 
     /// The profiles the palette offers: `shell` and the configured ones
@@ -541,26 +564,27 @@ impl Workspace {
                 name,
             })
             .collect();
-        let saved = Some(self.theme);
-        self.show_palette(entries, "Select a theme", highlight, saved, window, cx);
+        self.show_palette(Some(self.theme), window, cx, |window, cx| {
+            Palette::new(entries, "Select a theme", highlight, window, cx)
+        });
     }
 
     /// Shows a palette, replacing one that's open: a command in the
     /// palette can open the theme picker.
+    /// `saved_theme` is the theme to go back to when the palette previews
+    /// themes.
     fn show_palette(
         &mut self,
-        entries: Vec<Entry>,
-        placeholder: &'static str,
-        highlight: Option<usize>,
         saved_theme: Option<Theme>,
         window: &mut Window,
         cx: &mut Context<Self>,
+        build: impl FnOnce(&mut Window, &mut Context<Palette>) -> Palette,
     ) {
         if let Some(saved) = self.palette.take().and_then(|open| open.saved_theme) {
             self.theme = saved;
             self.apply_settings(cx);
         }
-        let view = cx.new(|cx| Palette::new(entries, placeholder, highlight, window, cx));
+        let view = cx.new(|cx| build(window, cx));
         let events = cx.subscribe_in(&view, window, Self::palette_event);
         self.palette = Some(OpenPaletteView {
             view,
@@ -1368,6 +1392,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(Self::open_palette))
             .on_action(cx.listener(Self::select_theme))
+            .on_action(cx.listener(Self::connect_to_host))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.close_tab(this.tabs.active_index(), window, cx);
             }))

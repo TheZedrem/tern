@@ -1,13 +1,87 @@
-//! SSH through the system `ssh` (spec 0006): what a `type: ssh` profile
-//! runs. The host list and picker come with T-013, answering ssh's prompts
-//! in the app with T-014; until then ssh asks in the terminal as usual.
+//! SSH through the system `ssh` (spec 0006): the hosts the picker lists
+//! and what connects to them. Answering ssh's prompts in the app comes with
+//! T-014; until then ssh asks in the terminal as usual.
 
-use crate::config::SshProfile;
+pub mod config;
+
+use crate::config::{Profile, ProfileKind, SshProfile};
 use crate::terminal::pty::{self, Command};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 /// The program zed-term connects with: the OpenSSH client on `PATH`.
 pub const PROGRAM: &str = "ssh";
+
+/// The group of profiles that name none.
+const PROFILE_GROUP: &str = "Hosts";
+/// The group of the hosts from `~/.ssh/config`.
+const SSH_CONFIG_GROUP: &str = "SSH config";
+
+/// One line of the host picker.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Host {
+    /// The ID of the profile that connects to it; `config::Config::profile`
+    /// finds it, `ssh:<alias>` for a host from `~/.ssh/config` too.
+    pub id: String,
+    pub label: String,
+    pub group: String,
+    /// Where it connects, as `[user@]host[:port]`.
+    pub destination: String,
+}
+
+/// `~/.ssh/config`, or `%USERPROFILE%\.ssh\config` on Windows.
+pub fn config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".ssh").join("config"))
+}
+
+/// Every host the picker offers (spec 0006): the SSH profiles in
+/// `profiles`, then the aliases of `ssh_config` that no profile already
+/// connects to, so each destination is listed once. Also a notice per ssh
+/// config file that couldn't be read.
+pub fn hosts(profiles: &[Profile], ssh_config: &Path) -> (Vec<Host>, Vec<String>) {
+    let mut hosts: Vec<Host> = profiles
+        .iter()
+        .filter_map(|profile| {
+            let ProfileKind::Ssh(ssh) = &profile.kind else {
+                return None;
+            };
+            let user = ssh.user.as_ref().map(|user| format!("{user}@"));
+            let port = ssh.port.map(|port| format!(":{port}"));
+            Some(Host {
+                id: profile.id.clone(),
+                label: profile.display_name().to_owned(),
+                group: ssh.group.clone().unwrap_or_else(|| PROFILE_GROUP.into()),
+                destination: format!(
+                    "{}{}{}",
+                    user.unwrap_or_default(),
+                    ssh.host,
+                    port.unwrap_or_default()
+                ),
+            })
+        })
+        .collect();
+    let (aliases, notices) = config::aliases(ssh_config);
+    let taken: Vec<&str> = profiles
+        .iter()
+        .filter_map(|profile| match &profile.kind {
+            ProfileKind::Ssh(ssh) => Some(ssh.host.as_str()),
+            ProfileKind::Local(_) => None,
+        })
+        .collect();
+    let from_config: Vec<Host> = aliases
+        .into_iter()
+        .filter(|alias| !taken.contains(&alias.as_str()))
+        .filter_map(|alias| Profile::ssh_alias(&alias))
+        .map(|profile| Host {
+            label: profile.display_name().to_owned(),
+            destination: profile.display_name().to_owned(),
+            id: profile.id,
+            group: SSH_CONFIG_GROUP.into(),
+        })
+        .collect();
+    hosts.extend(from_config);
+    (hosts, notices)
+}
 
 /// The exit code ssh reports for a connection that failed or dropped,
 /// which a pane offers to reconnect after (spec 0006, flow 5).
@@ -59,7 +133,10 @@ pub fn not_installed() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::tests::ssh_to;
+    use crate::commands::fuzzy;
+    use crate::config::Config;
+    use crate::config::tests::{TempDir, ssh_to};
+    use std::fs;
     use std::num::NonZeroU16;
     use std::path::PathBuf;
 
@@ -68,6 +145,299 @@ mod tests {
         std::iter::once(command.program.as_str())
             .chain(command.args.iter().map(String::as_str))
             .collect()
+    }
+
+    /// SSH profile `id`, with no name or theme.
+    fn ssh_profile(id: &str, ssh: SshProfile) -> Profile {
+        Profile {
+            id: id.into(),
+            kind: ProfileKind::Ssh(ssh),
+            ..Profile::shell()
+        }
+    }
+
+    /// An ssh config in `dir` holding `text`.
+    fn ssh_config(dir: &TempDir, text: &str) -> PathBuf {
+        let path = dir.path().join("config");
+        fs::write(&path, text).expect("write the ssh config");
+        path
+    }
+
+    /// The IDs of `hosts`, in order.
+    fn ids(hosts: &[Host]) -> Vec<&str> {
+        hosts.iter().map(|host| host.id.as_str()).collect()
+    }
+
+    /// What the picker matches a query against (spec 0006, flow 1), as the
+    /// palette writes it: the label, where the host connects, its group.
+    fn haystack(host: &Host) -> String {
+        format!("{} {} {}", host.label, host.destination, host.group)
+    }
+
+    /// AC1 (spec 0006).
+    #[test]
+    fn a_host_only_in_an_included_file_is_listed_and_host_star_and_host_not_foo_are_not() {
+        let dir = TempDir::new("ssh-hosts-ac1");
+        fs::write(
+            dir.path().join("work.conf"),
+            "Host work-box\n  HostName 10.0.0.1\n",
+        )
+        .expect("write work.conf");
+        let path = ssh_config(
+            &dir,
+            concat!(
+                "Host *\n",
+                "  ServerAliveInterval 30\n",
+                "Host !foo\n",
+                "  User alice\n",
+                "Include work.conf\n",
+            ),
+        );
+        let (listed, notices) = hosts(&[], &path);
+        let labels: Vec<&str> = listed.iter().map(|host| host.label.as_str()).collect();
+        assert_eq!(labels, ["work-box"]);
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Profiles in file order (spec 0005), then `~/.ssh/config` in its own.
+    #[test]
+    fn ssh_profiles_come_first_in_profile_order_then_the_ssh_config_hosts_in_file_order() {
+        let dir = TempDir::new("ssh-hosts-order");
+        let path = ssh_config(&dir, "Host yankee\nHost bravo\n");
+        let profiles = [
+            ssh_profile("zulu", ssh_to("zulu.example.com")),
+            ssh_profile("alpha", ssh_to("alpha.example.com")),
+        ];
+        let (listed, _) = hosts(&profiles, &path);
+        assert_eq!(ids(&listed), ["zulu", "alpha", "ssh:yankee", "ssh:bravo"]);
+    }
+
+    /// Spec 0006 §Model: the profile ID, its `name` (default: the ID) and
+    /// its `group` (default: "Hosts").
+    #[test]
+    fn a_profile_is_listed_by_its_id_its_name_and_its_group() {
+        let dir = TempDir::new("ssh-hosts-profile");
+        let db = Profile {
+            name: Some("Postgres".into()),
+            ..ssh_profile(
+                "db",
+                SshProfile {
+                    group: Some("Databases".into()),
+                    ..ssh_to("db.example.com")
+                },
+            )
+        };
+        let staging = ssh_profile("staging", ssh_to("staging.example.com"));
+        let (listed, _) = hosts(&[db, staging], &dir.path().join("config"));
+        let expected = [
+            Host {
+                id: "db".into(),
+                label: "Postgres".into(),
+                group: "Databases".into(),
+                destination: "db.example.com".into(),
+            },
+            Host {
+                id: "staging".into(),
+                label: "staging".into(),
+                group: "Hosts".into(),
+                destination: "staging.example.com".into(),
+            },
+        ];
+        assert_eq!(listed, expected);
+    }
+
+    /// Where a host connects: `[user@]host[:port]`, with what the profile
+    /// sets. The key it logs in with isn't part of that.
+    #[test]
+    fn a_profiles_destination_is_user_at_host_colon_port_with_only_what_it_sets() {
+        let dir = TempDir::new("ssh-hosts-destination");
+        let alice = || Some("alice".to_owned());
+        let cases = [
+            (ssh_to("prod"), "prod"),
+            (
+                SshProfile {
+                    user: alice(),
+                    ..ssh_to("prod")
+                },
+                "alice@prod",
+            ),
+            (
+                SshProfile {
+                    port: NonZeroU16::new(2222),
+                    ..ssh_to("prod")
+                },
+                "prod:2222",
+            ),
+            (
+                SshProfile {
+                    user: alice(),
+                    port: NonZeroU16::new(2222),
+                    identity_file: Some(PathBuf::from("/home/alice/.ssh/id_ed25519")),
+                    ..ssh_to("prod")
+                },
+                "alice@prod:2222",
+            ),
+        ];
+        for (ssh, destination) in cases {
+            let (listed, _) = hosts(
+                &[ssh_profile("prod", ssh.clone())],
+                &dir.path().join("config"),
+            );
+            let destinations: Vec<&str> = listed
+                .iter()
+                .map(|host| host.destination.as_str())
+                .collect();
+            assert_eq!(destinations, [destination], "{ssh:?}");
+        }
+    }
+
+    /// Spec 0006 §Model.
+    #[test]
+    fn an_ssh_config_host_is_its_alias_in_the_group_ssh_config() {
+        let dir = TempDir::new("ssh-hosts-alias");
+        let path = ssh_config(&dir, "Host web\n  HostName web.internal.example.com\n");
+        let (listed, _) = hosts(&[], &path);
+        let expected = Host {
+            id: "ssh:web".into(),
+            label: "web".into(),
+            group: "SSH config".into(),
+            destination: "web".into(),
+        };
+        assert_eq!(listed, [expected]);
+    }
+
+    /// Spec 0006 §Model: each destination is listed once.
+    #[test]
+    fn a_profile_whose_host_is_an_ssh_config_alias_hides_that_alias() {
+        let dir = TempDir::new("ssh-hosts-hidden-alias");
+        let path = ssh_config(&dir, "Host web db\n");
+        let deploy = ssh_profile(
+            "deploy",
+            SshProfile {
+                user: Some("deploy".into()),
+                ..ssh_to("web")
+            },
+        );
+        let (listed, _) = hosts(&[deploy], &path);
+        assert_eq!(ids(&listed), ["deploy", "ssh:db"]);
+    }
+
+    /// The picker lists `type: ssh` profiles; the command palette opens
+    /// the local ones.
+    #[test]
+    fn local_profiles_are_not_hosts() {
+        let dir = TempDir::new("ssh-hosts-local");
+        let profiles = [
+            Profile::shell(),
+            Profile {
+                id: "htop".into(),
+                ..Profile::shell()
+            },
+            ssh_profile("prod", ssh_to("prod.example.com")),
+        ];
+        let (listed, _) = hosts(&profiles, &dir.path().join("config"));
+        assert_eq!(ids(&listed), ["prod"]);
+    }
+
+    /// Spec 0006, flow 8: what `~/.ssh/config` can't give is a notice, and
+    /// the rest is still listed.
+    #[test]
+    fn the_ssh_configs_notices_come_with_its_hosts() {
+        let dir = TempDir::new("ssh-hosts-notices");
+        // It includes itself until `Include` nests too deep.
+        let path = ssh_config(&dir, "Host loop\nInclude config\n");
+        let (listed, notices) = hosts(&[], &path);
+        assert_eq!(ids(&listed), ["ssh:loop"]);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices, config::aliases(&path).1);
+    }
+
+    /// AC2 (spec 0006), the matcher's part: typing part of a group name
+    /// narrows the picker to that group.
+    #[test]
+    fn typing_part_of_a_group_name_keeps_exactly_that_groups_hosts() {
+        let dir = TempDir::new("ssh-hosts-ac2-groups");
+        let path = ssh_config(&dir, "Host web1 cache\n");
+        let grouped = |group: &str, ssh: SshProfile| SshProfile {
+            group: Some(group.into()),
+            ..ssh
+        };
+        let admin = SshProfile {
+            user: Some("admin".into()),
+            ..ssh_to("10.0.0.6")
+        };
+        let profiles = [
+            Profile {
+                name: Some("API".into()),
+                ..ssh_profile("api", grouped("Production", ssh_to("10.0.0.5")))
+            },
+            Profile {
+                name: Some("Database".into()),
+                ..ssh_profile("db", grouped("Production", admin))
+            },
+            Profile {
+                name: Some("CI runner".into()),
+                ..ssh_profile("ci", grouped("Staging", ssh_to("10.1.0.7")))
+            },
+            ssh_profile("lab", ssh_to("10.2.0.8")),
+        ];
+        let (listed, _) = hosts(&profiles, &path);
+        let haystacks: Vec<String> = listed.iter().map(haystack).collect();
+        for (query, group) in [
+            ("produ", "Production"),
+            ("stag", "Staging"),
+            ("host", "Hosts"),
+            ("ssh conf", "SSH config"),
+        ] {
+            let in_group: Vec<usize> = (0..listed.len())
+                .filter(|&ix| listed[ix].group == group)
+                .collect();
+            assert!(!in_group.is_empty(), "no host is in {group}: {listed:?}");
+            let mut kept = fuzzy::rank(query, haystacks.iter().map(String::as_str));
+            kept.sort_unstable();
+            assert_eq!(kept, in_group, "`{query}` over {haystacks:?}");
+        }
+    }
+
+    /// AC2 (spec 0006): Enter opens the host's ID as a profile, and a new
+    /// tab is named after its profile, so after the host.
+    #[test]
+    fn every_listed_host_opens_an_ssh_profile_named_like_it() {
+        let dir = TempDir::new("ssh-hosts-ac2-open");
+        let path = ssh_config(&dir, "Host web db\n");
+        let config = Config {
+            profiles: vec![
+                Profile {
+                    name: Some("Production".into()),
+                    ..ssh_profile("prod", ssh_to("prod.example.com"))
+                },
+                ssh_profile("staging", ssh_to("staging.example.com")),
+            ],
+            ..Config::default()
+        };
+        let (listed, _) = hosts(&config.profiles, &path);
+        assert_eq!(listed.len(), 4, "{listed:?}");
+        for host in &listed {
+            let profile = config
+                .profile(&host.id)
+                .unwrap_or_else(|| panic!("`{}` opens no profile", host.id));
+            assert_eq!(profile.display_name(), host.label, "{host:?}");
+            assert!(
+                matches!(profile.kind, ProfileKind::Ssh(_)),
+                "`{}` opens {profile:?}",
+                host.id
+            );
+        }
+    }
+
+    /// Spec 0006 §Model [load-bearing]: a host from `~/.ssh/config`
+    /// connects as `ssh <alias>`, so all of the alias's settings apply.
+    #[test]
+    fn an_ssh_config_host_runs_exactly_ssh_and_its_alias() {
+        let profile = Config::default()
+            .profile("ssh:web")
+            .expect("`ssh:web` opens a profile");
+        assert_eq!(argv(&Command::of_profile(&profile)), ["ssh", "web"]);
     }
 
     /// AC3 (spec 0006).

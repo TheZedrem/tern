@@ -22,7 +22,9 @@ with `command: [htop]`-style program names resolves through `PATH` and
 (GPUI's Windows key mapper rewrites bindings per layout). For T-012: an
 SSH profile connects through the built-in `ssh.exe`, a dropped connection
 (exit 255) offers Enter to reconnect, and with the OpenSSH Client feature
-turned off the pane says how to turn it on. Fix what fails. Area: src.
+turned off the pane says how to turn it on. For T-013: the host picker
+lists the hosts of `%USERPROFILE%\.ssh\config`, including ones from an
+`Include` with backslashes in its path. Fix what fails. Area: src.
 
 Spec: ../spec/0001-startup-performance.md (AC8)
 Spec: ../spec/0002-terminal-pane.md (spawn, input, resize, exit on Windows)
