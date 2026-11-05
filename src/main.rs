@@ -32,10 +32,10 @@ const WINDOW_SIZE: (f32, f32) = (1000.0, 640.0);
 
 /// A session the bench restores instead of none, to measure a restored
 /// layout (spec 0003, AC7). The bench never reads or writes the user's.
-const BENCH_SESSION_VAR: &str = "ZED_TERM_BENCH_SESSION";
+const BENCH_SESSION_VAR: &str = "TERN_BENCH_SESSION";
 
 fn main() {
-    // ssh runs zed-term as its askpass helper (spec 0006, flow 3), which
+    // ssh runs Tern as its askpass helper (spec 0006, flow 3), which
     // asks the running app and exits before any of the app's own code runs.
     if let Some(code) = ssh::askpass::helper() {
         std::process::exit(code);
@@ -44,7 +44,7 @@ fn main() {
     let start = Instant::now();
 
     let mode = Mode::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
-        eprintln!("zed-term: {error}");
+        eprintln!("tern: {error}");
         std::process::exit(2);
     });
     match &mode {
@@ -197,13 +197,13 @@ fn main() {
                 cx,
             ))),
             titlebar: Some(TitlebarOptions {
-                title: Some("zed-term".into()),
+                title: Some("Tern".into()),
                 ..Default::default()
             }),
-            app_id: Some("zed-term".into()),
+            app_id: Some("de.zedrem.tern".into()),
             // Dev only: draw our own title bar even where the compositor
             // would draw one, to check the GNOME path (spec 0003, flow 8).
-            window_decorations: std::env::var_os("ZED_TERM_CLIENT_DECORATIONS")
+            window_decorations: std::env::var_os("TERN_CLIENT_DECORATIONS")
                 .map(|_| WindowDecorations::Client),
             ..Default::default()
         };
@@ -226,7 +226,7 @@ fn main() {
             cx.new(|cx| gpui_component::Root::new(workspace, window, cx))
         });
         if let Err(error) = opened {
-            eprintln!("zed-term: could not open a window: {error:#}");
+            eprintln!("tern: could not open a window: {error:#}");
             std::process::exit(1);
         }
     });
@@ -236,7 +236,7 @@ fn main() {
 /// headless and hang with no window (architecture §Key decisions).
 fn check_display(wayland_display: Option<&OsStr>) -> Result<(), &'static str> {
     if cfg!(target_os = "linux") && wayland_display.is_none_or(OsStr::is_empty) {
-        return Err("zed-term needs a Wayland session (X11 is not supported)");
+        return Err("Tern needs a Wayland session (X11 is not supported)");
     }
     Ok(())
 }

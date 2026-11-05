@@ -175,7 +175,7 @@ after the first frame. The picker state is built on first open.
 
 ### Platform notes
 
-Paths come from `dirs`: `~/.config/zed-term/` on Linux, `%APPDATA%\zed-term\`
+Paths come from `dirs`: `~/.config/tern/` on Linux, `%APPDATA%\tern\`
 on Windows. `~` in `cwd`/`identity_file` expands on both. On Windows,
 `command: [htop]` resolves through `PATH` and `PATHEXT`. File watchers on
 Windows report editor save-via-rename differently, so test with VS Code and

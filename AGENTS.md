@@ -1,10 +1,10 @@
-# AGENTS.md — zed-term
+# AGENTS.md — Tern
 
 Humans prompt, guide and review; agents write most of the code. This repo
 works **spec-first**: nothing gets built that isn't pinned in `spec/` and
 represented in `tasks/`. Read this file fully before your first task.
 
-## What zed-term is
+## What Tern is
 
 A desktop terminal emulator with built-in SSH/SFTP and one-click AI coding
 agents. Think Tabby's feature set with the boot time of a native terminal.
@@ -52,8 +52,8 @@ defaults. If one fights the task, say so and ask.
    update and render. File IO, PTY writes and anything that can wait go to
    the background executor or a thread; a render only locks a pane's grid
    long enough to snapshot the visible rows.
-3. **Killing the wrong process.** Never `pkill zed-term` / `pkill -f`. The
-   owner may be daily-driving a zed-term build, and that kills every shell
+3. **Killing the wrong process.** Never `pkill tern` / `pkill -f`. The
+   owner may be daily-driving a Tern build, and that kills every shell
    they have open. Kill only a PID you captured at spawn.
 4. **Logging terminal bytes.** PTY output carries passwords, tokens and
    private data. Never log it, even at debug level, and never persist it.
@@ -77,8 +77,8 @@ defaults. If one fights the task, say so and ask.
 | `cargo run` | Run the app (debug). The TTFP badge is shown in a corner |
 | `cargo test` | Unit tests |
 | `cargo fmt && cargo clippy --all-targets -- -D warnings` | Must be clean before a commit |
-| `cargo build --release` | Release binary at `target/release/zed-term` |
-| `target/release/zed-term --bench-startup 10` | Cold run plus median/p90 TTFP over 10 warm launches (spec 0001) |
+| `cargo build --release` | Release binary at `target/release/tern` |
+| `target/release/tern --bench-startup 10` | Cold run plus median/p90 TTFP over 10 warm launches (spec 0001) |
 
 Verify UI changes in the running app (`cargo run`), not just in tests.
 Report the TTFP the badge shows whenever you touched the boot path.

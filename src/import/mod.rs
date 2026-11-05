@@ -1,4 +1,4 @@
-//! `zed-term --import-hosts <file> [--dry-run]` (spec 0010): the SSH hosts
+//! `tern --import-hosts <file> [--dry-run]` (spec 0010): the SSH hosts
 //! of a MobaXterm or Tabby file added to `config.yaml` as `type: ssh`
 //! profiles, once, with a report on stdout. Runs instead of the app: no
 //! window, no PTY, no session. Passwords and vaults are never read into a
@@ -246,7 +246,7 @@ pub fn run(file: &Path, dry_run: bool) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("zed-term: {error}");
+            eprintln!("tern: {error}");
             1
         }
     }
@@ -736,7 +736,7 @@ font:
             "profiles: []\n",
             "profiles:\n  - name: no type\n",
             "profiles:\n  - type: ssh\n    options: [unclosed\n",
-            // A zed-term config: `profiles` is a map, not a list.
+            // A Tern config: `profiles` is a map, not a list.
             "profiles:\n  box:\n    type: ssh\n    host: box\n",
         ];
         for text in cases {
@@ -750,7 +750,7 @@ font:
     impl TempFile {
         fn new(name: &str, bytes: &[u8]) -> Self {
             let path =
-                std::env::temp_dir().join(format!("zed-term-import-{}-{name}", std::process::id()));
+                std::env::temp_dir().join(format!("tern-import-{}-{name}", std::process::id()));
             std::fs::write(&path, bytes).expect("temp file");
             Self(path)
         }
@@ -775,12 +775,9 @@ font:
     /// AC7: a missing file is an error naming it.
     #[test]
     fn a_missing_file_is_an_error() {
-        let path = std::env::temp_dir().join("zed-term-import-does-not-exist.ini");
+        let path = std::env::temp_dir().join("tern-import-does-not-exist.ini");
         let error = read(&path).expect_err("missing");
-        assert!(
-            error.contains("zed-term-import-does-not-exist.ini"),
-            "{error}"
-        );
+        assert!(error.contains("tern-import-does-not-exist.ini"), "{error}");
     }
 
     /// MobaXterm writes CP1252, sometimes with a BOM; both read as text.

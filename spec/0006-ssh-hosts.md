@@ -7,7 +7,7 @@ related: [spec 0002, spec 0003, spec 0004, spec 0005, OQ-001 ✅, OQ-016, resear
 
 # Spec: SSH hosts and connections
 
-Pins how zed-term lists SSH hosts, connects to them through the system
+Pins how Tern lists SSH hosts, connects to them through the system
 `ssh`, and answers ssh's prompts in the app, filling in a stored password
 without it ever touching the terminal. SFTP is a separate, later spec.
 
@@ -15,7 +15,7 @@ without it ever touching the terminal. SFTP is a separate, later spec.
 
 Developers jump between many hosts. Tabby makes that one click but is
 slow; plain terminals make you remember aliases and retype passwords.
-zed-term should list every host the user already has, connect in one
+Tern should list every host the user already has, connect in one
 keystroke, and remember a password only when asked, in the OS keychain.
 
 Done means: every `~/.ssh/config` host and every `type: ssh` profile is in
@@ -68,7 +68,7 @@ arguments, the environment or a log.
 ### Module surface
 
 - `ssh::hosts(config, ssh_config_path) -> Vec<Host>`, `ssh::command(&Host) -> pty::Command`, `ssh::forget(args)`
-- `ssh::askpass`: the per-app-run server, and the helper entry point that `main` runs when ssh starts zed-term as `SSH_ASKPASS`
+- `ssh::askpass`: the per-app-run server, and the helper entry point that `main` runs when ssh starts Tern as `SSH_ASKPASS`
 - `ssh::target::Target`: `resolve` (`ssh -G`) and `secret_for(prompt)`, the auto-fill patterns
 - `secrets::{get, set, delete}(key)` over `keyring`
 - New crates: `keyring` 4 (already planned), `interprocess` (Unix socket or named pipe), `getrandom` (connection tokens), `zeroize` (overwriting secrets after use; OQ-016), and on Windows `widestring`, the type interprocess takes the pipe's security descriptor in
@@ -96,7 +96,7 @@ arguments, the environment or a log.
    - Either way the token is 128 bits from `getrandom`, compared in
      constant time and dropped when its ssh exits (threat model
      [0001](threat-model/0001-ssh-askpass.md), TM-askpass-01 to -03).
-3. **Prompt:** ssh runs zed-term as its askpass helper. `main` checks for
+3. **Prompt:** ssh runs Tern as its askpass helper. `main` checks for
    helper mode first, only with both the endpoint and the token set, and
    the helper exits before any GPUI or config code runs. It checks that
    the endpoint's server process is the app's PID (`SO_PEERCRED`,
@@ -180,7 +180,7 @@ pipe for the socket; `~/.ssh/config` is `%USERPROFILE%\.ssh\config`.
 
 ### Admin area
 
-None: zed-term is a local, single-user app with no admin area.
+None: Tern is a local, single-user app with no admin area.
 
 ### Security & privacy
 
@@ -188,7 +188,7 @@ None: zed-term is a local, single-user app with no admin area.
 |---|---|---|---|---|
 | SSH profiles: host, user, port, key path, group | `config.yaml`, written by the user | Connect | The user's own device; no one else processes it | Until the user edits it |
 | `~/.ssh/config` hosts | Read only, never copied | List hosts | Same | Not stored |
-| Passwords and key passphrases | OS keychain, service `zed-term` | Log in without typing | The user's explicit "Remember" | Until "Forget" or replaced |
+| Passwords and key passphrases | OS keychain, service `tern` | Log in without typing | The user's explicit "Remember" | Until "Forget" or replaced |
 | Host ID per SSH tab | `session.json` | Restore tabs | Same | Overwritten on save (spec 0003) |
 | Host keys | ssh's own `known_hosts` | Host verification | Same | Managed by ssh |
 
@@ -199,7 +199,7 @@ Trust boundaries:
 - **§Security 3 [load-bearing]:** a secret travels keychain → app → helper
   → ssh, over the authenticated local socket only. It is never in an
   environment variable, an argument, the PTY, a log, `config.yaml` or
-  `session.json`. zed-term never logs askpass traffic, prompts included:
+  `session.json`. Tern never logs askpass traffic, prompts included:
   they name users and hosts.
 - **§Security 1 [load-bearing]:** prompts come only from the local ssh
   through askpass. Nothing the remote side prints can trigger, read or

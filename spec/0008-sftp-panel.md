@@ -15,7 +15,7 @@ as its terminal.
 
 Moving a file to or from a server means leaving the terminal for `scp` or
 another app. Tabby and MobaXterm show the host's files next to its shell;
-zed-term should too, without an SSH implementation of its own.
+Tern should too, without an SSH implementation of its own.
 
 Done means: from an SSH pane, one command opens the host's files beside
 it; folders browse, a click opens a file in the user's default app and
@@ -65,14 +65,14 @@ for passwords the way the terminal does.
   the split tree, so it splits, moves and closes like a terminal pane
   (spec 0007); closing it ends its ssh.
 - **Edit copies [load-bearing]:** a file opened for editing is downloaded
-  to `<data_local_dir>/zed-term/edit/<panel>/<n>/<name>` (folders `0700`,
+  to `<data_local_dir>/tern/edit/<panel>/<n>/<name>` (folders `0700`,
   never an execute bit), where `<name>` follows the download name rule
   below. The panel's thread polls each copy's size and mtime every second;
   a change marks the edit `changed`, and its upload mode decides the rest. A panel's copies are deleted when it closes, and
   leftovers of a crashed run after the first frame of the next.
 - **Upload mode [load-bearing]:** `manual` (default) uploads only on the
   user's click; `save` uploads each change the poll sees; `focus` uploads
-  every `changed` edit when zed-term's window gains focus. Each edit starts
+  every `changed` edit when Tern's window gains focus. Each edit starts
   with `sftp_upload` and can be switched on its own in the panel; the
   override lives as long as the edit and is never written to config.
 - **Not saved:** a restored tab comes back without its SFTP panels (spec
@@ -143,7 +143,7 @@ dependency (already built for GPUI's HTTP client) with `rt`, `process`,
 
 ### Admin area
 
-None: zed-term is a local, single-user app with no admin area.
+None: Tern is a local, single-user app with no admin area.
 
 ### Security & privacy
 
@@ -151,7 +151,7 @@ None: zed-term is a local, single-user app with no admin area.
 |---|---|---|---|---|
 | Remote listings: names, sizes, dates | Memory only | Show the folder | The user's own device; no one else processes it | Until the panel closes |
 | Transferred files | Where the user picks, local or remote | The transfer the user started | Same | The user's |
-| Edit copies | `<data_local_dir>/zed-term/edit/` | Open the file in the user's app | Same | Until the panel closes (next launch after a crash) |
+| Edit copies | `<data_local_dir>/tern/edit/` | Open the file in the user's app | Same | Until the panel closes (next launch after a crash) |
 
 Nothing is logged, nothing is kept on disk but the edit copies, and
 nothing leaves the machine except the connection the user starts.
@@ -180,7 +180,7 @@ Trust boundaries:
 2. Downloading a 1 GB file shows progress while the terminal pane beside it still takes typing, the copy matches the original's checksum, and cancel deletes the partial file.
 3. A remote file named `../../.bashrc`, `a/b` or with control characters shows as plain text, and its download or edit copy lands only inside its folder or is refused.
 4. Double-clicking a remote `.txt` opens it in the OS's default app; by default a save leaves the host's file unchanged and marks the edit changed, its Upload button puts the new content on the host within 3 s, and an upload after the host's copy changed asks before overwriting.
-5. With `sftp_upload: save` a save reaches the host within 3 s without a click; with `focus` only after zed-term's window regains focus; an edit switched to another mode in the panel follows that mode while other edits keep the setting's.
+5. With `sftp_upload: save` a save reaches the host within 3 s without a click; with `focus` only after Tern's window regains focus; an edit switched to another mode in the panel follows that mode while other edits keep the setting's.
 6. With `sftp_click: download`, the same double click downloads it to the Downloads folder and opens nothing; a remote `run.exe` or `x.desktop` is never opened in either mode.
 7. Dropping two files from the file manager onto a folder row uploads both into that folder; one that exists there asks first, and declining leaves the remote file as it was; a dropped folder uploads nothing and says why.
 8. Rename, delete after its confirmation, and new folder work, and the listing shows the result.

@@ -339,18 +339,18 @@ pub struct Loaded {
     pub notices: Vec<String>,
 }
 
-/// `<config_dir>/zed-term`, which holds `config.yaml` and `themes/`, or
+/// `<config_dir>/tern`, which holds `config.yaml` and `themes/`, or
 /// `None` if the OS has no config directory.
 pub fn default_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| dir.join("zed-term"))
+    dirs::config_dir().map(|dir| dir.join("tern"))
 }
 
-/// `<config_dir>/zed-term/config.yaml`.
+/// `<config_dir>/tern/config.yaml`.
 pub fn default_path() -> Option<PathBuf> {
     default_dir().map(|dir| dir.join("config.yaml"))
 }
 
-/// `<config_dir>/zed-term/themes`, where theme files live.
+/// `<config_dir>/tern/themes`, where theme files live.
 pub fn themes_dir() -> Option<PathBuf> {
     default_dir().map(|dir| dir.join("themes"))
 }
@@ -1333,7 +1333,7 @@ pub(crate) mod tests {
     impl TempDir {
         pub(crate) fn new(name: &str) -> Self {
             let path =
-                std::env::temp_dir().join(format!("zed-term-test-{name}-{}", std::process::id()));
+                std::env::temp_dir().join(format!("tern-test-{name}-{}", std::process::id()));
             // Left behind by an earlier run that was killed.
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create a temp dir");
@@ -1383,7 +1383,7 @@ pub(crate) mod tests {
 
     #[test]
     fn missing_file_is_defaults_without_notice() {
-        let path = std::env::temp_dir().join("zed-term-test-does-not-exist/config.yaml");
+        let path = std::env::temp_dir().join("tern-test-does-not-exist/config.yaml");
         let loaded = load(&path);
         assert_eq!(loaded.config, Config::default());
         assert!(loaded.notices.is_empty());
@@ -1603,7 +1603,7 @@ pub(crate) mod tests {
     #[test]
     fn no_config_file_boots_the_login_shell_on_dark_with_the_bundled_font() {
         let root = TempDir::new("no-config");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         let Loaded { config, notices } = load(&dir.join("config.yaml"));
         assert!(notices.is_empty(), "{notices:?}");
 
@@ -1634,7 +1634,7 @@ pub(crate) mod tests {
     #[test]
     fn ensure_exists_writes_the_template_and_the_directories_above_it() {
         let root = TempDir::new("ensure-new");
-        let path = root.path().join("config/zed-term/config.yaml");
+        let path = root.path().join("config/tern/config.yaml");
         ensure_exists(&path).expect("create config.yaml");
         assert_eq!(fs::read_to_string(&path).expect("read it back"), TEMPLATE);
     }
@@ -1859,7 +1859,7 @@ pub(crate) mod tests {
     #[test]
     fn saving_a_theme_without_a_config_writes_the_template_with_it() {
         let root = TempDir::new("save-theme-new");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         let path = dir.join("config.yaml");
         save_theme_default(&path, "light").expect("save the theme");
         let text = fs::read_to_string(&path).expect("read config.yaml");
@@ -1897,7 +1897,7 @@ pub(crate) mod tests {
     fn saving_a_theme_into_a_linked_config_edits_the_target_and_keeps_the_link() {
         let root = TempDir::new("save-theme-linked");
         let dotfiles = root.path().join("dotfiles");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         fs::create_dir(&dotfiles).expect("create the dotfiles dir");
         fs::create_dir(&dir).expect("create the config dir");
         let target = dotfiles.join("config.yaml");
@@ -2865,7 +2865,7 @@ theme:
     #[test]
     fn saving_config_yaml_is_reported_within_a_second() {
         let root = TempDir::new("watch-config");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         fs::create_dir(&dir).expect("create the config dir");
         let (_watcher, mut reports) = watch(&dir);
         let config = dir.join("config.yaml");
@@ -2887,7 +2887,7 @@ theme:
     #[test]
     fn changing_a_theme_file_is_reported_within_a_second() {
         let root = TempDir::new("watch-themes");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         let themes = dir.join("themes");
         fs::create_dir_all(&themes).expect("create the themes dir");
         let (_watcher, mut reports) = watch(&dir);
@@ -2908,7 +2908,7 @@ theme:
     #[test]
     fn reading_the_config_and_its_themes_is_not_a_change() {
         let root = TempDir::new("watch-reads");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         let themes = dir.join("themes");
         fs::create_dir_all(&themes).expect("create the themes dir");
         let config = dir.join("config.yaml");
@@ -2928,7 +2928,7 @@ theme:
     #[test]
     fn other_files_in_the_config_dir_are_not_a_change() {
         let root = TempDir::new("watch-unrelated");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         let themes = dir.join("themes");
         fs::create_dir_all(&themes).expect("create the themes dir");
         let (_watcher, mut reports) = watch(&dir);
@@ -2952,11 +2952,11 @@ theme:
         assert!(reported(&mut reports, WITHIN), "the watcher stopped");
     }
 
-    /// On a fresh system the config dir doesn't exist when zed-term starts.
+    /// On a fresh system the config dir doesn't exist when Tern starts.
     #[test]
     fn a_config_dir_created_after_start_is_watched_once_armed() {
         let root = TempDir::new("watch-later");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         let (mut watcher, mut reports) = watch(&dir);
 
         fs::create_dir(&dir).expect("create the config dir");
@@ -2974,7 +2974,7 @@ theme:
     fn editing_a_linked_config_yaml_is_reported_within_a_second() {
         let root = TempDir::new("watch-linked");
         let dotfiles = root.path().join("dotfiles");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         fs::create_dir(&dotfiles).expect("create the dotfiles dir");
         fs::create_dir(&dir).expect("create the config dir");
         fs::write(dotfiles.join("config.yaml"), "scrollback: 1\n").expect("write the config");
@@ -2986,14 +2986,14 @@ theme:
         assert!(reported(&mut reports, WITHIN), "writing through the link");
     }
 
-    /// Linking the dotfiles in while zed-term runs: the reload the new link
+    /// Linking the dotfiles in while Tern runs: the reload the new link
     /// causes arms the watcher, which then follows it.
     #[cfg(unix)]
     #[test]
     fn a_config_yaml_linked_after_start_is_followed_once_armed() {
         let root = TempDir::new("watch-linked-later");
         let dotfiles = root.path().join("dotfiles");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         fs::create_dir(&dotfiles).expect("create the dotfiles dir");
         fs::create_dir(&dir).expect("create the config dir");
         fs::write(dotfiles.join("config.yaml"), "scrollback: 1\n").expect("write the config");
@@ -3015,14 +3015,14 @@ theme:
     fn editing_a_linked_theme_file_is_reported_within_a_second() {
         let root = TempDir::new("watch-linked-theme");
         let dotfiles = root.path().join("dotfiles");
-        let themes = root.path().join("zed-term/themes");
+        let themes = root.path().join("tern/themes");
         fs::create_dir(&dotfiles).expect("create the dotfiles dir");
         fs::create_dir_all(&themes).expect("create the themes dir");
         fs::write(dotfiles.join("midnight.yaml"), "background: \"#000001\"\n")
             .expect("write the theme");
         std::os::unix::fs::symlink(dotfiles.join("midnight.yaml"), themes.join("midnight.yaml"))
             .expect("link the theme");
-        let (_watcher, mut reports) = watch(&root.path().join("zed-term"));
+        let (_watcher, mut reports) = watch(&root.path().join("tern"));
 
         fs::write(themes.join("midnight.yaml"), "background: \"#000002\"\n")
             .expect("write the theme");

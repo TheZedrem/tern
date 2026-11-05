@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use target::Target;
 
-/// The program zed-term connects with: the OpenSSH client on `PATH`.
+/// The program Tern connects with: the OpenSSH client on `PATH`.
 pub const PROGRAM: &str = "ssh";
 
 /// The group of profiles that name none.
@@ -145,7 +145,7 @@ pub fn not_installed() -> String {
          (`openssh-clients` on Fedora, `openssh-client` on Debian and Ubuntu)"
     };
     format!(
-        "zed-term connects through the OpenSSH client, and there is no `ssh` on PATH. To connect, {install}."
+        "Tern connects through the OpenSSH client, and there is no `ssh` on PATH. To connect, {install}."
     )
 }
 

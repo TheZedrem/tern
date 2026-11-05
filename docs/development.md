@@ -24,20 +24,20 @@ cargo run
 
 The TTFP badge in the window corner is the startup time of this run. See
 [spec 0001](../spec/0001-startup-performance.md) for what it measures, and
-use `cargo build --release && target/release/zed-term --bench-startup 10`
-for numbers you can compare. With `ZED_TERM_BENCH_SESSION=<session.json>`
+use `cargo build --release && target/release/tern --bench-startup 10`
+for numbers you can compare. With `TERN_BENCH_SESSION=<session.json>`
 the bench restores that session instead of starting one pane, to measure a
 restored layout (spec 0003, AC7).
 
-Sessions are saved in `~/.local/share/zed-term/session.json` (Linux). To
+Sessions are saved in `~/.local/share/tern/session.json` (Linux). To
 try one without touching yours, point `XDG_DATA_HOME` elsewhere.
 
-To try the title bar zed-term draws on GNOME (spec 0003) on any other
-Wayland compositor, start it with `ZED_TERM_CLIENT_DECORATIONS=1`.
+To try the title bar Tern draws on GNOME (spec 0003) on any other
+Wayland compositor, start it with `TERN_CLIENT_DECORATIONS=1`.
 
 To try a config without touching your own, point `XDG_CONFIG_HOME`
 elsewhere (Linux): `XDG_CONFIG_HOME=/tmp/zt cargo run` reads and watches
-`/tmp/zt/zed-term/config.yaml`.
+`/tmp/zt/tern/config.yaml`.
 
 ## Tests
 
@@ -49,6 +49,6 @@ session.
 
 | File | Path (Linux / Windows) |
 |---|---|
-| Config | `~/.config/zed-term/config.yaml` / `%APPDATA%\zed-term\config.yaml` |
-| User themes | `…/zed-term/themes/*.yaml` |
-| Session state | `~/.local/share/zed-term/session.json` / `%LOCALAPPDATA%\zed-term\session.json` |
+| Config | `~/.config/tern/config.yaml` / `%APPDATA%\tern\config.yaml` |
+| User themes | `…/tern/themes/*.yaml` |
+| Session state | `~/.local/share/tern/session.json` / `%LOCALAPPDATA%\tern\session.json` |

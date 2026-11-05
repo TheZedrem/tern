@@ -75,7 +75,7 @@ const SILENT_BOOT_WAIT: Duration = Duration::from_secs(1);
 /// 0003, flow 5).
 const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 
-actions!(zed_term, [CancelRename]);
+actions!(tern, [CancelRename]);
 
 /// Binds the keys of the workspace's own widgets. The commands' keys are
 /// [`commands::keymap`]'s.
@@ -547,7 +547,7 @@ impl Workspace {
             session::delete(&path)
         };
         if let Err(error) = result {
-            eprintln!("zed-term: the session couldn't be saved: {error}");
+            eprintln!("tern: the session couldn't be saved: {error}");
         }
     }
 
@@ -733,7 +733,7 @@ impl Workspace {
         if let Some(path) = self.bad_session.take()
             && let Err(error) = session::keep_bad(&path)
         {
-            eprintln!("zed-term: the unrestorable session couldn't be set aside: {error}");
+            eprintln!("tern: the unrestorable session couldn't be set aside: {error}");
         }
     }
 

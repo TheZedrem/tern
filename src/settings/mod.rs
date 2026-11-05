@@ -58,7 +58,7 @@ pub const FIELDS: &[&str] = &[
 #[cfg(test)]
 pub const LEFT_TO_THE_FILE: &[&str] = &["theme.custom"];
 
-actions!(zed_term, [CloseSettings]);
+actions!(tern, [CloseSettings]);
 
 /// Binds Esc, which leaves the screen.
 pub fn init(cx: &mut App) {

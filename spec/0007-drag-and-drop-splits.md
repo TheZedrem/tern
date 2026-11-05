@@ -105,7 +105,7 @@ after a move is checked on Windows (T-011).
 
 ### Admin area
 
-None: zed-term is a local, single-user app with no admin area.
+None: Tern is a local, single-user app with no admin area.
 
 ### Security & privacy
 

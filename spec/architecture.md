@@ -1,4 +1,4 @@
-# Architecture — zed-term
+# Architecture — Tern
 
 **Single source of truth for the stack.** Every architecture-relevant
 decision lives here; changing one means editing this file. `docs/` may link
@@ -7,7 +7,7 @@ here but never restates decisions. Anything not yet decided is an entry in
 
 ## Product summary
 
-zed-term is a desktop terminal emulator with built-in SSH/SFTP and one-click
+Tern is a desktop terminal emulator with built-in SSH/SFTP and one-click
 AI coding agents (Claude Code, Hermes Agent, …) — Tabby's feature set, minus
 Tabby's boot time. It is for developers who live in terminals and remote
 hosts and are tired of waiting for Electron. The constraint that shapes
@@ -29,7 +29,7 @@ row here. Phase 2 started before Phase 1 finished (owner's call,
 
 ## Platforms
 
-**Modern platforms only [load-bearing].** zed-term takes no dependency on
+**Modern platforms only [load-bearing].** Tern takes no dependency on
 deprecated or end-of-life technology. That rules out X11 and XWayland on
 Linux and Windows 10, and it rules out adding a dependency just to keep one
 of them alive.
@@ -39,7 +39,7 @@ of them alive.
 | Linux, Wayland session | Required | Any compositor with `xdg-shell`. Needs a Vulkan driver (Mesa or NVIDIA) |
 | Windows 11 | Required | DirectX 11, ConPTY |
 | macOS | Compile-only | No CI builds, no signing, no blocking on it |
-| X11 or XWayland sessions, Windows 10 and older | Not supported | In an X11 session zed-term exits with a clear message (spec 0001) |
+| X11 or XWayland sessions, Windows 10 and older | Not supported | In an X11 session Tern exits with a clear message (spec 0001) |
 
 ## Stack
 
@@ -60,7 +60,7 @@ machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
 | Config format | YAML, parsed with `serde-saphyr` | Owner's choice. Pure Rust, never panics while parsing, maintained (`serde_yaml` is archived) |
 | SSH (Phase 2) | System `ssh` binary spawned in a PTY; its prompts answered in the app through `SSH_ASKPASS` (spec 0006) | Owner's choice. Uses the user's `~/.ssh/config`, ProxyJump, agent, FIDO keys and known_hosts, with no crypto code of our own |
 | SFTP (Phase 2) | `ssh -s <host> sftp`, with the `russh-sftp` client speaking SFTP over its stdio | Same ssh config, agent, keys and known_hosts as terminal sessions; no SSH code of our own |
-| SFTP edit copies (Phase 2) | `<data_local_dir>/zed-term/edit/` | Remote files the user opened for editing | Until their panel closes; a crashed run's on the next launch (spec 0008) |
+| SFTP edit copies (Phase 2) | `<data_local_dir>/tern/edit/` | Remote files the user opened for editing | Until their panel closes; a crashed run's on the next launch (spec 0008) |
 | Secrets (Phase 2) | OS keychain via `keyring` 4: Secret Service over pure-Rust D-Bus on Linux, Credential Manager on Windows | Never in plain files |
 | Askpass channel (Phase 2) | `interprocess` local socket (Unix socket or named pipe) with a per-connection token from `getrandom` | No TCP port, one API on both platforms |
 | Package manager | cargo | |
@@ -100,7 +100,7 @@ Load-bearing rules that code elsewhere depends on, plus the price we knowingly p
   *Cost:* API churn arrives in bulk at each bump, one third-party publisher
   sits in the supply chain, and the release build's final link takes about
   twice as long.
-- **One palette for terminal and widgets.** The resolved zed-term theme is
+- **One palette for terminal and widgets.** The resolved Tern theme is
   written into `gpui-component`'s theme at load and on every reload, so
   widgets never fall back to the library's own colors (spec 0005).
 - **The UI thread never waits for a PTY.** Each pane's `alacritty_terminal`
@@ -141,9 +141,9 @@ All local, all plain files the user can read — nothing leaves the machine.
 
 | Store | Location | Contents | Retention |
 |---|---|---|---|
-| Config | `<config_dir>/zed-term/config.yaml` | Settings, profiles, keybindings, inline themes | Until the user edits/deletes it |
-| User themes | `<config_dir>/zed-term/themes/*.yaml` | Color schemes | Same |
-| Session state | `<data_local_dir>/zed-term/session.json` | Window size, tab/split layout, each pane's profile, cwd and title | Overwritten on every save; never scrollback |
+| Config | `<config_dir>/tern/config.yaml` | Settings, profiles, keybindings, inline themes | Until the user edits/deletes it |
+| User themes | `<config_dir>/tern/themes/*.yaml` | Color schemes | Same |
+| Session state | `<data_local_dir>/tern/session.json` | Window size, tab/split layout, each pane's profile, cwd and title | Overwritten on every save; never scrollback |
 | Secrets (Phase 2) | OS keychain | SSH passwords / key passphrases the user chose to remember | Until the user forgets or replaces it (spec 0006) |
 
 `<config_dir>`/`<data_local_dir>` come from the `dirs` crate (XDG on

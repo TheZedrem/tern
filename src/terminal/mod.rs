@@ -73,7 +73,7 @@ const SEARCH_CONTEXT: &str = "TerminalSearch";
 /// How long the cursor stays on, then off, while it blinks.
 const BLINK: Duration = Duration::from_millis(530);
 
-actions!(zed_term, [CloseSearch]);
+actions!(tern, [CloseSearch]);
 
 const LILEX: [&[u8]; 4] = [
     include_bytes!("../../assets/fonts/lilex/Lilex-Regular.ttf"),
@@ -1175,7 +1175,7 @@ impl TerminalPane {
         cx.notify();
     }
 
-    /// The link zed-term would open under `position` (spec 0002, flow 7).
+    /// The link Tern would open under `position` (spec 0002, flow 7).
     fn link_under(&mut self, position: Point<Pixels>) -> Option<link::Link> {
         let State::Running(running) = &self.state else {
             return None;

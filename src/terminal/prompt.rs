@@ -24,7 +24,7 @@ const CONTEXT: &str = "Prompt";
 /// The widest a dialog gets, in logical pixels.
 const WIDTH: f32 = 460.0;
 
-actions!(zed_term, [CancelPrompt]);
+actions!(tern, [CancelPrompt]);
 
 /// Binds Esc, which declines whatever the dialog asks.
 pub fn init(cx: &mut App) {

@@ -1,6 +1,6 @@
-//! Startup benchmark (spec 0001). `zed-term --bench-startup` is one
+//! Startup benchmark (spec 0001). `tern --bench-startup` is one
 //! measured launch that prints its marks as JSON and quits after the first
-//! frame. `zed-term --bench-startup N` re-runs this binary that way once
+//! frame. `tern --bench-startup N` re-runs this binary that way once
 //! cold, then N times warm, and prints the median and p90 of every mark.
 
 use crate::timing::TtfpReport;
@@ -29,7 +29,7 @@ pub enum Mode {
 }
 
 /// How `--import-hosts` is called.
-const IMPORT_USAGE: &str = "usage: zed-term --import-hosts <file> [--dry-run]";
+const IMPORT_USAGE: &str = "usage: tern --import-hosts <file> [--dry-run]";
 
 impl Mode {
     /// Parses the arguments after the program name.
@@ -69,7 +69,7 @@ pub fn run(runs: usize) -> i32 {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
-            eprintln!("zed-term: cannot find own executable: {error}");
+            eprintln!("tern: cannot find own executable: {error}");
             return 1;
         }
     };
@@ -78,7 +78,7 @@ pub fn run(runs: usize) -> i32 {
         match launch(&exe) {
             Ok(report) => reports.push(report),
             Err(error) => {
-                eprintln!("zed-term: bench run {run} failed: {error}");
+                eprintln!("tern: bench run {run} failed: {error}");
                 return 1;
             }
         }

@@ -22,7 +22,7 @@ pub struct Target {
     pub host: String,
     pub port: u16,
     /// The key files ssh may ask a passphrase for, as it opens them. One
-    /// whose name needs an expansion zed-term doesn't do is left out.
+    /// whose name needs an expansion Tern doesn't do is left out.
     pub identity_files: Vec<String>,
 }
 
@@ -249,11 +249,11 @@ mod tests {
         assert_eq!(files, expected);
     }
 
-    /// A key file whose name needs an expansion zed-term doesn't do is left
+    /// A key file whose name needs an expansion Tern doesn't do is left
     /// out, so its passphrase is never filled in, rather than a wrong
     /// guess at what ssh opens.
     #[test]
-    fn key_files_with_an_expansion_zed_term_doesnt_do_are_left_out() {
+    fn key_files_with_an_expansion_tern_doesnt_do_are_left_out() {
         let files = identity_files(&[
             "~/.ssh/%C",
             "~/.ssh/id_%l",

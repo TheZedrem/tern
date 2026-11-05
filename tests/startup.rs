@@ -3,8 +3,8 @@
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-fn zed_term() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_zed-term"));
+fn tern() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tern"));
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -15,30 +15,30 @@ fn zed_term() -> Command {
 /// Runs `command` to its exit. A hang fails the test instead of stalling it:
 /// the child is killed by its own handle, never by name.
 fn output_within(mut command: Command, timeout: Duration) -> Output {
-    let mut child = command.spawn().expect("start zed-term");
+    let mut child = command.spawn().expect("start tern");
     let deadline = Instant::now() + timeout;
-    while child.try_wait().expect("poll zed-term").is_none() {
+    while child.try_wait().expect("poll tern").is_none() {
         if Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("zed-term still running after {timeout:?}");
+            panic!("tern still running after {timeout:?}");
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    child.wait_with_output().expect("read zed-term output")
+    child.wait_with_output().expect("read tern output")
 }
 
 /// AC7: no Wayland session means a clear message and exit code 1, not a hang.
 #[cfg(target_os = "linux")]
 #[test]
 fn without_wayland_it_says_so_and_exits_with_1() {
-    let mut command = zed_term();
+    let mut command = tern();
     command.env_remove("WAYLAND_DISPLAY");
     let output = output_within(command, Duration::from_secs(10));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("zed-term needs a Wayland session (X11 is not supported)"),
+        stderr.contains("Tern needs a Wayland session (X11 is not supported)"),
         "stderr: {stderr}"
     );
 }
@@ -47,7 +47,7 @@ fn without_wayland_it_says_so_and_exits_with_1() {
 #[test]
 #[ignore = "needs a Wayland session"]
 fn bench_startup_prints_one_json_line_with_all_six_marks() {
-    let mut command = zed_term();
+    let mut command = tern();
     command.arg("--bench-startup");
     let output = output_within(command, Duration::from_secs(30));
     let stderr = String::from_utf8_lossy(&output.stderr);

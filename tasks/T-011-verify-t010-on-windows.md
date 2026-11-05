@@ -6,7 +6,7 @@ blocked-by: []
 
 T-010 and T-003 were built and verified on Linux (Wayland) only; their
 Windows code paths compile only in theory. On a Windows 11 machine: build
-release, run `zed-term --bench-startup 10` and record the numbers, then
+release, run `tern --bench-startup 10` and record the numbers, then
 check by hand that the default shell is found (pwsh, powershell, cmd),
 typing works including AltGr characters on a German layout (`@`, `{`, `€`),
 resizing the window with `vim` open redraws cleanly under ConPTY, and
@@ -14,7 +14,7 @@ resizing the window with `vim` open redraws cleanly under ConPTY, and
 keys work and `Alt+1`–`9` and `Alt+arrows` hit no window-menu accelerator,
 dragging a divider redraws both panes cleanly, closing a pane ends its
 shell, and a split opens in the home directory (there is no `/proc` cwd).
-For T-005: the config is read from `%APPDATA%\zed-term\config.yaml`, saving
+For T-005: the config is read from `%APPDATA%\tern\config.yaml`, saving
 it from VS Code and from Notepad reloads it within a second, and a profile
 with `command: [htop]`-style program names resolves through `PATH` and
 `PATHEXT`. For T-004: `Ctrl+Shift+P` opens the palette, and `Ctrl+=`,
@@ -27,7 +27,7 @@ lists the hosts of `%USERPROFILE%\.ssh\config`, including ones from an
 `Include` with backslashes in its path. For T-014 (threat model 0001,
 TM-askpass-01 and -02): `ssh.exe` asks through the app (the host-key
 dialog appears, with No focused); the pipe's DACL (`D:P(A;;GA;;;OW)`)
-lets only the user open it; starting a second zed-term opens its own pipe;
+lets only the user open it; starting a second Tern opens its own pipe;
 a squatted pipe name fails the start (`FILE_FLAG_FIRST_PIPE_INSTANCE`)
 and a helper pointed at a pipe of another process exits 1; the server's
 nonblocking pipe reads notice a helper that ssh ended; a remembered
@@ -43,8 +43,8 @@ the wheel scrolls the scrollback and `less`, an IME (Japanese or Chinese)
 composes at the cursor, and closing the window leaves no `pwsh` or
 `conhost` behind. For T-006: a relaunch restores the tabs, splits and the
 window size. For T-017: the settings screen changes the font size in
-`%APPDATA%\zed-term\config.yaml` in place (CRLF kept), and recording a
-key works with the Windows key mapper. For T-018: `zed-term --import-hosts`
+`%APPDATA%\tern\config.yaml` in place (CRLF kept), and recording a
+key works with the Windows key mapper. For T-018: `tern --import-hosts`
 on a real `MobaXterm.ini` prints its report in pwsh, the hosts land in the
 config with CRLF kept, and their `~\…` key paths connect. Fix what fails. Area: src.
 

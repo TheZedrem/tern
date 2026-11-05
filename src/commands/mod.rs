@@ -9,7 +9,7 @@ pub mod palette;
 use gpui::{Action, actions};
 
 actions!(
-    zed_term,
+    tern,
     [
         OpenPalette,
         NewTab,
@@ -59,7 +59,7 @@ actions!(
 
 /// Activates tab N, counted from 0.
 #[derive(Clone, PartialEq, Debug, Action)]
-#[action(namespace = zed_term, no_json)]
+#[action(namespace = tern, no_json)]
 pub struct GoToTab(pub usize);
 
 /// An app command.

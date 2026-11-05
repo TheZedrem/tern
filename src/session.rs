@@ -164,9 +164,9 @@ impl SavedNode {
     }
 }
 
-/// `<data_local_dir>/zed-term/session.json`.
+/// `<data_local_dir>/tern/session.json`.
 pub fn path() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|dir| dir.join("zed-term").join("session.json"))
+    dirs::data_local_dir().map(|dir| dir.join("tern").join("session.json"))
 }
 
 /// Reads the session at `path`: `Ok(None)` if there is none yet, `Err`
@@ -328,7 +328,7 @@ pub(crate) mod tests {
     #[test]
     fn a_save_replaces_the_last_session_whole_and_loads_back_as_saved() {
         let root = TempDir::new("session-save");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         let path = dir.join("session.json");
         // A longer session first: anything left of it would show.
         let mut longer = two_tabs();
@@ -373,7 +373,7 @@ pub(crate) mod tests {
     #[test]
     fn no_session_file_is_no_session_and_looking_for_it_creates_nothing() {
         let root = TempDir::new("session-missing");
-        let dir = root.path().join("zed-term");
+        let dir = root.path().join("tern");
         assert_eq!(load(&dir.join("session.json")), Ok(None));
         assert!(!dir.exists(), "{} was created", dir.display());
     }

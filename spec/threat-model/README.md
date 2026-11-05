@@ -1,6 +1,6 @@
 # Threat models
 
-STRIDE models of the parts of zed-term that cross a trust boundary in
+STRIDE models of the parts of Tern that cross a trust boundary in
 [architecture §Security](../architecture.md#security-binding). One file per
 component, `NNNN-<component>.md`, from the `create-threat-model` skill's
 template; numbers are never reused. Threat IDs (`TM-<component>-nn`) stay

@@ -152,7 +152,7 @@ mod tests {
         );
     }
 
-    /// TM-escape-08: without bracketed paste zed-term pastes like xterm,
+    /// TM-escape-08: without bracketed paste Tern pastes like xterm,
     /// each line break sent as Enter (`\r`), whether the text ends its
     /// lines in `\n`, `\r\n` or `\r`.
     #[test]

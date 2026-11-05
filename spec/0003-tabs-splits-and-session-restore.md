@@ -113,7 +113,7 @@ frame themselves. Windows 11 always draws its own frame.
 
 ### Security & privacy
 
-- Stored: `<data_local_dir>/zed-term/session.json` holds window size, layout,
+- Stored: `<data_local_dir>/tern/session.json` holds window size, layout,
   and profile ID, cwd and title per pane. No command history, no scrollback, no environment.
   Overwritten on every save, readable by the user only (0600). Setting
   `restore_session: false` deletes it on the next quit. A file that can't be

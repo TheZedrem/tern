@@ -1,6 +1,6 @@
 ---
 name: write-spec
-description: Write or revise a zed-term feature spec in spec/. Use before implementing any behavior that isn't already pinned down in spec/, or when the user asks for a spec.
+description: Write or revise a Tern feature spec in spec/. Use before implementing any behavior that isn't already pinned down in spec/, or when the user asks for a spec.
 ---
 
 # Write spec

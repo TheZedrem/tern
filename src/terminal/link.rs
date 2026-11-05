@@ -10,7 +10,7 @@ use alacritty_terminal::index::{Column, Direction, Point};
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 
-/// The longest target zed-term opens.
+/// The longest target Tern opens.
 const MAX_TARGET: usize = 2048;
 
 /// What a detected URL looks like: no spaces, controls or the characters
@@ -30,7 +30,7 @@ pub fn detector() -> RegexSearch {
     RegexSearch::new(URL).expect("the URL pattern is valid")
 }
 
-/// The link under `point`, if it's one zed-term opens: an OSC 8 hyperlink,
+/// The link under `point`, if it's one Tern opens: an OSC 8 hyperlink,
 /// else a URL in the text of that row.
 pub fn at<T>(term: &Term<T>, point: Point, urls: &mut RegexSearch) -> Option<Link> {
     hyperlink_at(term, point)
@@ -79,7 +79,7 @@ fn url_at<T>(term: &Term<T>, point: Point, urls: &mut RegexSearch) -> Option<Lin
     })
 }
 
-/// Whether zed-term opens `target`: an `http` or `https` URL with a host,
+/// Whether Tern opens `target`: an `http` or `https` URL with a host,
 /// at most 2 KiB.
 pub fn openable(target: &str) -> bool {
     target.len() <= MAX_TARGET && host(target).is_some_and(|host| !host.is_empty())

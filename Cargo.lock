@@ -6430,6 +6430,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "tern"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "dirs 7.0.0",
+ "futures",
+ "getrandom 0.4.3",
+ "gpui-component",
+ "gpui-kit-assets",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "interprocess",
+ "keyring",
+ "notify",
+ "serde",
+ "serde-saphyr 2.1.0",
+ "serde_json",
+ "widestring",
+ "zeroize",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8421,28 +8443,6 @@ dependencies = [
  "windows-capture",
  "x11",
  "xcb",
-]
-
-[[package]]
-name = "zed-term"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "dirs 7.0.0",
- "futures",
- "getrandom 0.4.3",
- "gpui-component",
- "gpui-kit-assets",
- "gpui-pre",
- "gpui-pre-platform",
- "interprocess",
- "keyring",
- "notify",
- "serde",
- "serde-saphyr 2.1.0",
- "serde_json",
- "widestring",
- "zeroize",
 ]
 
 [[package]]

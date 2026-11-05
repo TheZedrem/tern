@@ -8,8 +8,8 @@ related: [spec 0005, spec 0006, spec 0009]
 # Spec: Importing hosts from MobaXterm and Tabby
 
 Pins a one-off import of the SSH hosts a user already keeps in MobaXterm
-or Tabby, as zed-term profiles, folders kept as host groups, run from the
-command line: `zed-term --import-hosts <file>`.
+or Tabby, as Tern profiles, folders kept as host groups, run from the
+command line: `tern --import-hosts <file>`.
 
 ## Problem & goal
 
@@ -19,16 +19,16 @@ should bring the hosts and their grouping over in one go, and nothing
 else: their saved passwords stay behind, because they'd bypass the
 keychain flow of spec 0006.
 
-Done means: `zed-term --import-hosts <file>` on a MobaXterm or Tabby file
+Done means: `tern --import-hosts <file>` on a MobaXterm or Tabby file
 adds its SSH hosts to `config.yaml` as `type: ssh` profiles in their
-groups, prints what it did, and a running zed-term has them in the host
+groups, prints what it did, and a running Tern has them in the host
 picker at once.
 
 ## Scope
 
 **In scope:**
 
-- `zed-term --import-hosts <file> [--dry-run]`, which imports and exits without opening a window
+- `tern --import-hosts <file> [--dry-run]`, which imports and exits without opening a window
 - MobaXterm: `MobaXterm.ini` and `.mxtsessions` exports, SSH sessions and their folders (`SubRep`)
 - Tabby: `config.yaml`, `type: ssh` profiles and their groups
 - A printed report: what was imported, what was a duplicate, what was skipped and why; `--dry-run` prints it and writes nothing
@@ -71,7 +71,7 @@ picker at once.
 
 ### Flows
 
-1. **Run:** `zed-term --import-hosts <file>` is matched in `main` before
+1. **Run:** `tern --import-hosts <file>` is matched in `main` before
    anything else; it never starts GPUI, spawns a PTY or reads the session.
    A missing file argument prints the usage to stderr and exits 2.
 2. **Read:** over 10 MB, unreadable, or not one of the formats: an error
@@ -102,14 +102,14 @@ kept as written (with `_ProfileDir_` resolved), which `ssh.exe` reads as
 they are. On Linux an imported Windows key path won't exist; ssh says so
 when connecting, as for any key path.
 
-zed-term is a console-subsystem binary on Windows today, so the report
+Tern is a console-subsystem binary on Windows today, so the report
 reaches the shell it ran from. If that ever changes to the GUI subsystem,
 the import must attach to the parent console (`AttachConsole`) or its
 output is lost.
 
 ### Admin area
 
-None: zed-term is a local, single-user app with no admin area.
+None: Tern is a local, single-user app with no admin area.
 
 ### Security & privacy
 
@@ -137,7 +137,7 @@ Trust boundaries:
 3. `--dry-run` prints the same hosts a real run would import and leaves `config.yaml` byte for byte as it was (or absent).
 4. A host already in `config.yaml` or `~/.ssh/config` is reported as a duplicate and not imported; running the same import twice adds nothing the second time.
 5. A file with saved passwords or a Tabby vault imports no secret: none in `config.yaml`, none in the output, none in the keychain.
-6. The import appends without changing an existing line, and a running zed-term has the hosts in its host picker within a second.
+6. The import appends without changing an existing line, and a running Tern has the hosts in its host picker within a second.
 7. A malformed file, one over 10 MB, or a missing one exits non-zero with a message on stderr and writes nothing.
 8. A MobaXterm key path under `_ProfileDir_` is imported under `~`.
 9. `--import-hosts` opens no window and exits; a normal launch's TTFP is unchanged within noise.

@@ -55,10 +55,10 @@ mapping from keys to bytes. Pane IDs are `u32`, unique per app run.
   started as a login shell) or, on Windows, the first one found of `pwsh`,
   `powershell.exe`, `cmd.exe`.
 - **Environment:** inherit, then the profile's `env`, plus `TERM=xterm-256color`,
-  `COLORTERM=truecolor`, `TERM_PROGRAM=zed-term`. `alacritty_terminal`
+  `COLORTERM=truecolor`, `TERM_PROGRAM=tern`. `alacritty_terminal`
   also sets `WINDOWID` and `ALACRITTY_WINDOW_ID`.
 - **cwd:** explicit, else the home directory. Tracked live from OSC 7, which
-  vte doesn't parse, so zed-term scans the PTY bytes for it itself, with a
+  vte doesn't parse, so Tern scans the PTY bytes for it itself, with a
   fallback to `/proc/<pid>/cwd` on Linux; unknown on Windows without OSC 7.
   The app ships opt-in shell-integration
   snippets for bash, zsh and pwsh under `shell-integration/`, which the user

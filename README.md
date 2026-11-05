@@ -1,4 +1,4 @@
-# zed-term
+# Tern
 
 A fast terminal emulator with built-in SSH/SFTP and one-click AI coding
 agents. Tabby's feature set, with a prompt in under 500 ms. Pure Rust:

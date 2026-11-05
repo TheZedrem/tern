@@ -61,7 +61,7 @@ Boot path, in order. **[load-bearing]** Nothing may be added to it without a
 TTFP measurement in the commit.
 
 1. `main()` records the start instant.
-2. Linux: without `WAYLAND_DISPLAY`, print `zed-term needs a Wayland session
+2. Linux: without `WAYLAND_DISPLAY`, print `Tern needs a Wayland session
    (X11 is not supported)` to stderr and exit with code 1. GPUI would
    otherwise start headless and hang with no window.
 3. Read `config.yaml` and `session.json` synchronously (both small). On a
@@ -87,11 +87,11 @@ software rendering path is promised.
 
 **Bench mode (`--bench-startup`):** the boot pane runs a minimal shell
 command (`sh -c 'echo ready'` / `cmd /c echo ready`) instead of the user's
-shell, so the number measures zed-term, not dotfiles. It prints one JSON
-line with all six marks and exits. `zed-term --bench-startup N` re-spawns
+shell, so the number measures Tern, not dotfiles. It prints one JSON
+line with all six marks and exits. `tern --bench-startup N` re-spawns
 itself once cold, then N times warm, and prints the median and p90 per
 mark. The bench never reads or writes the user's session; with
-`ZED_TERM_BENCH_SESSION=<file>` it restores that one, read-only, with the
+`TERN_BENCH_SESSION=<file>` it restores that one, read-only, with the
 same command in every pane (spec 0003, AC7).
 
 ### Startup impact
@@ -117,11 +117,11 @@ DirectX 11, ConPTY via `alacritty_terminal`. macOS: compile-only.
 
 1. A dev run (`cargo run`) shows a TTFP badge in a corner of the window and prints the marks to stdout.
 2. A release build launched with `--bench-startup` prints one JSON line with all six marks and exits with code 0, with no window interaction.
-3. On the owner's Fedora machine, `zed-term --bench-startup 10` reports a warm-start median TTFP under 500 ms. The first (cold) run is reported separately.
+3. On the owner's Fedora machine, `tern --bench-startup 10` reports a warm-start median TTFP under 500 ms. The first (cold) run is reported separately.
 4. A broken `config.yaml` (invalid YAML) still boots to a prompt with defaults and shows a notice naming the line.
 5. With networking disabled, startup time and behavior are unchanged, and no request is attempted before the first prompt.
 6. No white flash: the first painted frame is the theme background.
-7. Started with `WAYLAND_DISPLAY` unset, zed-term prints that it needs a Wayland session and exits with code 1 instead of hanging.
+7. Started with `WAYLAND_DISPLAY` unset, Tern prints that it needs a Wayland session and exits with code 1 instead of hanging.
 8. The same binary and bench run on Windows 11 and report all six marks.
 
 ## Open questions

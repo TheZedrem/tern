@@ -1,14 +1,14 @@
 //! The OS keychain (spec 0006): Secret Service on Linux, Credential Manager
 //! on Windows, through `keyring`. It holds only what the user chose to
-//! remember, under the service `zed-term`. Every call may block, on an
+//! remember, under the service `tern`. Every call may block, on an
 //! unlock prompt or a hung D-Bus, so callers run it through [`off_thread`],
 //! never on the UI thread (TM-askpass-17).
 
 use futures::channel::oneshot;
 use zeroize::Zeroizing;
 
-/// The service every keychain item of zed-term is saved under.
-const SERVICE: &str = "zed-term";
+/// The service every keychain item of Tern is saved under.
+const SERVICE: &str = "tern";
 
 /// What a secret is saved under (spec 0006 §Model): a password by the
 /// target ssh logs in to, so a profile and an alias of the same server

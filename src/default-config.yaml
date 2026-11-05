@@ -1,6 +1,6 @@
-# zed-term settings. Every key is optional: the values below are the
+# Tern settings. Every key is optional: the values below are the
 # defaults, and a key you delete keeps its default. Changes apply when you
-# save, without a restart. A mistake never stops zed-term from starting:
+# save, without a restart. A mistake never stops Tern from starting:
 # the broken part falls back to its default and a notice says why.
 
 # The profile new tabs open. Missing: shell, your login shell.

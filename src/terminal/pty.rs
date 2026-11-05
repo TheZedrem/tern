@@ -127,7 +127,7 @@ impl Command {
         }
     }
 
-    /// Prints one line and exits, so `--bench-startup` measures zed-term
+    /// Prints one line and exits, so `--bench-startup` measures Tern
     /// rather than the user's dotfiles (spec 0001).
     pub fn bench() -> Self {
         #[cfg(unix)]
@@ -244,7 +244,7 @@ pub fn rerun(
             command.args.clone(),
         )),
         // A missing directory falls back to home: alacritty would otherwise
-        // silently start in zed-term's own working directory.
+        // silently start in Tern's own working directory.
         working_directory: cwd
             .filter(|dir| dir.is_dir())
             .map(Path::to_path_buf)
@@ -254,7 +254,7 @@ pub fn rerun(
         env: [
             ("TERM", "xterm-256color"),
             ("COLORTERM", "truecolor"),
-            ("TERM_PROGRAM", "zed-term"),
+            ("TERM_PROGRAM", "tern"),
         ]
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
@@ -392,7 +392,7 @@ mod tests {
     fn on_path_tells_whether_a_program_is_in_a_path_directory() {
         let everywhere = if cfg!(windows) { "cmd.exe" } else { "sh" };
         assert!(on_path(everywhere));
-        assert!(!on_path("zed-term-test-no-such-program"));
+        assert!(!on_path("tern-test-no-such-program"));
     }
 
     #[cfg(unix)]
@@ -408,7 +408,7 @@ mod tests {
     #[test]
     fn a_missing_program_is_a_spawn_error() {
         let missing = Command {
-            program: "/nonexistent/zed-term-test-shell".into(),
+            program: "/nonexistent/tern-test-shell".into(),
             args: vec![],
             env: BTreeMap::new(),
         };
@@ -565,7 +565,7 @@ mod tests {
             r#"printf '%s %s %s\n' "$TERM" "$COLORTERM" "$TERM_PROGRAM"; stty size; pwd -P"#;
         let (session, _) = run_to_exit(&sh(script), size, None, timing());
         let screen = crate::terminal::tests::screen(&*session.term.lock());
-        assert_eq!(screen[0], "xterm-256color truecolor zed-term");
+        assert_eq!(screen[0], "xterm-256color truecolor tern");
         assert_eq!(screen[1], "4 100");
         let home = dirs::home_dir()
             .expect("home dir")
@@ -578,7 +578,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_program_starts_in_the_directory_it_was_given() {
-        let dir = std::env::temp_dir().join(format!("zed-term-cwd-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tern-cwd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create a temp dir");
         let expected = dir.canonicalize().expect("the temp dir exists");
         // Wide enough that the path fits on one row.
@@ -605,12 +605,12 @@ mod tests {
     }
 
     /// A directory that is gone starts the program at home, not in
-    /// zed-term's own working directory, also when it is spelled the way
+    /// Tern's own working directory, also when it is spelled the way
     /// `/proc` reports a removed one (spec 0003, flow 1).
     #[cfg(unix)]
     #[test]
     fn a_missing_directory_starts_the_program_at_home() {
-        let removed = std::env::temp_dir().join(format!("zed-term-removed-{}", std::process::id()));
+        let removed = std::env::temp_dir().join(format!("tern-removed-{}", std::process::id()));
         std::fs::create_dir_all(&removed).expect("create a temp dir");
         std::fs::remove_dir(&removed).expect("remove it again");
         let mut deleted = removed.clone().into_os_string();
@@ -677,7 +677,7 @@ mod tests {
     /// The user knows best: a profile may set TERM itself.
     #[cfg(unix)]
     #[test]
-    fn a_profiles_env_wins_over_zed_terms_own_terminal_variables() {
+    fn a_profiles_env_wins_over_terns_own_terminal_variables() {
         let profile = local(LocalProfile {
             command: Some(
                 ["sh", "-c", r#"echo "$TERM $COLORTERM $TERM_PROGRAM""#]
@@ -690,6 +690,6 @@ mod tests {
         let wide = GridSize { cols: 100, ..SMALL };
         let (session, _) = run_to_exit(&Command::of_profile(&profile), wide, None, timing());
         let screen = crate::terminal::tests::screen(&*session.term.lock());
-        assert_eq!(screen[0], "dumb truecolor zed-term");
+        assert_eq!(screen[0], "dumb truecolor tern");
     }
 }

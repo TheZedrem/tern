@@ -1,5 +1,5 @@
 //! ssh's prompts answered in the app (spec 0006, flows 2 to 4; threat model
-//! 0001). zed-term starts ssh with its own binary as `SSH_ASKPASS`. When ssh
+//! 0001). Tern starts ssh with its own binary as `SSH_ASKPASS`. When ssh
 //! needs an answer it runs that binary as a helper, with the prompt as its
 //! argument; the helper hands the prompt to the running app over a local
 //! socket and prints the app's answer for ssh.
@@ -29,11 +29,11 @@ use zeroize::Zeroizing;
 
 /// Where the helper finds the app's endpoint. Helper mode needs this and
 /// [`TOKEN_VAR`] (TM-askpass-18).
-const ENDPOINT_VAR: &str = "ZED_TERM_ASKPASS";
+const ENDPOINT_VAR: &str = "TERN_ASKPASS";
 /// The connection's token, as hex.
-const TOKEN_VAR: &str = "ZED_TERM_ASKPASS_TOKEN";
+const TOKEN_VAR: &str = "TERN_ASKPASS_TOKEN";
 /// The app's process ID, which the endpoint's server must have.
-const PID_VAR: &str = "ZED_TERM_ASKPASS_PID";
+const PID_VAR: &str = "TERN_ASKPASS_PID";
 
 /// What every request starts with: the protocol and its version, so a
 /// helper from an upgrade installed while the app runs is refused.
@@ -137,10 +137,10 @@ impl Server {
     pub fn start() -> Result<Self, String> {
         let exe = std::env::current_exe()
             .and_then(|exe| exe.canonicalize())
-            .map_err(|error| format!("zed-term can't find its own binary: {error}"))?
+            .map_err(|error| format!("Tern can't find its own binary: {error}"))?
             .into_os_string()
             .into_string()
-            .map_err(|_| "the path of zed-term's binary isn't UTF-8".to_owned())?;
+            .map_err(|_| "the path of Tern's binary isn't UTF-8".to_owned())?;
         let (endpoint, listener) = Endpoint::open()?;
         Ok(Self::serve(endpoint, listener, exe))
     }
@@ -366,7 +366,7 @@ fn field_length(bytes: &[u8]) -> io::Result<[u8; 4]> {
         .map_err(|_| io::ErrorKind::InvalidInput.into())
 }
 
-/// Helper mode, when ssh runs zed-term as its askpass program (spec 0006,
+/// Helper mode, when ssh runs Tern as its askpass program (spec 0006,
 /// flow 3). `None` when the endpoint or the token isn't set: this is the
 /// app. Otherwise the exit code, 0 with the answer on stdout or 1 with no
 /// output at all. Nothing is ever written to stderr, which is ssh's
@@ -456,7 +456,7 @@ impl Endpoint {
         use interprocess::local_socket::GenericFilePath;
         use interprocess::os::unix::local_socket::ListenerOptionsExt;
         use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-        let dir = runtime.join(format!("zed-term-{}", hex(&random()?)));
+        let dir = runtime.join(format!("tern-{}", hex(&random()?)));
         std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
         let endpoint = Self {
             uid: std::fs::metadata(&dir)?.uid(),
@@ -503,7 +503,7 @@ impl Endpoint {
         use interprocess::os::windows::local_socket::ListenerOptionsExt;
         use interprocess::os::windows::security_descriptor::SecurityDescriptor;
         let opened = (|| -> io::Result<_> {
-            let pipe = format!("zed-term-askpass-{}", hex(&random()?));
+            let pipe = format!("tern-askpass-{}", hex(&random()?));
             let owner_only =
                 SecurityDescriptor::deserialize(widestring::u16cstr!("D:P(A;;GA;;;OW)"))?;
             let listener = ListenerOptions::new()
@@ -683,7 +683,7 @@ mod tests {
         /// How long a test waits on a helper, a prompt or ssh before it fails.
         const WAIT: Duration = Duration::from_secs(10);
         /// `SSH_ASKPASS` where no ssh runs.
-        const EXE: &str = "/usr/libexec/zed-term";
+        const EXE: &str = "/usr/libexec/tern";
         /// What ssh asks for password authentication.
         const PASSWORD_PROMPT: &str = "alice@prod.example.com's password: ";
         /// A stand-in for a saved password.
@@ -806,7 +806,7 @@ mod tests {
             }
         }
 
-        /// The zed-term binary, which `cargo test` builds beside the
+        /// The Tern binary, which `cargo test` builds beside the
         /// directory of this test binary (`target/debug/deps`).
         fn binary() -> PathBuf {
             let tests = std::env::current_exe().expect("the test binary's path");
@@ -814,7 +814,7 @@ mod tests {
                 .parent()
                 .and_then(Path::parent)
                 .expect("a target directory")
-                .join("zed-term");
+                .join("tern");
             assert!(
                 binary.is_file(),
                 "no {}: `cargo test` builds it, `cargo test --bin` doesn't",
@@ -949,7 +949,7 @@ mod tests {
                 ("no app PID", without(env, PID_VAR), &[PASSWORD_PROMPT]),
                 (
                     "an app PID that isn't one",
-                    with(env, PID_VAR, "zed-term"),
+                    with(env, PID_VAR, "tern"),
                     &[PASSWORD_PROMPT],
                 ),
                 ("no prompt", env.clone(), &[]),
@@ -1143,7 +1143,7 @@ mod tests {
             let private = socket.parent().expect("the socket's directory").to_owned();
             assert_eq!(private.parent(), Some(dir.path()));
             let name = private.file_name().and_then(OsStr::to_str).expect("a name");
-            let random = name.strip_prefix("zed-term-").expect(name);
+            let random = name.strip_prefix("tern-").expect(name);
             assert!(
                 random.len() == 32 && random.chars().all(|c| c.is_ascii_hexdigit()),
                 "{name}"
