@@ -59,7 +59,7 @@ interface that explains itself.
 - [ ] Suggestions from command history as you type, like Windows Terminal and Warp
 - [ ] Theme editor in the app, with a live preview
 - [ ] SSH port forwarding (local, remote and dynamic) on a profile
-- [ ] Custom profiles that launch a command (e.g. a coding agent) in the current cwd
+- [ ] Custom profiles that launch a command (e.g. a coding agent) in the current cwd, or a picked folder from an SSH session
 - [ ] Plugin system (considered, not committed to)
 
 ## Install from source (Linux)
