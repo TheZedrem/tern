@@ -57,9 +57,10 @@ mapping from keys to bytes. Pane IDs are `u32`, unique per app run.
 - **Environment:** inherit, then the profile's `env`, plus `TERM=xterm-256color`,
   `COLORTERM=truecolor`, `TERM_PROGRAM=zed-term`. `alacritty_terminal`
   also sets `WINDOWID` and `ALACRITTY_WINDOW_ID`.
-- **cwd:** explicit, else the home directory. Tracked live from OSC 7 (an
-  `alacritty_terminal` event), with a fallback to `/proc/<pid>/cwd` on Linux;
-  unknown on Windows without OSC 7. The app ships opt-in shell-integration
+- **cwd:** explicit, else the home directory. Tracked live from OSC 7, which
+  vte doesn't parse, so zed-term scans the PTY bytes for it itself, with a
+  fallback to `/proc/<pid>/cwd` on Linux; unknown on Windows without OSC 7.
+  The app ships opt-in shell-integration
   snippets for bash, zsh and pwsh under `shell-integration/`, which the user
   sources from their rc file (OQ-008). Nothing is injected automatically.
 - **Glyphs:** the default font is the embedded Lilex. Characters it lacks
@@ -124,10 +125,14 @@ only there.
   dropped when the pane closes. PTY bytes are never logged, even at debug
   level.
 - Trust boundaries: crosses §Security 1 and 2, because the pane renders
-  untrusted program output. Decisions:
-  - **Titles (OSC 0/2) and cwd (OSC 7):** honored. Titles are plain text (spec 0003).
-  - **Links (OSC 8 and detected URLs):** open only on Ctrl/Cmd+click, with the target shown on hover. Only `http`/`https` URLs open.
-  - **Clipboard writes (OSC 52):** not handled in Phase 1 (the event is ignored).
+  untrusted program output. The STRIDE model is
+  [threat model 0002](threat-model/0002-escape-sequences.md); decisions:
+  - **Titles (OSC 0/2):** honored as plain text (spec 0003).
+  - **cwd (OSC 7) [load-bearing]:** honored only in a local pane, as a `file://` URL whose host is empty, `localhost` or this machine's name, naming an existing local directory, at most 4 KiB. An SSH pane's reports set no local cwd (TM-escape-09).
+  - **Links (OSC 8 and detected URLs) [load-bearing]:** only `http`/`https` targets, checked on the parsed URL, are links at all, and they open only on Ctrl/Cmd+click, through GPUI's URL opener, never a shell. Hovering shows the target as plain text, marking a host with non-ASCII letters; targets over 2 KiB are ignored (TM-escape-02, -03, -10).
+  - **Clipboard (OSC 52) [load-bearing]:** writes are ignored and reads are never answered (TM-escape-04, -05).
+  - **Replies:** only fixed strings and numbers go back to the program; none echoes terminal text (TM-escape-06).
+  - **Paste:** ESC and every other control character but tab, `\n` and `\r` are dropped, then the text is bracketed when the program asked for it (TM-escape-07). Copy drops zero-width and direction-override characters (TM-escape-12).
 
 ## Acceptance criteria
 
