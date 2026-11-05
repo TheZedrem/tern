@@ -4,7 +4,7 @@
 //! leaves the command it was the default of.
 
 use super::{AppCommand, by_id};
-use crate::config::Keybinding;
+use crate::config::{Keybinding, NewTab};
 use gpui::{App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, OperatingSystem};
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -55,9 +55,9 @@ pub fn keep_library(cx: &mut App) {
 
 /// Binds every command as [`plan`] says, replacing what the previous call
 /// bound, so a reloaded config applies at once. Returns [`plan`]'s notices.
-pub fn bind(user: &[Keybinding], cx: &mut App) -> Vec<String> {
+pub fn bind(user: &[Keybinding], new_tab: NewTab, cx: &mut App) -> Vec<String> {
     let context = KeyBindingContextPredicate::parse(CONTEXT).ok().map(Rc::new);
-    let (planned, mut notices) = plan(user);
+    let (planned, mut notices) = plan_for(user, new_tab);
     let mut bindings = Vec::with_capacity(planned.len());
     for (keys, command) in planned {
         match KeyBinding::load(&keys, (command.action)(), context.clone(), false, None, cx) {
@@ -80,7 +80,16 @@ pub fn bind(user: &[Keybinding], cx: &mut App) -> Vec<String> {
 /// was skipped (spec 0004, flow 4). A default goes when `user` binds its
 /// command (its key reaches the shell again) or takes its key, so the
 /// palette never shows a key that runs something else.
+#[cfg(test)]
 pub fn plan(user: &[Keybinding]) -> (Vec<(String, &'static AppCommand)>, Vec<String>) {
+    plan_for(user, NewTab::Ask)
+}
+
+/// [`plan`], with the two new-tab keys as `new_tab` says.
+pub fn plan_for(
+    user: &[Keybinding],
+    new_tab: NewTab,
+) -> (Vec<(String, &'static AppCommand)>, Vec<String>) {
     let mut notices = Vec::new();
     let mut own = Vec::new();
     for entry in user {
@@ -99,7 +108,7 @@ pub fn plan(user: &[Keybinding]) -> (Vec<(String, &'static AppCommand)>, Vec<Str
     // Compared as keystrokes: `shift+ctrl+d` takes `ctrl-shift-d`.
     let keystroke = |keys: &str| Keystroke::parse_with_os(keys, OS).ok();
     let taken: Vec<Keystroke> = own.iter().filter_map(|(keys, _)| keystroke(keys)).collect();
-    let mut planned: Vec<(String, &'static AppCommand)> = defaults()
+    let mut planned: Vec<(String, &'static AppCommand)> = defaults_for(new_tab)
         .into_iter()
         .filter(|(keys, id)| {
             !rebound.contains(id) && keystroke(keys).is_some_and(|keys| !taken.contains(&keys))
@@ -114,17 +123,35 @@ pub fn plan(user: &[Keybinding]) -> (Vec<(String, &'static AppCommand)>, Vec<Str
 /// shortcuts are `Ctrl+Shift` (`Cmd` on macOS), except go-to-tab and the
 /// font size, where no `Shift` combination works on every layout (OQ-014,
 /// OQ-015).
+#[cfg(test)]
 pub fn defaults() -> Vec<(String, &'static str)> {
+    defaults_for(NewTab::Ask)
+}
+
+/// [`defaults`], with the new-tab keys as `new_tab` says: `Ctrl+Shift+T`
+/// does what it names, `Ctrl+Alt+Shift+T` (`Cmd+Alt+T` on macOS) the other
+/// (spec 0004; the owner's choice).
+pub fn defaults_for(new_tab: NewTab) -> Vec<(String, &'static str)> {
     let (app, tab_digit, font) = if cfg!(target_os = "macos") {
         ("cmd", "cmd", "cmd")
     } else {
         ("ctrl-shift", "alt", "ctrl")
     };
+    let (ask, open) = ("tab.newWithProfile", "tab.new");
+    let (new_tab_key, other_key) = match new_tab {
+        NewTab::Ask => (ask, open),
+        NewTab::Default => (open, ask),
+    };
+    let other = if cfg!(target_os = "macos") {
+        "cmd-alt-t"
+    } else {
+        "ctrl-alt-shift-t"
+    };
     let mut keys = vec![
         (format!("{app}-p"), "palette.open"),
         (format!("{app}-h"), "host.connect"),
-        // Asks which profile; `tab.new` opens the default one (owner).
-        (format!("{app}-t"), "tab.newWithProfile"),
+        (format!("{app}-t"), new_tab_key),
+        (other.to_owned(), other_key),
         (format!("{app}-w"), "pane.close"),
         (format!("{app}-d"), "pane.splitRight"),
         (format!("{app}-e"), "pane.splitDown"),
@@ -422,6 +449,7 @@ mod tests {
             ("ctrl-shift-p", "palette.open"),
             ("ctrl-shift-h", "host.connect"),
             ("ctrl-shift-t", "tab.newWithProfile"),
+            ("ctrl-alt-shift-t", "tab.new"),
             ("ctrl-shift-w", "pane.close"),
             ("ctrl-tab", "tab.next"),
             ("ctrl-shift-tab", "tab.previous"),
@@ -458,6 +486,75 @@ mod tests {
             .map(|(keys, id)| (canonical(&keys), id))
             .collect();
         assert_eq!(actual, expected);
+    }
+
+    /// The command `key` runs in `defaults`, if any.
+    fn default_of(defaults: &[(String, &'static str)], key: &str) -> Option<&'static str> {
+        let key = canonical(key);
+        defaults
+            .iter()
+            .find(|(keys, _)| canonical(keys) == key)
+            .map(|(_, id)| *id)
+    }
+
+    /// Spec 0004 §Model, spec 0005 (`new_tab: ask`, the default):
+    /// `Ctrl+Shift+T` asks which profile, `Ctrl+Alt+Shift+T` opens the
+    /// default one, in the defaults and in the plan for an empty config.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn with_new_tab_ask_ctrl_shift_t_asks_and_ctrl_alt_shift_t_opens_the_default() {
+        let defaults = defaults_for(NewTab::Ask);
+        assert_eq!(
+            default_of(&defaults, "ctrl-shift-t"),
+            Some("tab.newWithProfile")
+        );
+        assert_eq!(default_of(&defaults, "ctrl-alt-shift-t"), Some("tab.new"));
+        let (planned, notices) = plan_for(&[], NewTab::Ask);
+        let ran = |key| runs(&planned, key).map(|command| command.id);
+        assert_eq!(ran("ctrl-shift-t"), Some("tab.newWithProfile"));
+        assert_eq!(ran("ctrl-alt-shift-t"), Some("tab.new"));
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Spec 0004 §Model, spec 0005: `new_tab: default` swaps the two keys,
+    /// so `Ctrl+Shift+T` opens the default profile and `Ctrl+Alt+Shift+T`
+    /// asks, in the defaults and in the plan for an empty config.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn with_new_tab_default_the_two_new_tab_keys_are_swapped() {
+        let defaults = defaults_for(NewTab::Default);
+        assert_eq!(default_of(&defaults, "ctrl-shift-t"), Some("tab.new"));
+        assert_eq!(
+            default_of(&defaults, "ctrl-alt-shift-t"),
+            Some("tab.newWithProfile")
+        );
+        let (planned, notices) = plan_for(&[], NewTab::Default);
+        let ran = |key| runs(&planned, key).map(|command| command.id);
+        assert_eq!(ran("ctrl-shift-t"), Some("tab.new"));
+        assert_eq!(ran("ctrl-alt-shift-t"), Some("tab.newWithProfile"));
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Spec 0004: a command the config binds loses its default keys, so a
+    /// user key for `tab.new` frees whichever new-tab key `new_tab` gave
+    /// it, and the other key still asks which profile.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_user_key_for_tab_new_frees_whichever_new_tab_key_it_had() {
+        for (new_tab, freed, asks) in [
+            (NewTab::Ask, "ctrl-alt-shift-t", "ctrl-shift-t"),
+            (NewTab::Default, "ctrl-shift-t", "ctrl-alt-shift-t"),
+        ] {
+            let (planned, notices) = plan_for(&[entry("alt+shift+n", "tab.new", 1)], new_tab);
+            assert_eq!(keys_of(&planned, "tab.new"), ["alt-shift-n"], "{new_tab:?}");
+            assert!(
+                runs(&planned, freed).is_none(),
+                "{new_tab:?}: `{freed}` still runs a command"
+            );
+            let ran = runs(&planned, asks).map(|command| command.id);
+            assert_eq!(ran, Some("tab.newWithProfile"), "{new_tab:?}");
+            assert!(notices.is_empty(), "{notices:?}");
+        }
     }
 
     /// AC6 (spec 0004): Alt plus a digit matches the digit as typed, on any

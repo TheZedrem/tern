@@ -174,7 +174,11 @@ fn main() {
         gpui_component::init(cx);
         // Everything bound so far stays when a reload rebinds the commands.
         commands::keymap::keep_library(cx);
-        boot_notices.extend(commands::keymap::bind(&config.keybindings, cx));
+        boot_notices.extend(commands::keymap::bind(
+            &config.keybindings,
+            config.new_tab,
+            cx,
+        ));
         theme::apply_to_widgets(&theme, cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {

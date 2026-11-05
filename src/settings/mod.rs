@@ -11,7 +11,7 @@ pub mod yaml;
 
 use crate::commands::{self, AppCommand, keymap};
 use crate::config::{
-    CloseOnExit, Config, CursorStyle, OpenLinks, Profile, ProfileKind, TabBarSide,
+    CloseOnExit, Config, CursorStyle, NewTab, OpenLinks, Profile, ProfileKind, TabBarSide,
 };
 use change::{Change, ProfileForm};
 use gpui::prelude::FluentBuilder;
@@ -48,6 +48,7 @@ pub const FIELDS: &[&str] = &[
     "keybindings",
     "theme.default",
     "tab_bar",
+    "new_tab",
 ];
 
 /// Template keys the screen leaves to the file, and why: custom themes are
@@ -466,6 +467,14 @@ fn field_change(field: Field, typed: &str) -> Result<Change, &'static str> {
     }
 }
 
+/// `new_tab` as the file writes it.
+fn new_tab_name(config: &Config) -> &'static str {
+    match config.new_tab {
+        NewTab::Ask => "ask",
+        NewTab::Default => "default",
+    }
+}
+
 /// `tab_bar` as the file writes it.
 fn tab_bar_side(config: &Config) -> &'static str {
     match config.tab_bar {
@@ -615,7 +624,7 @@ impl SettingsView {
     }
 
     fn keybinding_rows(&self, cx: &mut Context<Self>) -> Vec<Row> {
-        let (planned, _) = keymap::plan(&self.config.keybindings);
+        let (planned, _) = keymap::plan_for(&self.config.keybindings, self.config.new_tab);
         let own: Vec<&str> = self
             .config
             .keybindings
@@ -874,6 +883,31 @@ impl Render for SettingsView {
                         path: vec!["restore_session"],
                         value: on.to_string(),
                         reads: |config| config.restore_session.to_string(),
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            row(
+                Page::General,
+                "Startup",
+                if cfg!(target_os = "macos") {
+                    "Cmd+T opens"
+                } else {
+                    "Ctrl+Shift+T opens"
+                },
+                "new tab key shortcut profile ask default picker swap",
+                self.options(
+                    "new-tab",
+                    &[
+                        ("ask", "A profile picker"),
+                        ("default", "The default profile"),
+                    ],
+                    new_tab_name(config),
+                    |value| {
+                        choice(vec!["new_tab"], value, |config| {
+                            new_tab_name(config).to_owned()
+                        })
                     },
                     cx,
                 )
@@ -1218,6 +1252,7 @@ mod tests {
         "copy_on_select",
         "open_links",
         "tab_bar",
+        "new_tab",
         "close_on_exit",
         "restore_session",
         "keybindings",

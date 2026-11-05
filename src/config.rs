@@ -51,6 +51,18 @@ pub struct Config {
     pub open_links: OpenLinks,
     /// Which side of the window the tabs are on (spec 0003).
     pub tab_bar: TabBarSide,
+    /// What `Ctrl+Shift+T` opens; `Ctrl+Alt+Shift+T` opens the other
+    /// (spec 0004).
+    pub new_tab: NewTab,
+}
+
+/// What the new-tab key opens: asks which profile, or the default one
+/// right away (spec 0004).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NewTab {
+    Ask,
+    Default,
 }
 
 /// Which side of the window the tabs are on: a bar on top or at the
@@ -206,6 +218,7 @@ impl Default for Config {
             cursor: Cursor::default(),
             open_links: OpenLinks::CtrlClick,
             tab_bar: TabBarSide::Top,
+            new_tab: NewTab::Ask,
         }
     }
 }
@@ -1002,6 +1015,11 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.tab_bar = side;
                     }
                 }
+                "new_tab" => {
+                    if let Some(new_tab) = map.next_value()? {
+                        config.new_tab = new_tab;
+                    }
+                }
                 unknown => {
                     map.next_value::<IgnoredAny>()?;
                     self.unknown_key(unknown, key.line);
@@ -1549,6 +1567,38 @@ pub(crate) mod tests {
         assert!(notices[0].contains("open_links"), "{}", notices[0]);
     }
 
+    /// Spec 0005 §Model, spec 0004: `Ctrl+Shift+T` asks which profile
+    /// unless `new_tab: default` makes it open the default one.
+    #[test]
+    fn new_tab_is_ask_unless_set_to_default() {
+        assert_eq!(parse("").config.new_tab, NewTab::Ask);
+        for (text, new_tab) in [
+            ("new_tab: ask\n", NewTab::Ask),
+            ("new_tab: default\n", NewTab::Default),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.new_tab, new_tab, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a value `new_tab` doesn't take, like `profile`, falls
+    /// back to `ask` with a notice naming the key; the rest of the file
+    /// still applies.
+    #[test]
+    fn a_bad_new_tab_falls_back_to_ask_with_a_notice_and_the_rest_applies() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "new_tab: profile\n",
+            "copy_on_select: true\n",
+        ));
+        assert_eq!(config.new_tab, NewTab::Ask);
+        assert_eq!(config.scrollback, 500);
+        assert!(config.copy_on_select);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("new_tab"), "{}", notices[0]);
+    }
+
     /// AC1 (spec 0005).
     #[test]
     fn no_config_file_boots_the_login_shell_on_dark_with_the_bundled_font() {
@@ -1911,6 +1961,7 @@ cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
 tab_bar: top                        # top | bottom | left | right (spec 0003)
+new_tab: ask                        # what Ctrl+Shift+T opens: ask | default (spec 0004)
 close_on_exit: clean                # always | clean | never
 restore_session: true
 keybindings: { "ctrl+shift+d": pane.splitRight }
@@ -1975,7 +2026,7 @@ theme:
                 default: "dark".into(),
                 custom: vec![("midnight".into(), midnight)],
             },
-            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 30)],
+            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 31)],
             ..Config::default()
         };
         assert_eq!(config, expected);

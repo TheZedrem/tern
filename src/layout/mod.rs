@@ -814,7 +814,11 @@ impl Workspace {
         }
         let (font, font_notice) = FontSettings::checked(&config.font, cx);
         notices.extend(font_notice);
-        notices.extend(commands::keymap::bind(&config.keybindings, cx));
+        notices.extend(commands::keymap::bind(
+            &config.keybindings,
+            config.new_tab,
+            cx,
+        ));
         self.config = config;
         self.configured_font = font;
         self.font = self.configured_font.zoomed(self.zoom);
