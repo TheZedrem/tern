@@ -60,6 +60,7 @@ machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
 | Config format | YAML, parsed with `serde-saphyr` | Owner's choice. Pure Rust, never panics while parsing, maintained (`serde_yaml` is archived) |
 | SSH (Phase 2) | System `ssh` binary spawned in a PTY; its prompts answered in the app through `SSH_ASKPASS` (spec 0006) | Owner's choice. Uses the user's `~/.ssh/config`, ProxyJump, agent, FIDO keys and known_hosts, with no crypto code of our own |
 | SFTP (Phase 2) | `ssh -s <host> sftp`, with the `russh-sftp` client speaking SFTP over its stdio | Same ssh config, agent, keys and known_hosts as terminal sessions; no SSH code of our own |
+| SFTP edit copies (Phase 2) | `<data_local_dir>/zed-term/edit/` | Remote files the user opened for editing | Until their panel closes; a crashed run's on the next launch (spec 0008) |
 | Secrets (Phase 2) | OS keychain via `keyring` 4: Secret Service over pure-Rust D-Bus on Linux, Credential Manager on Windows | Never in plain files |
 | Askpass channel (Phase 2) | `interprocess` local socket (Unix socket or named pipe) with a per-connection token from `getrandom` | No TCP port, one API on both platforms |
 | Package manager | cargo | |
