@@ -1,0 +1,48 @@
+# Linux packages (T-026): a `v*` tag builds the .deb, .rpm and AppImage
+# from one release binary and attaches them to a GitHub release. Built on
+# ubuntu-24.04, so every package needs glibc 2.39 or newer.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Install Rust and the packaging tools
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+          cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
+          curl -sSfLo appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" | sha256sum -c
+          chmod +x appimagetool
+
+      - run: cargo build --locked --release
+      - run: cargo deb --no-build
+      - run: cargo generate-rpm
+      # The runner has no FUSE, so appimagetool runs extracted.
+      - run: APPIMAGE_EXTRACT_AND_RUN=1 packaging/linux/appimage.sh ./appimagetool
+
+      - name: Attach the packages to a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            target/debian/*.deb target/generate-rpm/*.rpm target/packages/*.AppImage

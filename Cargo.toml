@@ -3,6 +3,9 @@ name = "tern"
 version = "0.1.0"
 edition = "2024"
 publish = false
+description = "A fast terminal with built-in SSH and SFTP"
+license = "EUPL-1.2"
+authors = ["Andreas Zeidler"]
 
 [dependencies]
 # GPUI and its widgets are pinned exactly and bumped together, in their own
@@ -36,3 +39,39 @@ codegen-units = 1
 lto = true
 panic = "abort"
 strip = true
+
+# Linux packages (T-026): `cargo deb` and `cargo generate-rpm` after a
+# release build, into target/debian and target/generate-rpm. The Wayland
+# client and the Vulkan loader are loaded at runtime, so they're listed by
+# hand; a Vulkan driver comes with every desktop install.
+[package.metadata.deb]
+maintainer = "Andreas Zeidler"
+section = "utils"
+extended-description = "Tern starts to a prompt in under half a second and keeps SSH hosts, stored passwords and SFTP one click away. Needs a Wayland session."
+depends = "libc6 (>= 2.39), libxkbcommon0, libwayland-client0, libvulkan1"
+recommends = "openssh-client"
+license-file = ["LICENSE", "0"]
+assets = [
+    ["target/release/tern", "usr/bin/", "755"],
+    ["packaging/linux/de.zedrem.tern.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/512x512/apps/de.zedrem.tern.png", "644"],
+    ["assets/fonts/lilex/OFL.txt", "usr/share/doc/tern/Lilex-OFL.txt", "644"],
+]
+
+# Fedora and openSUSE name these packages differently, so the runtime
+# libraries are required by soname; linked ones are found automatically.
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/tern", dest = "/usr/bin/tern", mode = "755" },
+    { source = "packaging/linux/de.zedrem.tern.desktop", dest = "/usr/share/applications/de.zedrem.tern.desktop", mode = "644" },
+    { source = "assets/icon.png", dest = "/usr/share/icons/hicolor/512x512/apps/de.zedrem.tern.png", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/licenses/tern/LICENSE", mode = "644", doc = true },
+    { source = "assets/fonts/lilex/OFL.txt", dest = "/usr/share/licenses/tern/Lilex-OFL.txt", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+"libwayland-client.so.0()(64bit)" = "*"
+"libvulkan.so.1()(64bit)" = "*"
+
+[package.metadata.generate-rpm.recommends]
+openssh-clients = "*"

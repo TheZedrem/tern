@@ -79,6 +79,7 @@ defaults. If one fights the task, say so and ask.
 | `cargo fmt && cargo clippy --all-targets -- -D warnings` | Must be clean before a commit |
 | `cargo build --release` | Release binary at `target/release/tern` |
 | `target/release/tern --bench-startup 10` | Cold run plus median/p90 TTFP over 10 warm launches (spec 0001) |
+| `cargo deb --no-build`, `cargo generate-rpm`, `packaging/linux/appimage.sh` | Linux packages from the release binary ([docs/development.md](docs/development.md#linux-packages)) |
 
 Verify UI changes in the running app (`cargo run`), not just in tests.
 Report the TTFP the badge shows whenever you touched the boot path.

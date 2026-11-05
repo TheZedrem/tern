@@ -52,3 +52,23 @@ session.
 | Config | `~/.config/tern/config.yaml` / `%APPDATA%\tern\config.yaml` |
 | User themes | `…/tern/themes/*.yaml` |
 | Session state | `~/.local/share/tern/session.json` / `%LOCALAPPDATA%\tern\session.json` |
+
+## Linux packages
+
+A `v*` tag matching `Cargo.toml`'s version builds the `.deb`, `.rpm` and
+AppImage in CI (`.github/workflows/release.yml`) and attaches them to a
+GitHub release. To build them locally after `cargo build --release`:
+
+```sh
+cargo install --locked cargo-deb cargo-generate-rpm   # once
+cargo deb --no-build         # target/debian/tern_<version>-1_amd64.deb
+cargo generate-rpm           # target/generate-rpm/tern-<version>-1.x86_64.rpm
+packaging/linux/appimage.sh <path to appimagetool>   # target/packages/Tern-<version>-x86_64.AppImage
+```
+
+`appimagetool` comes from
+[AppImage/appimagetool](https://github.com/AppImage/appimagetool/releases);
+it downloads the AppImage runtime while it runs. A local build links
+against your distro's glibc, so its packages only install on that distro
+version or newer. The release packages are built on Ubuntu 24.04 and need
+glibc 2.39.

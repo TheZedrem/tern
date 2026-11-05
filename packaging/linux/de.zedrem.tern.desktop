@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Tern
+Comment=A fast terminal with built-in SSH and SFTP
+Exec=tern
+Icon=de.zedrem.tern
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;ssh;sftp;
+StartupWMClass=de.zedrem.tern

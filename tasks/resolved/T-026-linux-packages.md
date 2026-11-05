@@ -18,14 +18,19 @@ Area: meta.
   recommendation (Phase 2). Debian: `libxkbcommon0`, `libvulkan1`,
   `openssh-client`. Fedora: `libxkbcommon`, `vulkan-loader`,
   `openssh-clients`.
-- Proposed tooling, to confirm with the owner (new build tools, not
-  dependencies of the binary): `cargo-deb` and `cargo-generate-rpm`
+- Tooling (owner's OK, 2026-11-05): `cargo-deb` and `cargo-generate-rpm`
   configured in `Cargo.toml`'s `[package.metadata]`, and `appimagetool` for
-  the AppImage.
+  the AppImage. License EUPL-1.2, maintainer "Andreas Zeidler" (owner).
 - No Flatpak for now (OQ-020).
 - CI builds all packages on a `v*` tag and attaches them to the GitHub
   release once T-007 is green.
 - Check each package on its distro: it installs, the launcher shows the
   icon, a prompt appears, and it uninstalls cleanly.
+
+Done (2026-11-05): all three build locally from the release binary, the
+AppImage boots to a prompt in 349 ms warm (`--bench-startup 3`), and
+`.github/workflows/release.yml` builds them on a `v*` tag. Not yet checked:
+installing each package on Debian/Ubuntu, Fedora and openSUSE (T-030) and
+the release workflow's first run (needs T-007's repo).
 
 Spec: ../spec/architecture.md
