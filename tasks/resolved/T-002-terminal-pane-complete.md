@@ -49,9 +49,9 @@ and the shell-integration snippets moved to T-022, which needs `polling`
 as a direct dependency (OQ-018).
 
 Verified: 379 tests, 36 new from separate agents against the specs and
-the threat model. They caught four bugs, all fixed: unknown `cursor` keys
-had no notice, a `\` could hide a link's real host, Ctrl+double-click
-opened a link twice, and earlier the session work's boot-path write.
+the threat model. They caught three bugs, all fixed: unknown `cursor` keys
+had no notice, a `\` could hide a link's real host, and Ctrl+double-click
+opened a link twice.
 The debug build boots and renders a restored 4-pane tab.
 
 Not verified: everything the mouse, keyboard and an IME do in the running
