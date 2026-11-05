@@ -6,6 +6,7 @@
 mod bench;
 mod commands;
 mod config;
+mod import;
 mod layout;
 mod secrets;
 mod session;
@@ -46,8 +47,10 @@ fn main() {
         eprintln!("zed-term: {error}");
         std::process::exit(2);
     });
-    if let Mode::Runner { runs } = mode {
-        std::process::exit(bench::run(runs));
+    match &mode {
+        Mode::Runner { runs } => std::process::exit(bench::run(*runs)),
+        Mode::Import { file, dry_run } => std::process::exit(import::run(file, *dry_run)),
+        Mode::Normal | Mode::Once => {}
     }
     let bench = mode == Mode::Once;
 

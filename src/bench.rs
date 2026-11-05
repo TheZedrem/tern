@@ -5,7 +5,7 @@
 
 use crate::timing::TtfpReport;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -15,7 +15,7 @@ pub const BUDGET_MS: f64 = 500.0;
 /// A hung launch is killed after this long, so the bench never hangs.
 const RUN_TIMEOUT: Duration = Duration::from_secs(20);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// Normal interactive start.
     Normal,
@@ -23,12 +23,18 @@ pub enum Mode {
     Once,
     /// The runner: `--bench-startup N`.
     Runner { runs: usize },
+    /// `--import-hosts <file> [--dry-run]`: imports and exits, no window
+    /// (spec 0010).
+    Import { file: PathBuf, dry_run: bool },
 }
+
+/// How `--import-hosts` is called.
+const IMPORT_USAGE: &str = "usage: zed-term --import-hosts <file> [--dry-run]";
 
 impl Mode {
     /// Parses the arguments after the program name.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
-        let mut args = args.into_iter();
+        let mut args = args.into_iter().peekable();
         let mode = match args.next().as_deref() {
             None => Mode::Normal,
             Some("--bench-startup") => match args.next() {
@@ -41,6 +47,13 @@ impl Mode {
                         ));
                     }
                 },
+            },
+            Some("--import-hosts") => match args.next() {
+                Some(file) if !file.starts_with("--") => Mode::Import {
+                    file: file.into(),
+                    dry_run: args.next_if(|arg| arg == "--dry-run").is_some(),
+                },
+                _ => return Err(IMPORT_USAGE.to_owned()),
             },
             Some(other) => return Err(format!("unknown argument {other:?}")),
         };
@@ -177,6 +190,31 @@ mod tests {
             &["ready"],
         ];
         for args in cases {
+            assert!(parse(args).is_err(), "accepted {args:?}");
+        }
+    }
+
+    /// Spec 0010, flow 1.
+    #[test]
+    fn import_hosts_takes_a_file_and_an_optional_dry_run() {
+        let import = |file: &str, dry_run| {
+            Ok(Mode::Import {
+                file: file.into(),
+                dry_run,
+            })
+        };
+        assert_eq!(parse(&["--import-hosts", "a.ini"]), import("a.ini", false));
+        assert_eq!(
+            parse(&["--import-hosts", "a.ini", "--dry-run"]),
+            import("a.ini", true)
+        );
+        let bad: [&[&str]; 4] = [
+            &["--import-hosts"],
+            &["--import-hosts", "--dry-run"],
+            &["--import-hosts", "a.ini", "--dry-run", "extra"],
+            &["--import-hosts", "a.ini", "b.ini"],
+        ];
+        for args in bad {
             assert!(parse(args).is_err(), "accepted {args:?}");
         }
     }

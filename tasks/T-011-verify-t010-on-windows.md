@@ -44,7 +44,9 @@ composes at the cursor, and closing the window leaves no `pwsh` or
 `conhost` behind. For T-006: a relaunch restores the tabs, splits and the
 window size. For T-017: the settings screen changes the font size in
 `%APPDATA%\zed-term\config.yaml` in place (CRLF kept), and recording a
-key works with the Windows key mapper. Fix what fails. Area: src.
+key works with the Windows key mapper. For T-018: `zed-term --import-hosts`
+on a real `MobaXterm.ini` prints its report in pwsh, the hosts land in the
+config with CRLF kept, and their `~\…` key paths connect. Fix what fails. Area: src.
 
 Spec: ../spec/0001-startup-performance.md (AC8)
 Spec: ../spec/0002-terminal-pane.md (spawn, input, resize, exit on Windows)
@@ -53,3 +55,4 @@ Spec: ../spec/0004-commands-keybindings-palette.md (palette and font keys)
 Spec: ../spec/0005-config-and-themes.md (paths, watcher, PATHEXT)
 Spec: ../spec/0006-ssh-hosts.md (ssh.exe, reconnect, missing client)
 Spec: ../spec/0007-drag-and-drop-splits.md (drag and drop, ConPTY repaint)
+Spec: ../spec/0010-import-hosts.md (report on the console, MobaXterm paths)

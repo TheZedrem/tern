@@ -55,13 +55,19 @@ picker at once.
   lowercased and dashed, made unique against the config's IDs.
 - **Group:** MobaXterm's folder path joined with ` / `; Tabby's group name.
 - **Key files:** as written, except MobaXterm's `_ProfileDir_` prefix,
-  which becomes `~`; Tabby's `file://` prefix is dropped.
+  which becomes `~`, and its `_CurrentDrive_`, which becomes `C`; Tabby's
+  `file://` prefix is dropped, and a key in Tabby's vault isn't imported.
+- **Skipped:** sessions that aren't SSH, and SSH hosts behind a jump host
+  or a proxy (MobaXterm's gateway or proxy type; Tabby's `jumpHost`,
+  `proxyCommand` or SOCKS/HTTP proxy): imported without it, they'd
+  connect somewhere else. Tabby's missing `user` is its default, `root`.
 - **Duplicate:** a host whose user, host and port match a profile or a
   `~/.ssh/config` alias already listed (spec 0006), or an earlier host
   in the same file. It's reported and not imported.
 - **Formats** are told apart by content: an INI with `[Bookmarks` sections
-  is MobaXterm, YAML with `profiles:` entries of `type:` is Tabby. The
-  parsers are tested against real exports the owner provides (T-018).
+  is MobaXterm, YAML with `profiles:` entries of `type:` is Tabby.
+  MobaXterm's files are CP1252; its field positions follow the
+  reverse-engineered format of MobaXterm 23 (there is no official one).
 
 ### Flows
 
