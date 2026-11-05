@@ -40,6 +40,10 @@ To try a config without touching your own, point `XDG_CONFIG_HOME`
 elsewhere (Linux): `XDG_CONFIG_HOME=/tmp/zt cargo run` reads and watches
 `/tmp/zt/tern/config.yaml`.
 
+To run this checkout as `tern` from anywhere (Linux),
+`packaging/linux/install.sh` builds the release binary and links it into
+`${XDG_BIN_HOME:-~/.local/bin}`. Re-run it after pulling to update.
+
 ## Tests
 
 `cargo test` runs everything that needs no window. `cargo test -- --ignored`

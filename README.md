@@ -61,6 +61,19 @@ interface that explains itself.
 - [ ] SSH port forwarding (local, remote and dynamic) on a profile
 - [ ] Plugin system (considered, not committed to)
 
+## Install from source (Linux)
+
+With a Rust toolchain and the [prerequisites](docs/development.md#prerequisites):
+
+```sh
+packaging/linux/install.sh
+```
+
+It builds the release binary and links it as `~/.local/bin/tern`. Re-run
+it after pulling to update.
+
+## Links
+
 - What we're building and why: [`spec/architecture.md`](spec/architecture.md)
 - Backlog: [`tasks/`](tasks/)
 - Dev setup: [`docs/development.md`](docs/development.md)
