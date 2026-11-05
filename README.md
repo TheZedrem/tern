@@ -18,7 +18,8 @@ OQ-013.
 
 My main problem with Tabby is speed: Electron slows it down, so a quick SSH
 session becomes a wait. MobaXterm is faster, but it's unintuitive and in
-places hard to use and understand. Tern aims for both: native speed and an
+places hard to use and understand. PuTTY is great for SSH, but it has no
+local shell and no built-in SFTP. Tern aims for both: native speed and an
 interface that explains itself.
 
 ## Features
