@@ -10,7 +10,9 @@ pub mod change;
 pub mod yaml;
 
 use crate::commands::{self, AppCommand, keymap};
-use crate::config::{CloseOnExit, Config, CursorStyle, OpenLinks, Profile, ProfileKind};
+use crate::config::{
+    CloseOnExit, Config, CursorStyle, OpenLinks, Profile, ProfileKind, TabBarSide,
+};
 use change::{Change, ProfileForm};
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -45,6 +47,7 @@ pub const FIELDS: &[&str] = &[
     "cursor.blink",
     "keybindings",
     "theme.default",
+    "tab_bar",
 ];
 
 /// Template keys the screen leaves to the file, and why: custom themes are
@@ -896,6 +899,31 @@ impl Render for SettingsView {
                 self.picker("pick-theme", theme_name, Pick::Theme, cx)
                     .into_any_element(),
             ),
+            row(
+                Page::Appearance,
+                "Tabs",
+                "Tab bar",
+                "tabs vertical sidebar left top position",
+                self.options(
+                    "tab-bar",
+                    &[("top", "On top"), ("left", "Down the left (vertical)")],
+                    match config.tab_bar {
+                        TabBarSide::Top => "top",
+                        TabBarSide::Left => "left",
+                    },
+                    |value| {
+                        choice(vec!["tab_bar"], value, |config| {
+                            match config.tab_bar {
+                                TabBarSide::Top => "top",
+                                TabBarSide::Left => "left",
+                            }
+                            .to_owned()
+                        })
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
         ];
         rows.push(row(
             Page::Appearance,
@@ -1181,6 +1209,7 @@ mod tests {
         "cursor.blink",
         "copy_on_select",
         "open_links",
+        "tab_bar",
         "close_on_exit",
         "restore_session",
         "keybindings",

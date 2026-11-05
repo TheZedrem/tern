@@ -28,6 +28,7 @@ immediately.
 - Splits: split right/down, close pane, resize by dragging a divider, directional focus, zoom (maximize) a pane
 - Session restore: layout, titles and cwd per pane
 - Title bar: on compositors that draw no window frame (GNOME), the tab bar doubles as the title bar
+- Vertical tabs: `tab_bar: left` lists the tabs down the left side, with the same clicks, renames, drags and drops; only the title bar (window controls, drag to move) stays on top, and only where the compositor draws no frame. Default `top` (owner's request, T-025)
 
 **Out of scope:**
 

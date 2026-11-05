@@ -14,7 +14,7 @@ use crate::commands::{
     OpenConfig, OpenPalette, OpenSettings, Paste, PreviousTab, RenameTab, ResetFontSize, Search,
     SelectTheme, SplitDown, SplitDownWithProfile, SplitRight, SplitRightWithProfile, ZoomPane,
 };
-use crate::config::{self, Config, Profile, ProfileKind};
+use crate::config::{self, Config, Profile, ProfileKind, TabBarSide};
 use crate::secrets;
 use crate::session::{self, SavedLeaf, SavedNode, SavedTab, Session, WindowSize};
 use crate::settings::{self, Pick, SettingsEvent, SettingsView, change::Change};
@@ -1908,6 +1908,151 @@ impl Workspace {
             .last_empty_space(self.title_bar_space(client_decorated, cx))
     }
 
+    /// The tabs as a list down the left side, `tab_bar: left` (spec 0003):
+    /// the same clicks, renames, drags and drops as the bar on top, the
+    /// drop markers above and below instead of beside.
+    fn render_side_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (bar, active, active_text, text, border) = (
+            theme.tab_bar,
+            theme.tab_active,
+            theme.tab_active_foreground,
+            theme.tab_foreground,
+            theme.border,
+        );
+        let renaming = self.rename.as_ref().map(|rename| rename.tab);
+        let shown = self.tabs.active_index();
+        let tabs = self.tabs.tabs().iter().enumerate().map(|(ix, tab)| {
+            let title = self.tab_title(tab, cx);
+            let is_renaming = renaming == Some(tab.id);
+            let label = match &self.rename {
+                Some(rename) if is_renaming => div()
+                    .key_context(RENAME_CONTEXT)
+                    .on_action(cx.listener(|this, _: &CancelRename, window, cx| {
+                        this.finish_rename(None, window, cx);
+                    }))
+                    .flex_1()
+                    .child(Input::new(&rename.input).xsmall())
+                    .into_any_element(),
+                _ => div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(title.clone())
+                    .into_any_element(),
+            };
+            let close = Button::new(("close-side-tab", tab.id))
+                .icon(IconName::Close)
+                .ghost()
+                .xsmall()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.close_tab(ix, window, cx);
+                }));
+            div()
+                .id(("side-tab", tab.id))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .px(px(8.))
+                .py(px(5.))
+                .rounded(px(4.))
+                .border_y_2()
+                .border_color(gpui::transparent_black())
+                .text_sm()
+                .map(|row| match ix == shown {
+                    true => row.bg(active).text_color(active_text),
+                    false => row.text_color(text),
+                })
+                .child(label)
+                .child(close)
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    if event.click_count() >= 2 {
+                        this.start_rename(ix, window, cx);
+                    } else {
+                        this.switch_tab(|tabs| tabs.activate(ix), window, cx);
+                    }
+                }))
+                .when(!is_renaming, |row| {
+                    let dragged = DraggedTab {
+                        index: ix,
+                        id: tab.id,
+                        title,
+                    };
+                    row.on_drag(dragged, |tab, _, _, cx| {
+                        cx.new(|_| TabGhost(tab.title.clone()))
+                    })
+                })
+                .drag_over::<DraggedTab>(move |style, dragged, _, cx| {
+                    let marker = cx.theme().drag_border;
+                    match dragged.index.cmp(&ix) {
+                        Ordering::Less => style.border_color(marker).border_t_0(),
+                        Ordering::Greater => style.border_color(marker).border_b_0(),
+                        Ordering::Equal => style,
+                    }
+                })
+                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                    this.tabs.move_tab(dragged.index, ix);
+                    this.save_soon(window, cx);
+                    cx.notify();
+                }))
+                .drag_over::<DraggedPane>(|style, _, _, cx| {
+                    style.border_color(cx.theme().drag_border).border_t_0()
+                })
+                .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                    this.pane_to_tab(dragged.leaf, ix + 1, window, cx);
+                }))
+        });
+        let new_tab = Button::new("new-side-tab")
+            .icon(IconName::Plus)
+            .label("New tab")
+            .ghost()
+            .small()
+            .on_click(cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)));
+        // Below the tabs, a dropped pane becomes the last tab (spec 0007).
+        let rest = div()
+            .id("side-tabs-rest")
+            .flex_1()
+            .min_h(px(24.))
+            .drag_over::<DraggedPane>(|style, _, _, cx| {
+                style.border_t_2().border_color(cx.theme().drag_border)
+            })
+            .on_drop(cx.listener(|this, dragged: &DraggedPane, window, cx| {
+                this.pane_to_tab(dragged.leaf, usize::MAX, window, cx);
+            }));
+        let _ = window;
+        div()
+            .id("side-tabs")
+            .w(px(200.))
+            .h_full()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .p(px(6.))
+            .bg(bar)
+            .border_r_1()
+            .border_color(border)
+            .overflow_y_scroll()
+            .children(tabs)
+            .child(new_tab)
+            .child(rest)
+    }
+
+    /// With the tabs down the side, what's left on top where the compositor
+    /// draws no frame: the title bar's free space and the window controls
+    /// (spec 0003, flow 8).
+    fn render_title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .h(px(34.))
+            .bg(cx.theme().tab_bar)
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(self.title_bar_space(true, cx))
+            .child(Self::window_controls(window))
+    }
+
     /// The tab bar's free space, where a dropped pane becomes the last tab
     /// (spec 0007, flow 5). When the compositor draws no frame it acts as
     /// the title bar: drag to move, double-click to maximize (spec 0003,
@@ -2202,6 +2347,19 @@ impl Render for Workspace {
                 .text_color(gpui::white())
                 .child(format!("TTFP {ms:.0} ms"))
         });
+        // The tabs on top as a bar, or down the left as a list with only the
+        // title bar left on top, where the compositor draws no frame.
+        let (top, side) = match self.config.tab_bar {
+            TabBarSide::Top => (Some(self.render_tabs(window, cx).into_any_element()), None),
+            TabBarSide::Left => {
+                let client_decorated =
+                    matches!(window.window_decorations(), Decorations::Client { .. });
+                let title_bar =
+                    client_decorated.then(|| self.render_title_bar(window, cx).into_any_element());
+                let tabs = self.render_side_tabs(window, cx).into_any_element();
+                (title_bar, Some(tabs))
+            }
+        };
         let workspace = div()
             .size_full()
             .relative()
@@ -2287,16 +2445,19 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ResetFontSize, _, cx| {
                 this.zoom_font(None, cx);
             }))
-            .child(self.render_tabs(window, cx))
+            .children(top)
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .relative()
-                    .child(content)
-                    .child(measure_size(Rc::clone(&self.content_size)))
-                    .children(self.render_settings())
-                    .children(self.render_palette(cx)),
+                div().flex_1().min_h_0().flex().children(side).child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .relative()
+                        .child(content)
+                        .child(measure_size(Rc::clone(&self.content_size)))
+                        .children(self.render_settings())
+                        .children(self.render_palette(cx)),
+                ),
             )
             .children(badge);
         // Shadow and resize edges when the compositor draws no frame;

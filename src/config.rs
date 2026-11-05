@@ -49,6 +49,17 @@ pub struct Config {
     pub cursor: Cursor,
     /// What opens a link (spec 0002, flow 7).
     pub open_links: OpenLinks,
+    /// Where the tabs are: a bar on top, or a list down the left side
+    /// (spec 0003).
+    pub tab_bar: TabBarSide,
+}
+
+/// Where the tabs are (spec 0003).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TabBarSide {
+    Top,
+    Left,
 }
 
 /// What opens a link: Ctrl+click, the owner's default, or a plain click
@@ -185,6 +196,7 @@ impl Default for Config {
             copy_on_select: false,
             cursor: Cursor::default(),
             open_links: OpenLinks::CtrlClick,
+            tab_bar: TabBarSide::Top,
         }
     }
 }
@@ -974,6 +986,11 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                 "open_links" => {
                     if let Some(open) = map.next_value()? {
                         config.open_links = open;
+                    }
+                }
+                "tab_bar" => {
+                    if let Some(side) = map.next_value()? {
+                        config.tab_bar = side;
                     }
                 }
                 unknown => {
@@ -1884,6 +1901,7 @@ scrollback: 10000
 cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
+tab_bar: top                        # top | left: vertical tabs (spec 0003)
 close_on_exit: clean                # always | clean | never
 restore_session: true
 keybindings: { "ctrl+shift+d": pane.splitRight }
@@ -1948,7 +1966,7 @@ theme:
                 default: "dark".into(),
                 custom: vec![("midnight".into(), midnight)],
             },
-            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 29)],
+            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 30)],
             ..Config::default()
         };
         assert_eq!(config, expected);
