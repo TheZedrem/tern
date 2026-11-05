@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-003, T-006, T-011, T-020]
+tasks: [T-003, T-006, T-011]
 related: [spec 0001, spec 0002, spec 0005]
 ---
 
@@ -32,6 +32,7 @@ immediately.
 **Out of scope:**
 
 - Multiple windows, detaching a tab into a window: *Later*
+- Moving tabs and panes into and out of splits, and splitting with another profile: spec 0007
 - Restoring scrollback or running programs: never (`architecture.md` §Ground rules)
 - Tab colors / profile colors: Phase 2 (host profiles)
 
