@@ -64,11 +64,12 @@ pub struct Cursor {
 
 /// What a frame highlights besides the selection: the search bar's matches
 /// on screen, in reading order, and the one the view is on (spec 0002,
-/// flow 6).
+/// flow 6), and the hovered link, underlined (flow 7).
 #[derive(Debug, Default)]
 pub struct Marks {
     pub matches: Vec<Match>,
     pub current: Option<Match>,
+    pub link: Option<Match>,
 }
 
 /// Builds the frame for `content`. `focused` decides between a solid and a
@@ -176,7 +177,11 @@ pub fn build(content: RenderableContent<'_>, theme: &Theme, focused: bool, marks
             color: fg,
             bold: flags.contains(Flags::BOLD),
             italic: flags.contains(Flags::ITALIC),
-            underline: flags.intersects(Flags::ALL_UNDERLINES),
+            underline: flags.intersects(Flags::ALL_UNDERLINES)
+                || marks
+                    .link
+                    .as_ref()
+                    .is_some_and(|link| link.contains(&indexed.point)),
             strikeout: flags.contains(Flags::STRIKEOUT),
         };
         let mut text = String::new();

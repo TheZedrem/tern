@@ -5,6 +5,7 @@ mod colors;
 mod element;
 pub mod grid;
 pub mod input;
+pub mod link;
 mod prompt;
 pub mod pty;
 pub mod search;
@@ -28,11 +29,13 @@ use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot;
 use futures::future::{Either, select};
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, BackgroundExecutor, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, NoAction, ParentElement, Pixels, Point, Render, ScrollEvent,
-    SharedString, Size, Styled, Subscription, Task, Window, actions, div, font, px, size,
+    SharedString, Size, StatefulInteractiveElement, Styled, Subscription, Task, Window, actions,
+    div, font, px, size,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -439,6 +442,10 @@ pub struct TerminalPane {
     /// Wheel movement short of a whole line, carried to the next event.
     scroll_remainder: f32,
     search: Option<SearchBar>,
+    /// Finds URLs in the output, built on first hover.
+    urls: Option<RegexSearch>,
+    /// The link under the pointer, underlined, its target shown.
+    hovered_link: Option<link::Link>,
 }
 
 /// The search bar while it's open (spec 0002, flow 6).
@@ -485,6 +492,8 @@ impl TerminalPane {
             selecting: false,
             scroll_remainder: 0.0,
             search: None,
+            urls: None,
+            hovered_link: None,
         };
         match start {
             Start::Started(session) => pane.attach(session, cx),
@@ -960,8 +969,19 @@ impl TerminalPane {
 
     /// Starts a selection under the left button: dragging selects from
     /// there, a double click a word, a triple click a line (spec 0002,
-    /// flow 4).
+    /// flow 4). Ctrl+click (Cmd+click on macOS) on a link opens it instead
+    /// (flow 7).
     fn mouse_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let open = if cfg!(target_os = "macos") {
+            event.modifiers.platform
+        } else {
+            event.modifiers.control
+        };
+        if open && let Some(link) = self.link_under(event.position) {
+            // GPUI's URL opener, never a shell (TM-escape-03).
+            cx.open_url(&link.target);
+            return;
+        }
         let State::Running(running) = &self.state else {
             return;
         };
@@ -980,7 +1000,17 @@ impl TerminalPane {
         cx.notify();
     }
 
+    /// Drags a selection out, or with no button down, tracks the link under
+    /// the pointer.
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if event.pressed_button.is_none() {
+            let link = self.link_under(event.position);
+            if self.hovered_link != link {
+                self.hovered_link = link;
+                cx.notify();
+            }
+            return;
+        }
         if !self.selecting || event.pressed_button != Some(MouseButton::Left) {
             return;
         }
@@ -995,6 +1025,24 @@ impl TerminalPane {
             selection.update(point, side);
         }
         cx.notify();
+    }
+
+    /// The link zed-term would open under `position` (spec 0002, flow 7).
+    fn link_under(&mut self, position: Point<Pixels>) -> Option<link::Link> {
+        let State::Running(running) = &self.state else {
+            return None;
+        };
+        let term = running.term.lock();
+        let (point, _) = self.cell_at(position, &term, running.size)?;
+        let urls = self.urls.get_or_insert_with(link::detector);
+        link::at(&term, point, urls)
+    }
+
+    /// The pointer left the pane: no link is hovered.
+    fn hover_ended(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
+        if !hovered && self.hovered_link.take().is_some() {
+            cx.notify();
+        }
     }
 
     /// Ends a selection: a click that selected nothing clears it; anything
@@ -1196,17 +1244,49 @@ impl TerminalPane {
 
     /// The search highlights on screen now.
     fn marks(&mut self) -> grid::Marks {
+        let link = self.hovered_link.as_ref().map(|link| link.range.clone());
         let (Some(bar), State::Running(running)) = (&mut self.search, &self.state) else {
-            return grid::Marks::default();
+            return grid::Marks {
+                link,
+                ..Default::default()
+            };
         };
         let Some(compiled) = &mut bar.compiled else {
-            return grid::Marks::default();
+            return grid::Marks {
+                link,
+                ..Default::default()
+            };
         };
         let term = running.term.lock();
         grid::Marks {
             matches: search::on_screen(&term, compiled),
             current: bar.current.clone(),
+            link,
         }
+    }
+
+    /// Where the hovered link goes, over the pane's bottom left corner
+    /// (TM-escape-02).
+    fn render_link_hint(&self, cx: &App) -> Option<impl IntoElement> {
+        let link = self.hovered_link.as_ref()?;
+        let theme = cx.theme();
+        Some(
+            div()
+                .absolute()
+                .bottom(px(4.))
+                .left(px(4.))
+                .max_w(gpui::relative(0.9))
+                .px(px(6.))
+                .py(px(2.))
+                .rounded(px(4.))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover)
+                .text_color(theme.popover_foreground)
+                .text_size(px(11.))
+                .truncate()
+                .child(link::hint(&link.target)),
+        )
     }
 
     /// The search bar over the pane's top right corner.
@@ -1292,9 +1372,14 @@ impl Render for TerminalPane {
         // The dialog sits beside the grid, not in it, so keys typed into the
         // dialog never pass the grid's key handler.
         let grid = div()
+            .id("grid")
             .size_full()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
+            .map(|grid| match self.hovered_link {
+                Some(_) => grid.cursor_pointer(),
+                None => grid.cursor_text(),
+            })
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::middle_click))
@@ -1302,6 +1387,7 @@ impl Render for TerminalPane {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_scroll(cx.listener(Self::scroll_wheel))
+            .on_hover(cx.listener(Self::hover_ended))
             .child(content);
         div()
             .size_full()
@@ -1314,6 +1400,7 @@ impl Render for TerminalPane {
                 }),
             )
             .child(grid)
+            .children(self.render_link_hint(cx))
             .children(self.render_search(cx))
             .children(self.dialog.clone())
     }
