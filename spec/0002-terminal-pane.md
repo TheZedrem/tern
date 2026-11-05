@@ -96,12 +96,13 @@ mapping from keys to bytes. Pane IDs are `u32`, unique per app run.
    regex search), and highlights all matches. `Esc` closes it and returns
    focus to the pane.
 7. **Links:** OSC 8 hyperlinks and detected URLs are underlined on hover,
-   with the target shown, and open in the OS handler on a plain click,
-   one that ends on the cell it started without a drag (a drag still
-   selects). `open_links: ctrl_click` makes it Ctrl+click (Cmd+click on
-   macOS), which opens in either mode, in a pane it focuses too, being
-   deliberate. The plain click that only focuses a pane opens nothing, and
-   a double or triple click selects, with Ctrl or without.
+   with the target shown, and open in the OS handler on Ctrl+click
+   (Cmd+click on macOS), the default (`open_links: ctrl_click`), which
+   opens in a pane it focuses too, being deliberate. `open_links: click`
+   also opens them on a plain click, one that ends on the cell it started
+   without a drag (a drag still selects); the plain click that only
+   focuses a pane opens nothing. A double or triple click selects, with
+   Ctrl or without.
 8. **Exit:** the pane shows `[process exited with code N]`.
    `config.close_on_exit` (`always | clean | never`, default `clean`) decides
    whether it closes. A clean exit (code 0) closes the pane.
@@ -147,7 +148,7 @@ only there.
 5. Search finds a term 5 000 lines up in scrollback, highlights it, and `Esc` returns focus to the shell.
 6. A configured nonexistent shell shows an error in the pane instead of a blank pane or a crash. `exit 0` closes the pane under the default config, and `exit 3` leaves it open showing code 3.
 7. Quitting the app leaves no child shell processes running.
-8. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on a click or Ctrl+click, while an `https://` link opens in the browser on a click (Ctrl+click with `open_links: ctrl_click`), and dragging across it selects without opening it.
+8. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on a click or Ctrl+click, while an `https://` link opens in the browser on Ctrl+click (on a plain click too with `open_links: click`), and dragging across it selects without opening it.
 9. With the pwsh snippet sourced on Windows 11, `cd C:\Users` then split: the new pane starts in `C:\Users`.
 10. Typing with an IME (e.g. ibus with a CJK layout on Linux) shows the preedit at the cursor and delivers the committed text to the shell.
 

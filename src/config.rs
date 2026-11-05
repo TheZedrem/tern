@@ -51,7 +51,7 @@ pub struct Config {
     pub open_links: OpenLinks,
 }
 
-/// What opens a link: a plain click, the owner's default, or Ctrl+click
+/// What opens a link: Ctrl+click, the owner's default, or a plain click
 /// (Cmd+click on macOS), as most terminals do.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -184,7 +184,7 @@ impl Default for Config {
             restore_session: true,
             copy_on_select: false,
             cursor: Cursor::default(),
-            open_links: OpenLinks::Click,
+            open_links: OpenLinks::CtrlClick,
         }
     }
 }
@@ -1491,11 +1491,11 @@ pub(crate) mod tests {
         );
     }
 
-    /// Spec 0005 §Model, spec 0002 flow 7: links open on a plain click
-    /// unless `open_links: ctrl_click` makes it Ctrl+click.
+    /// Spec 0005 §Model, spec 0002 flow 7: links open on Ctrl+click
+    /// unless `open_links: click` makes a plain click do.
     #[test]
-    fn open_links_is_click_unless_set_to_ctrl_click() {
-        assert_eq!(parse("").config.open_links, OpenLinks::Click);
+    fn open_links_is_ctrl_click_unless_set_to_click() {
+        assert_eq!(parse("").config.open_links, OpenLinks::CtrlClick);
         for (text, open_links) in [
             ("open_links: click\n", OpenLinks::Click),
             ("open_links: ctrl_click\n", OpenLinks::CtrlClick),
@@ -1507,16 +1507,16 @@ pub(crate) mod tests {
     }
 
     /// Spec 0005: a value `open_links` doesn't take, like `ctrl-click`,
-    /// falls back to `click` with a notice naming the key; the rest of the
-    /// file still applies.
+    /// falls back to `ctrl_click` with a notice naming the key; the rest of
+    /// the file still applies.
     #[test]
-    fn a_bad_open_links_falls_back_to_click_with_a_notice_and_the_rest_applies() {
+    fn a_bad_open_links_falls_back_to_ctrl_click_with_a_notice_and_the_rest_applies() {
         let Loaded { config, notices } = parse(concat!(
             "scrollback: 500\n",
             "open_links: ctrl-click\n",
             "copy_on_select: true\n",
         ));
-        assert_eq!(config.open_links, OpenLinks::Click);
+        assert_eq!(config.open_links, OpenLinks::CtrlClick);
         assert_eq!(config.scrollback, 500);
         assert!(config.copy_on_select);
         assert_eq!(notices.len(), 1, "{notices:?}");
@@ -1883,7 +1883,7 @@ font: { family: null, size: 13, line_height: 1.2 }   # null → the bundled font
 scrollback: 10000
 cursor: { style: block, blink: true }
 copy_on_select: false
-open_links: click                   # click | ctrl_click (spec 0002, flow 7)
+open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
 close_on_exit: clean                # always | clean | never
 restore_session: true
 keybindings: { "ctrl+shift+d": pane.splitRight }

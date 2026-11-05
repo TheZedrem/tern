@@ -324,7 +324,7 @@ mod tests {
         }
     }
 
-    /// Spec 0002, flow 7: under `open_links: click`, the default, a plain
+    /// Spec 0002, flow 7: under `open_links: click`, a plain
     /// single click on a link in the focused pane opens it once the button
     /// comes up on the same cell. Under `ctrl_click` it selects.
     #[test]
