@@ -33,7 +33,10 @@ and a helper pointed at a pipe of another process exits 1; the server's
 nonblocking pipe reads notice a helper that ssh ended; a remembered
 password logs in through Credential Manager (AC10); and a key passphrase
 is filled in, which depends on how `ssh.exe` writes `~` and `\` into its
-prompt. Fix what fails. Area: src.
+prompt. For T-020: a tab dropped on a side of a pane and a pane dragged by
+its handle back to the tab bar both move, the handle shows on hover, and a
+moved pane repaints cleanly after ConPTY's resize redraw. Fix what fails.
+Area: src.
 
 Spec: ../spec/0001-startup-performance.md (AC8)
 Spec: ../spec/0002-terminal-pane.md (spawn, input, resize, exit on Windows)
@@ -41,3 +44,4 @@ Spec: ../spec/0003-tabs-splits-and-session-restore.md (keys, resize, close)
 Spec: ../spec/0004-commands-keybindings-palette.md (palette and font keys)
 Spec: ../spec/0005-config-and-themes.md (paths, watcher, PATHEXT)
 Spec: ../spec/0006-ssh-hosts.md (ssh.exe, reconnect, missing client)
+Spec: ../spec/0007-drag-and-drop-splits.md (drag and drop, ConPTY repaint)

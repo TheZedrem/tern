@@ -1,10 +1,12 @@
 //! The command palette (spec 0004): gpui-component's command list over the
 //! app commands and profiles, over the themes as the theme picker, or over
 //! the hosts, grouped, as the host picker (spec 0006), which connects to a
-//! host or forgets its saved password. Ranked by [`fuzzy`] instead of the
+//! host, forgets its saved password, or with the local profiles splits the
+//! focused pane with one (spec 0007). Ranked by [`fuzzy`] instead of the
 //! list's own substring filter.
 
 use super::{AppCommand, fuzzy};
+use crate::layout::tree::Axis;
 use crate::ssh::Host;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render,
@@ -30,6 +32,9 @@ pub enum Entry {
     Host(Host),
     /// Forgets what the keychain holds for the host (spec 0006, flow 7).
     ForgetHost(Host),
+    /// Splits the focused pane along `axis` with the host or local profile
+    /// (spec 0007, flow 6).
+    SplitWith { host: Host, axis: Axis },
 }
 
 impl Entry {
@@ -38,13 +43,17 @@ impl Entry {
             Entry::Command { title, .. } => title,
             Entry::Profile { title, .. } => title,
             Entry::Theme { name, .. } => name,
-            Entry::Host(host) | Entry::ForgetHost(host) => &host.label,
+            Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. } => {
+                &host.label
+            }
         }
     }
 
     fn host(&self) -> Option<&Host> {
         match self {
-            Entry::Host(host) | Entry::ForgetHost(host) => Some(host),
+            Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. } => {
+                Some(host)
+            }
             _ => None,
         }
     }
@@ -78,7 +87,7 @@ impl Entry {
             Entry::Theme { name, current } => {
                 CommandItem::new().label(name.clone()).checked(*current)
             }
-            Entry::Host(host) | Entry::ForgetHost(host) => {
+            Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. } => {
                 CommandItem::new().label(host.label.clone())
             }
         }
@@ -90,6 +99,11 @@ pub enum PaletteEvent {
     OpenProfile(String),
     /// Forget what's saved for the host with this ID.
     ForgetHost(String),
+    /// Split the focused pane along `axis` with the profile with this ID.
+    SplitWith {
+        id: String,
+        axis: Axis,
+    },
     /// Show theme `name` without saving it.
     PreviewTheme(String),
     /// Save theme `name` as `theme.default`.
@@ -202,6 +216,10 @@ impl Palette {
             Some(Entry::Profile { id, .. }) => cx.emit(PaletteEvent::OpenProfile(id.clone())),
             Some(Entry::Host(host)) => cx.emit(PaletteEvent::OpenProfile(host.id.clone())),
             Some(Entry::ForgetHost(host)) => cx.emit(PaletteEvent::ForgetHost(host.id.clone())),
+            Some(Entry::SplitWith { host, axis }) => cx.emit(PaletteEvent::SplitWith {
+                id: host.id.clone(),
+                axis: *axis,
+            }),
             Some(Entry::Theme { name, .. }) => cx.emit(PaletteEvent::ChooseTheme(name.clone())),
             // A command has run through its action already.
             Some(Entry::Command { .. }) | None => {}
@@ -226,7 +244,9 @@ impl Render for Palette {
         // config.yaml binds keys to, or where a host connects.
         let footer: SharedString = match self.highlighted.and_then(|ix| self.entries.get(ix)) {
             Some(Entry::Command { command, .. }) => command.id.into(),
-            Some(Entry::Host(host) | Entry::ForgetHost(host)) => host.destination.clone().into(),
+            Some(Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. }) => {
+                host.destination.clone().into()
+            }
             _ => SharedString::default(),
         };
         let muted = cx.theme().muted_foreground;
@@ -315,6 +335,47 @@ mod tests {
                     [0],
                     "`{query}` in {haystack}"
                 );
+            }
+        }
+    }
+
+    /// Spec 0007, flow 6: the split picker lists, finds and groups a host as
+    /// the host picker does, and a local profile, a line of its own group
+    /// with no destination, by its name and group.
+    #[test]
+    fn the_split_picker_lists_finds_and_groups_profiles_like_the_host_picker() {
+        let host = Host {
+            id: "db".into(),
+            label: "Postgres".into(),
+            group: "Databases".into(),
+            destination: "admin@db.example.com:2222".into(),
+        };
+        let local = Host {
+            id: "fish".into(),
+            label: "Fish shell".into(),
+            group: "Local".into(),
+            destination: String::new(),
+        };
+        let cases: [(Host, &[&str]); 2] = [
+            (host, &["postg", "db.example", "datab"]),
+            (local, &["fish", "local"]),
+        ];
+        for (line, queries) in cases {
+            for axis in [Axis::Row, Axis::Column] {
+                let entry = Entry::SplitWith {
+                    host: line.clone(),
+                    axis,
+                };
+                assert_eq!(entry.title(), line.label);
+                assert_eq!(entry.group(), Some(line.group.as_str()));
+                let haystack = entry.haystack();
+                for query in queries {
+                    assert_eq!(
+                        fuzzy::rank(query, [&*haystack]),
+                        [0],
+                        "`{query}` in {haystack}"
+                    );
+                }
             }
         }
     }

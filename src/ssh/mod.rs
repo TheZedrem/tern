@@ -21,7 +21,8 @@ const PROFILE_GROUP: &str = "Hosts";
 /// The group of the hosts from `~/.ssh/config`.
 const SSH_CONFIG_GROUP: &str = "SSH config";
 
-/// One line of the host picker.
+/// One line of the host picker. The split picker lists local profiles as
+/// lines too, with no destination (spec 0007, flow 6).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Host {
     /// The ID of the profile that connects to it; `config::Config::profile`

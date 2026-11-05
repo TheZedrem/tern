@@ -14,12 +14,24 @@ pub enum Axis {
     Column,
 }
 
+/// A way to move focus, or the side of a pane something is dropped on
+/// (spec 0007).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
     Left,
     Right,
     Up,
     Down,
+}
+
+impl Direction {
+    /// The axis of a split that puts something on this side.
+    pub fn axis(self) -> Axis {
+        match self {
+            Direction::Left | Direction::Right => Axis::Row,
+            Direction::Up | Direction::Down => Axis::Column,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -95,19 +107,39 @@ impl Node {
     /// Splits `target` along `axis`: `target` keeps the first half and
     /// `new` gets the second (right or below). False if `target` isn't here.
     pub fn split(&mut self, target: LeafId, new: LeafId, axis: Axis) -> bool {
+        let side = match axis {
+            Axis::Row => Direction::Right,
+            Axis::Column => Direction::Down,
+        };
+        self.insert(target, Node::Leaf(new), side)
+    }
+
+    /// Splits `target` in half and puts `node`, a pane or a whole tree, on
+    /// its `side` (spec 0007). False if `target` isn't here.
+    pub fn insert(&mut self, target: LeafId, node: Node, side: Direction) -> bool {
         match self {
             Node::Leaf(id) if *id == target => {
+                let target = Node::Leaf(target);
+                let (first, second) = match side {
+                    Direction::Left | Direction::Up => (node, target),
+                    Direction::Right | Direction::Down => (target, node),
+                };
                 *self = Node::Split {
-                    axis,
+                    axis: side.axis(),
                     ratio: 0.5,
-                    first: Box::new(Node::Leaf(target)),
-                    second: Box::new(Node::Leaf(new)),
+                    first: Box::new(first),
+                    second: Box::new(second),
                 };
                 true
             }
             Node::Leaf(_) => false,
             Node::Split { first, second, .. } => {
-                first.split(target, new, axis) || second.split(target, new, axis)
+                let half = if first.contains(target) {
+                    first
+                } else {
+                    second
+                };
+                half.insert(target, node, side)
             }
         }
     }
@@ -267,6 +299,51 @@ impl Node {
             }
         }
     }
+
+    /// Whether pane `target` has room for `node` on its `side` when the
+    /// tree fills `area`: each half of the even split holds its own side at
+    /// its minimum size, if every pane needs `pane` and every divider takes
+    /// `divider` (spec 0007). A layout that needed more than its half would
+    /// push the divider off the middle the drop mark shows.
+    pub fn can_insert(
+        &self,
+        target: LeafId,
+        node: &Node,
+        side: Direction,
+        area: (f32, f32),
+        pane: (f32, f32),
+        divider: f32,
+    ) -> bool {
+        let Some((_, rect)) = self
+            .rects(Rect::UNIT)
+            .into_iter()
+            .find(|(id, _)| *id == target)
+        else {
+            return false;
+        };
+        let (width, height) = (rect.width * area.0, rect.height * area.1);
+        let (node_width, node_height) = node.min_size(pane, divider);
+        let (along, across) = match side.axis() {
+            Axis::Row => ((width, pane.0, node_width), (height, pane.1, node_height)),
+            Axis::Column => ((height, pane.1, node_height), (width, pane.0, node_width)),
+        };
+        let half = (along.0 - divider) / 2.0;
+        half >= along.1.max(along.2) && across.0 >= across.1.max(across.2)
+    }
+}
+
+/// The side of a pane nearest to a point at `x`, `y` across it, both from
+/// 0 to 1 (spec 0007: every point of a pane is over one of its sides).
+pub fn nearest_side(x: f32, y: f32) -> Direction {
+    [
+        (x, Direction::Left),
+        (1.0 - x, Direction::Right),
+        (y, Direction::Up),
+        (1.0 - y, Direction::Down),
+    ]
+    .into_iter()
+    .min_by(|a, b| a.0.total_cmp(&b.0))
+    .map_or(Direction::Right, |(_, side)| side)
 }
 
 /// Clamps a divider so both sides keep their minimum size, when the split
@@ -611,5 +688,88 @@ mod tests {
         }
         // Nothing left past the divider.
         assert_eq!(clamp_ratio(0.5, 3.0, 150.0, 50.0, 4.0), 0.75);
+    }
+
+    /// Spec 0007, §Model (Insert): a drop on a side splits the pane along
+    /// that side's axis at ratio 0.5, with the dropped layout on that side.
+    #[test]
+    fn inserting_on_a_side_splits_the_pane_in_half_with_the_new_one_there() {
+        // The side, then where the inserted pane and the target end up.
+        let cases = [
+            (Left, rect(0.0, 0.0, 0.5, 1.0), rect(0.5, 0.0, 0.5, 1.0)),
+            (Right, rect(0.5, 0.0, 0.5, 1.0), rect(0.0, 0.0, 0.5, 1.0)),
+            (Up, rect(0.0, 0.0, 1.0, 0.5), rect(0.0, 0.5, 1.0, 0.5)),
+            (Down, rect(0.0, 0.5, 1.0, 0.5), rect(0.0, 0.0, 1.0, 0.5)),
+        ];
+        for (side, inserted, target) in cases {
+            let mut root = Leaf(1);
+            assert!(root.insert(1, Leaf(2), side), "{side:?}");
+            assert_eq!(rect_of(&root, 2), inserted, "{side:?}");
+            assert_eq!(rect_of(&root, 1), target, "{side:?}");
+        }
+    }
+
+    /// Spec 0007, §Model (Drop target): over a pane, the side nearest the
+    /// pointer is the target, so near a corner the closer edge wins.
+    #[test]
+    fn the_side_nearest_the_pointer_is_the_drop_target() {
+        let cases = [
+            ((0.1, 0.5), Left),
+            ((0.9, 0.5), Right),
+            ((0.5, 0.1), Up),
+            ((0.5, 0.9), Down),
+            ((0.2, 0.1), Up),
+            ((0.1, 0.2), Left),
+            ((0.8, 0.9), Down),
+            ((0.9, 0.8), Right),
+        ];
+        for ((x, y), side) in cases {
+            assert_eq!(nearest_side(x, y), side, "at ({x}, {y})");
+        }
+    }
+
+    /// For the room tests: the 10 × 3 cell pane minimum as 100 × 40 px, and
+    /// a 4 px divider.
+    const PANE_MIN: (f32, f32) = (100.0, 40.0);
+    const DIVIDER: f32 = 4.0;
+
+    /// AC5 (spec 0007): a side is a target only if both halves keep their
+    /// pane at the minimum: two of them and the divider along the side's
+    /// axis, of the target pane rather than the whole tab.
+    #[test]
+    fn a_side_has_room_only_if_both_halves_keep_their_pane_at_the_minimum() {
+        let room = |root: &Node, target, side, area| {
+            root.can_insert(target, &Leaf(9), side, area, PANE_MIN, DIVIDER)
+        };
+        for side in [Left, Right] {
+            assert!(room(&Leaf(1), 1, side, (204.0, 40.0)), "{side:?}");
+            assert!(!room(&Leaf(1), 1, side, (203.0, 1000.0)), "{side:?}");
+        }
+        for side in [Up, Down] {
+            assert!(room(&Leaf(1), 1, side, (100.0, 84.0)), "{side:?}");
+            assert!(!room(&Leaf(1), 1, side, (1000.0, 83.0)), "{side:?}");
+        }
+        // Pane 2 is the right half of the tab: 204 px of 408, 203 of 406.
+        let pair = split(Row, 0.5, Leaf(1), Leaf(2));
+        assert!(room(&pair, 2, Right, (408.0, 40.0)));
+        assert!(!room(&pair, 2, Right, (406.0, 1000.0)));
+    }
+
+    /// AC5 (spec 0007): a dropped layout of several panes needs room for all
+    /// of them in its half. Stacked, three need 128 px, the height the half
+    /// shares with the target. Side by side, two need 204 px, and at ratio
+    /// 0.5 a half gets (width - 4) / 2, so they fit from 412 px across.
+    #[test]
+    fn a_dropped_layout_needs_room_for_all_of_its_panes_in_its_half() {
+        let room = |node: &Node, area| Leaf(1).can_insert(1, node, Right, area, PANE_MIN, DIVIDER);
+        let stacked = split(Column, 0.5, Leaf(2), split(Column, 0.5, Leaf(3), Leaf(4)));
+        assert!(room(&stacked, (1000.0, 128.0)));
+        assert!(!room(&stacked, (1000.0, 127.0)));
+        let side_by_side = split(Row, 0.5, Leaf(2), Leaf(3));
+        assert!(room(&side_by_side, (412.0, 40.0)));
+        assert!(
+            !room(&side_by_side, (411.0, 1000.0)),
+            "a 411 px pane's half is 203.5 px, short of the 204 px two panes need"
+        );
     }
 }

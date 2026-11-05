@@ -1,7 +1,8 @@
 //! The window's content (spec 0003): the tab bar, which doubles as the
 //! title bar when the compositor draws no frame, over the active tab's
-//! split tree. The layout itself is plain data in [`tabs`] and [`tree`];
-//! this module owns the panes and draws them.
+//! split tree, which tabs and panes are dragged into and out of (spec
+//! 0007). The layout itself is plain data in [`tabs`] and [`tree`]; this
+//! module owns the panes and draws them.
 
 pub mod tabs;
 pub mod tree;
@@ -10,7 +11,8 @@ use crate::commands::palette::{Entry, Palette, PaletteEvent};
 use crate::commands::{
     self, ClosePane, CloseTab, ConnectToHost, DecreaseFontSize, FocusDown, FocusLeft, FocusRight,
     FocusUp, ForgetPassword, GoToTab, IncreaseFontSize, NewTab, NextTab, OpenConfig, OpenPalette,
-    PreviousTab, RenameTab, ResetFontSize, SelectTheme, SplitDown, SplitRight, ZoomPane,
+    PreviousTab, RenameTab, ResetFontSize, SelectTheme, SplitDown, SplitDownWithProfile,
+    SplitRight, SplitRightWithProfile, ZoomPane,
 };
 use crate::config::{self, Config, Profile, ProfileKind};
 use crate::secrets;
@@ -25,10 +27,10 @@ use futures::StreamExt;
 use futures::channel::mpsc::unbounded;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, AnyElement, App, AppContext, ClickEvent, Context, Decorations, Div, DragMoveEvent,
-    ElementId, Entity, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement,
-    Pixels, Render, SharedString, Size, StatefulInteractiveElement, Styled, Subscription, Window,
-    WindowAppearance, actions, canvas, div, px,
+    Anchor, AnyElement, App, AppContext, Bounds, ClickEvent, Context, Decorations, Div,
+    DragMoveEvent, ElementId, Entity, InteractiveElement, IntoElement, KeyBinding, MouseButton,
+    ParentElement, Pixels, Point, Render, SharedString, Size, Stateful, StatefulInteractiveElement,
+    Styled, Subscription, Window, WindowAppearance, actions, canvas, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -45,7 +47,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use tabs::{Closed, TabId, Tabs};
+use tabs::{Closed, Dragged, TabId, Tabs};
 use tree::{Axis, Direction, LeafId, Node, Rect};
 
 /// Key context of the workspace, where the commands are bound.
@@ -56,6 +58,8 @@ const RENAME_CONTEXT: &str = "TabRename";
 const DIVIDER: f32 = 4.0;
 /// The smallest pane a divider may leave (spec 0003).
 const MIN_PANE_CELLS: (f32, f32) = (10.0, 3.0);
+/// The split picker's group of local profiles (spec 0007, flow 6).
+const LOCAL_GROUP: &str = "Local";
 /// How long config changes must settle before a reload: editors save in
 /// bursts (spec 0005, flow 3).
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -75,10 +79,19 @@ pub fn init(cx: &mut App) {
     )]);
 }
 
-/// Dragging a tab to a new place in the bar.
+/// Dragging a tab to a new place in the bar, or onto a side of a pane
+/// (spec 0007).
 #[derive(Clone)]
 struct DraggedTab {
     index: usize,
+    id: TabId,
+    title: SharedString,
+}
+
+/// Dragging a pane of a split tab by its grab handle (spec 0007).
+#[derive(Clone)]
+struct DraggedPane {
+    leaf: LeafId,
     title: SharedString,
 }
 
@@ -176,6 +189,9 @@ pub struct Workspace {
     title_bar_pressed: bool,
     /// The tab content's size at the last layout, for the split-room check.
     content_size: Rc<Cell<Option<Size<Pixels>>>>,
+    /// The pane side a dragged tab or pane would land on now (spec 0007).
+    /// Drawn only while a drag is on.
+    drop_target: Option<(LeafId, Direction)>,
 }
 
 impl Workspace {
@@ -222,6 +238,7 @@ impl Workspace {
             rename_subscription: None,
             title_bar_pressed: false,
             content_size: Rc::default(),
+            drop_target: None,
         };
         let BootPane {
             start,
@@ -533,13 +550,14 @@ impl Workspace {
 
     /// Opens the host picker to connect to a host (spec 0006, flow 1).
     fn connect_to_host(&mut self, _: &ConnectToHost, window: &mut Window, cx: &mut Context<Self>) {
-        self.pick_host(Entry::Host, "Connect to a host", window, cx);
+        self.pick_host(Vec::new(), Entry::Host, "Connect to a host", window, cx);
     }
 
     /// Opens the host picker to forget what's saved for a host (spec 0006,
     /// flow 7).
     fn forget_password(&mut self, _: &ForgetPassword, window: &mut Window, cx: &mut Context<Self>) {
         self.pick_host(
+            Vec::new(),
             Entry::ForgetHost,
             "Forget the password saved for a host",
             window,
@@ -547,12 +565,39 @@ impl Workspace {
         );
     }
 
-    /// Opens the host picker over the SSH profiles and the hosts of
-    /// `~/.ssh/config`, which is read each time, off the UI thread, so its
-    /// edits show. `entry` says what picking a host does.
+    /// Opens the host picker, with the local profiles first, to split the
+    /// focused pane along `axis` with the one picked (spec 0007, flow 6).
+    /// Without room for a split it doesn't open.
+    fn pick_split_profile(&mut self, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_room(axis, window) {
+            return;
+        }
+        let local = self
+            .profiles()
+            .into_iter()
+            .filter(|profile| matches!(profile.kind, ProfileKind::Local(_)))
+            .map(|profile| ssh::Host {
+                label: profile.display_name().to_owned(),
+                group: LOCAL_GROUP.into(),
+                destination: String::new(),
+                id: profile.id,
+            })
+            .collect();
+        let placeholder = match axis {
+            Axis::Row => "Split right with a profile or host",
+            Axis::Column => "Split down with a profile or host",
+        };
+        let entry = move |host| Entry::SplitWith { host, axis };
+        self.pick_host(local, entry, placeholder, window, cx);
+    }
+
+    /// Opens the host picker over `first`, then the SSH profiles and the
+    /// hosts of `~/.ssh/config`, which is read each time, off the UI thread,
+    /// so its edits show. `entry` says what picking a host does.
     fn pick_host(
         &mut self,
-        entry: fn(ssh::Host) -> Entry,
+        first: Vec<ssh::Host>,
+        entry: impl Fn(ssh::Host) -> Entry + 'static,
         placeholder: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -568,7 +613,7 @@ impl Workspace {
                 for notice in notices {
                     show_notice(notice, window, cx);
                 }
-                let entries = hosts.into_iter().map(entry).collect();
+                let entries = first.into_iter().chain(hosts).map(entry).collect();
                 this.show_palette(None, window, cx, |window, cx| {
                     Palette::new(entries, placeholder, None, window, cx).with_empty(
                         "No hosts yet: add `type: ssh` profiles to config.yaml, \
@@ -680,6 +725,10 @@ impl Workspace {
                 self.spawn_pane(leaf, profile, None, window, cx);
             }
             PaletteEvent::ForgetHost(id) => self.forget_host(id, window, cx),
+            PaletteEvent::SplitWith { id, axis } => {
+                let profile = self.config.profile_or_default(id);
+                self.split(*axis, Some(profile), window, cx);
+            }
             PaletteEvent::PreviewTheme(name) => {
                 self.theme = self.theme_for(Some(name), window, cx);
                 self.apply_settings(cx);
@@ -737,13 +786,6 @@ impl Workspace {
         let tabs = self.tabs.tabs().len();
         let neighbor =
             |direction| tab.zoomed.is_none() && tab.root.neighbor(tab.focused, direction).is_some();
-        let can_split = |axis| {
-            self.content_size.get().is_none_or(|size| {
-                let area = (f32::from(size.width), f32::from(size.height));
-                self.tabs
-                    .can_split(axis, area, self.pane_min(window), DIVIDER)
-            })
-        };
         let size = f32::from(self.font.size);
         match id {
             "tab.next" | "tab.previous" => tabs > 1,
@@ -752,8 +794,8 @@ impl Workspace {
             "pane.focusRight" => neighbor(Direction::Right),
             "pane.focusUp" => neighbor(Direction::Up),
             "pane.focusDown" => neighbor(Direction::Down),
-            "pane.splitRight" => can_split(Axis::Row),
-            "pane.splitDown" => can_split(Axis::Column),
+            "pane.splitRight" | "pane.splitRightWithProfile" => self.has_room(Axis::Row, window),
+            "pane.splitDown" | "pane.splitDownWithProfile" => self.has_room(Axis::Column, window),
             "font.increase" => size < *FONT_SIZES.end(),
             "font.decrease" => size > *FONT_SIZES.start(),
             "font.reset" => self.zoom != 0.0,
@@ -844,13 +886,18 @@ impl Workspace {
         self.after_close(closed, window, cx);
     }
 
-    /// The tab's title: the user's name, else the focused pane's title, else
-    /// the name of the pane's profile (spec 0003).
+    /// The tab's title: the user's name, else its focused pane's (spec
+    /// 0003).
     fn tab_title(&self, tab: &tabs::Tab, cx: &App) -> SharedString {
-        if let Some(name) = &tab.name {
-            return name.clone().into();
+        match &tab.name {
+            Some(name) => name.clone().into(),
+            None => self.pane_title(tab.focused, cx),
         }
-        let Some(pane) = self.panes.get(&tab.focused) else {
+    }
+
+    /// A pane's title: its program's, else the name of its profile.
+    fn pane_title(&self, leaf: LeafId, cx: &App) -> SharedString {
+        let Some(pane) = self.panes.get(&leaf) else {
             return SharedString::default();
         };
         let pane = pane.read(cx);
@@ -876,33 +923,127 @@ impl Workspace {
 
     /// Splits the focused pane, unless that would leave either half below
     /// the minimum pane size (spec 0003); then the shortcut does nothing.
-    /// The new pane opens the same profile, as configured now, in the same
-    /// directory.
-    fn split(&mut self, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(size) = self.content_size.get() {
-            let area = (f32::from(size.width), f32::from(size.height));
-            if !self
-                .tabs
-                .can_split(axis, area, self.pane_min(window), DIVIDER)
-            {
-                return;
-            }
+    /// The new pane opens `picked` (spec 0007, flow 6), else the same
+    /// profile as configured now, in the same directory, unless `picked`
+    /// sets one of its own.
+    fn split(
+        &mut self,
+        axis: Axis,
+        picked: Option<Profile>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_room(axis, window) {
+            return;
         }
         let source = self.tabs.active().focused;
-        let (profile, cwd) = match self.panes.get(&source) {
+        let (source_profile, source_cwd) = match self.panes.get(&source) {
             Some(pane) => {
                 let pane = pane.read(cx);
-                (
-                    self.config.profile_or_default(&pane.profile().id),
-                    pane.cwd(),
-                )
+                (Some(pane.profile().id.clone()), pane.cwd())
             }
-            None => (self.config.default_profile(), None),
+            None => (None, None),
+        };
+        let (profile, cwd) = match picked {
+            Some(profile) => {
+                let cwd = source_cwd.filter(|_| profile.cwd().is_none());
+                (profile, cwd)
+            }
+            None => {
+                let profile = match source_profile {
+                    Some(id) => self.config.profile_or_default(&id),
+                    None => self.config.default_profile(),
+                };
+                (profile, source_cwd)
+            }
         };
         let leaf = self.tabs.split(axis);
         self.spawn_pane(leaf, profile, cwd, window, cx);
         self.focus_active(window, cx);
         cx.notify();
+    }
+
+    /// Whether the focused pane has room for a split along `axis` (spec
+    /// 0003). Before the first layout there is nothing to measure yet.
+    fn has_room(&self, axis: Axis, window: &Window) -> bool {
+        self.content_size.get().is_none_or(|size| {
+            let area = (f32::from(size.width), f32::from(size.height));
+            self.tabs
+                .can_split(axis, area, self.pane_min(window), DIVIDER)
+        })
+    }
+
+    /// Marks the side of pane `leaf` that `dragged` would land on, with the
+    /// pointer at `position`: the nearest one, if it has room (spec 0007).
+    /// Every pane hears every move of a drag, so a pane only clears the mark
+    /// when it's its own.
+    fn drag_over_pane(
+        &mut self,
+        leaf: LeafId,
+        dragged: Dragged,
+        bounds: Bounds<Pixels>,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let side = bounds.contains(&position).then(|| {
+            let x = (position.x - bounds.left()) / bounds.size.width;
+            let y = (position.y - bounds.top()) / bounds.size.height;
+            tree::nearest_side(x, y)
+        });
+        let target = side
+            .filter(|&side| {
+                self.content_size.get().is_some_and(|size| {
+                    let area = (f32::from(size.width), f32::from(size.height));
+                    let pane_min = self.pane_min(window);
+                    self.tabs
+                        .can_drop(dragged, leaf, side, area, pane_min, DIVIDER)
+                })
+            })
+            .map(|side| (leaf, side));
+        let ours = self.drop_target.is_some_and(|(marked, _)| marked == leaf);
+        if (target.is_some() || ours) && self.drop_target != target {
+            self.drop_target = target;
+            cx.notify();
+        }
+    }
+
+    /// Drops `dragged` on the side of pane `leaf` its drag marked (spec
+    /// 0007, flows 3 and 4). Without a mark, nothing moves.
+    fn drop_on_pane(
+        &mut self,
+        leaf: LeafId,
+        dragged: Dragged,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((target, side)) = self
+            .drop_target
+            .take()
+            .filter(|(marked, _)| *marked == leaf)
+        else {
+            return;
+        };
+        if self.tabs.drop_in_split(dragged, target, side) {
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Makes a pane dropped on the tab bar a tab of its own at `at` (spec
+    /// 0007, flow 5).
+    fn pane_to_tab(
+        &mut self,
+        leaf: LeafId,
+        at: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.drop_target = None;
+        if self.tabs.pane_to_tab(leaf, at) {
+            self.focus_active(window, cx);
+            cx.notify();
+        }
     }
 
     fn focus_toward(&mut self, direction: Direction, window: &mut Window, cx: &mut Context<Self>) {
@@ -977,6 +1118,8 @@ impl Workspace {
         if event.drag(cx).0 != path {
             return;
         }
+        // A drag that ended outside the window can leave its drop mark.
+        self.drop_target = None;
         let bounds = event.bounds;
         let position = event.event.position;
         let (offset, length) = match axis {
@@ -1019,11 +1162,78 @@ impl Workspace {
         )
     }
 
-    fn render_leaf(&self, leaf: LeafId) -> AnyElement {
-        match self.panes.get(&leaf) {
-            Some(pane) => div().size_full().child(pane.clone()).into_any_element(),
-            None => div().size_full().into_any_element(),
-        }
+    /// A pane, which tabs and panes are dropped on (spec 0007). In a split
+    /// tab that isn't zoomed, it has the grab handle it's dragged by.
+    fn render_leaf(&self, leaf: LeafId, cx: &mut Context<Self>) -> AnyElement {
+        let Some(pane) = self.panes.get(&leaf) else {
+            return div().size_full().into_any_element();
+        };
+        let tab = self.tabs.active();
+        let group = SharedString::from(format!("pane-{leaf}"));
+        let handle = (tab.zoomed.is_none() && matches!(tab.root, Node::Split { .. })).then(|| {
+            let title = self.pane_title(leaf, cx);
+            grab_handle(leaf, &group, self.theme)
+                .on_drag(DraggedPane { leaf, title }, |pane, _, _, cx| {
+                    cx.new(|_| TabGhost(pane.title.clone()))
+                })
+        });
+        let mark = self
+            .drop_target
+            .filter(|(marked, _)| *marked == leaf && cx.has_active_drag())
+            .map(|(_, side)| {
+                let theme = cx.theme();
+                div()
+                    .absolute()
+                    .bg(theme.drop_target)
+                    .border_2()
+                    .border_color(theme.drag_border)
+                    .map(|half| match side {
+                        Direction::Left => half.top_0().left_0().h_full().w_1_2(),
+                        Direction::Right => half.top_0().right_0().h_full().w_1_2(),
+                        Direction::Up => half.top_0().left_0().w_full().h_1_2(),
+                        Direction::Down => half.bottom_0().left_0().w_full().h_1_2(),
+                    })
+            });
+        div()
+            .group(group)
+            .relative()
+            .size_full()
+            .child(pane.clone())
+            .children(handle)
+            .children(mark)
+            .on_drag_move(cx.listener(
+                move |this, event: &DragMoveEvent<DraggedTab>, window, cx| {
+                    let dragged = Dragged::Tab(event.drag(cx).id);
+                    this.drag_over_pane(
+                        leaf,
+                        dragged,
+                        event.bounds,
+                        event.event.position,
+                        window,
+                        cx,
+                    );
+                },
+            ))
+            .on_drag_move(cx.listener(
+                move |this, event: &DragMoveEvent<DraggedPane>, window, cx| {
+                    let dragged = Dragged::Pane(event.drag(cx).leaf);
+                    this.drag_over_pane(
+                        leaf,
+                        dragged,
+                        event.bounds,
+                        event.event.position,
+                        window,
+                        cx,
+                    );
+                },
+            ))
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                this.drop_on_pane(leaf, Dragged::Tab(dragged.id), window, cx);
+            }))
+            .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                this.drop_on_pane(leaf, Dragged::Pane(dragged.leaf), window, cx);
+            }))
+            .into_any_element()
     }
 
     fn render_node(
@@ -1034,7 +1244,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (axis, ratio, first, second) = match node {
-            Node::Leaf(leaf) => return self.render_leaf(*leaf),
+            Node::Leaf(leaf) => return self.render_leaf(*leaf, cx),
             Node::Split {
                 axis,
                 ratio,
@@ -1147,7 +1357,12 @@ impl Workspace {
                 // The whole tab is the drag handle, except while its rename
                 // field needs the mouse for selecting text.
                 .when(!is_renaming, |this| {
-                    this.on_drag(DraggedTab { index: ix, title }, |tab, _, _, cx| {
+                    let dragged = DraggedTab {
+                        index: ix,
+                        id: tab.id,
+                        title,
+                    };
+                    this.on_drag(dragged, |tab, _, _, cx| {
                         cx.new(|_| TabGhost(tab.title.clone()))
                     })
                 })
@@ -1165,6 +1380,15 @@ impl Workspace {
                 .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
                     this.tabs.move_tab(dragged.index, ix);
                     cx.notify();
+                }))
+                // A pane dropped on a tab becomes the tab after it (spec
+                // 0007, flow 5).
+                .drag_over::<DraggedPane>(|style, _, _, cx| {
+                    let marker = cx.theme().drag_border;
+                    style.border_l_0().border_r_2().border_color(marker)
+                })
+                .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                    this.pane_to_tab(dragged.leaf, ix + 1, window, cx);
                 }))
         });
 
@@ -1188,12 +1412,23 @@ impl Workspace {
             .last_empty_space(self.title_bar_space(client_decorated, cx))
     }
 
-    /// The tab bar's free space. When the compositor draws no frame it acts
-    /// as the title bar: drag to move, double-click to maximize (spec 0003,
+    /// The tab bar's free space, where a dropped pane becomes the last tab
+    /// (spec 0007, flow 5). When the compositor draws no frame it acts as
+    /// the title bar: drag to move, double-click to maximize (spec 0003,
     /// flow 8). A press only becomes a move once the mouse moves, so the
     /// double click still registers.
     fn title_bar_space(&self, client_decorated: bool, cx: &mut Context<Self>) -> AnyElement {
-        let space = div().id("title-bar-space").flex_1().h_full().min_w(px(24.));
+        let space = div()
+            .id("title-bar-space")
+            .flex_1()
+            .h_full()
+            .min_w(px(24.))
+            .drag_over::<DraggedPane>(|style, _, _, cx| {
+                style.border_l_2().border_color(cx.theme().drag_border)
+            })
+            .on_drop(cx.listener(|this, dragged: &DraggedPane, window, cx| {
+                this.pane_to_tab(dragged.leaf, usize::MAX, window, cx);
+            }));
         if !client_decorated {
             return space.into_any_element();
         }
@@ -1319,6 +1554,37 @@ impl ReloadJob {
     }
 }
 
+/// The 6-dot handle a pane of a split tab is dragged by, in the pane's top
+/// right corner, shown while the pointer is over the pane's `group` (spec
+/// 0007, flow 1). The terminal below it doesn't get its mouse events.
+fn grab_handle(leaf: LeafId, group: &SharedString, theme: Theme) -> Stateful<Div> {
+    let dot = || {
+        div()
+            .size(px(3.))
+            .rounded_full()
+            .bg(theme::hsla(theme.foreground).opacity(0.7))
+    };
+    let row = || div().flex().gap(px(3.)).child(dot()).child(dot());
+    div()
+        .id(("pane-handle", leaf))
+        .absolute()
+        .top(px(4.))
+        .right(px(4.))
+        .p(px(4.))
+        .flex()
+        .flex_col()
+        .gap(px(3.))
+        .rounded(px(4.))
+        .bg(theme::hsla(theme.background).opacity(0.85))
+        .cursor_grab()
+        .occlude()
+        .invisible()
+        .group_hover(group.clone(), |style| style.visible())
+        .child(row())
+        .child(row())
+        .child(row())
+}
+
 /// Shows `notice` as a toast in the window's bottom-right corner
 /// (architecture §Cross-cutting rules).
 fn show_notice(notice: String, window: &mut Window, cx: &mut App) {
@@ -1395,7 +1661,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = self.tabs.active();
         let content = match tab.zoomed {
-            Some(leaf) => self.render_leaf(leaf),
+            Some(leaf) => self.render_leaf(leaf, cx),
             None => self.render_node(&tab.root, Vec::new(), self.pane_min(window), cx),
         };
         // The dev badge (spec 0001): every debug run shows its own TTFP.
@@ -1435,10 +1701,16 @@ impl Render for Workspace {
                 this.switch_tab(|tabs| tabs.activate(ix), window, cx);
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
-                this.split(Axis::Row, window, cx);
+                this.split(Axis::Row, None, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
-                this.split(Axis::Column, window, cx);
+                this.split(Axis::Column, None, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SplitRightWithProfile, window, cx| {
+                this.pick_split_profile(Axis::Row, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SplitDownWithProfile, window, cx| {
+                this.pick_split_profile(Axis::Column, window, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusLeft, window, cx| {
                 this.focus_toward(Direction::Left, window, cx);

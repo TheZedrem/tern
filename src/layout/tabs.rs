@@ -27,6 +27,15 @@ pub enum Closed {
     Last,
 }
 
+/// What a drag into a split carries (spec 0007).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dragged {
+    /// A pane of the active tab, by its grab handle.
+    Pane(LeafId),
+    /// A whole tab, from the tab bar.
+    Tab(TabId),
+}
+
 /// The tabs of one window. Never empty: closing the last tab reports
 /// [`Closed::Last`] and leaves the model as it was.
 #[derive(Debug)]
@@ -131,9 +140,20 @@ impl Tabs {
         let Some(ix) = self.tabs.iter().position(|tab| tab.root.contains(leaf)) else {
             return Closed::Pane;
         };
+        if self.detach(ix, leaf) {
+            Closed::Pane
+        } else {
+            self.remove_tab(ix)
+        }
+    }
+
+    /// Takes `leaf` out of tab `ix` as closing it would, the pane that
+    /// takes its place getting its focus, but leaves the pane running.
+    /// False if it's the tab's only pane.
+    fn detach(&mut self, ix: usize, leaf: LeafId) -> bool {
         let tab = &mut self.tabs[ix];
         let Some(successor) = tab.root.successor(leaf) else {
-            return self.remove_tab(ix);
+            return false;
         };
         let root = std::mem::replace(&mut tab.root, Node::Leaf(successor));
         tab.root = root.remove(leaf).unwrap_or(Node::Leaf(successor));
@@ -143,7 +163,99 @@ impl Tabs {
         if tab.zoomed == Some(leaf) {
             tab.zoomed = None;
         }
-        Closed::Pane
+        true
+    }
+
+    /// What dropping `dragged` on pane `target` of the active tab puts into
+    /// a split, and the tree it goes into: the active tab's, without the
+    /// pane if a pane of its own moves. `None` for a drop on the dragged
+    /// pane or tab itself.
+    fn drop_parts(&self, dragged: Dragged, target: LeafId) -> Option<(Node, Node)> {
+        let tab = self.active();
+        if !tab.root.contains(target) {
+            return None;
+        }
+        match dragged {
+            Dragged::Pane(leaf) if leaf != target && tab.root.contains(leaf) => {
+                Some((Node::Leaf(leaf), tab.root.clone().remove(leaf)?))
+            }
+            Dragged::Pane(_) => None,
+            Dragged::Tab(id) => {
+                let ix = self.index_of(id).filter(|&ix| ix != self.active)?;
+                Some((self.tabs[ix].root.clone(), tab.root.clone()))
+            }
+        }
+    }
+
+    /// Whether dropping `dragged` on `side` of pane `target` in the active
+    /// tab would move anything: not onto itself, and with room for both
+    /// halves when the tab fills `area` (spec 0007).
+    pub fn can_drop(
+        &self,
+        dragged: Dragged,
+        target: LeafId,
+        side: Direction,
+        area: (f32, f32),
+        pane_min: (f32, f32),
+        divider: f32,
+    ) -> bool {
+        self.drop_parts(dragged, target)
+            .is_some_and(|(node, rest)| {
+                rest.can_insert(target, &node, side, area, pane_min, divider)
+            })
+    }
+
+    /// Drops `dragged` on `side` of pane `target` in the active tab: a pane
+    /// leaves its old place, a tab brings its whole tree and closes. What
+    /// moved has the focus, and the zoom ends (spec 0007, flows 3 and 4).
+    /// False if nothing moved. Room is the caller's check
+    /// ([`Self::can_drop`]).
+    pub fn drop_in_split(&mut self, dragged: Dragged, target: LeafId, side: Direction) -> bool {
+        let Some((node, mut root)) = self.drop_parts(dragged, target) else {
+            return false;
+        };
+        let focused = match dragged {
+            Dragged::Pane(leaf) => leaf,
+            Dragged::Tab(id) => self
+                .index_of(id)
+                .map_or_else(|| node.first_leaf(), |ix| self.tabs[ix].focused),
+        };
+        root.insert(target, node, side);
+        if let Dragged::Tab(id) = dragged
+            && let Some(ix) = self.index_of(id)
+        {
+            let active_id = self.active().id;
+            self.tabs.remove(ix);
+            self.active = self.index_of(active_id).unwrap_or(0);
+        }
+        let tab = self.active_mut();
+        tab.root = root;
+        tab.focused = focused;
+        tab.zoomed = None;
+        true
+    }
+
+    /// Makes pane `leaf` of the active tab a tab of its own at position
+    /// `at`, or at the end past it, and activates it (spec 0007, flow 5).
+    /// False if it's not in the active tab or is its only pane.
+    pub fn pane_to_tab(&mut self, leaf: LeafId, at: usize) -> bool {
+        if !self.active().root.contains(leaf) || !self.detach(self.active, leaf) {
+            return false;
+        }
+        let id = self.next_id();
+        let at = at.min(self.tabs.len());
+        self.tabs.insert(
+            at,
+            Tab {
+                id,
+                name: None,
+                root: Node::Leaf(leaf),
+                focused: leaf,
+                zoomed: None,
+            },
+        );
+        self.active = at;
+        true
     }
 
     /// Closes tab `ix` with every pane in it. Returns those panes, so their
@@ -256,6 +368,16 @@ mod tests {
         tabs.activate(2);
         let ids = order(&tabs).try_into().expect("four tabs");
         (tabs, ids)
+    }
+
+    /// A split, for writing out the layout a tab should have.
+    fn split(axis: Axis, ratio: f32, first: Node, second: Node) -> Node {
+        Node::Split {
+            axis,
+            ratio,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
     }
 
     #[test]
@@ -539,5 +661,187 @@ mod tests {
         // In the same tab, the left pane spans the full height.
         tabs.focus(left);
         assert!(tabs.can_split(Axis::Column, (408.0, 166.0), PANE_MIN, DIVIDER));
+    }
+
+    /// AC1 (spec 0007): a tab dropped on the right side of the shown tab's
+    /// pane joins it there, leaving one tab. Both panes keep their IDs, so
+    /// neither program restarts or reconnects.
+    #[test]
+    fn a_tab_dropped_on_the_right_side_of_a_pane_joins_it_there() {
+        // The model knows no profiles: the first tab stands for the local
+        // shell, the second, shown, for the SSH session.
+        let (mut tabs, local) = Tabs::new();
+        let ssh = tabs.new_tab();
+        let dragged = Dragged::Tab(tabs.tabs()[0].id);
+        assert!(tabs.drop_in_split(dragged, ssh, Direction::Right));
+        assert_eq!(tabs.tabs().len(), 1);
+        let expected = split(Axis::Row, 0.5, Node::Leaf(ssh), Node::Leaf(local));
+        assert_eq!(tabs.active().root, expected);
+    }
+
+    /// AC2 (spec 0007): a dropped tab of three panes brings them in its
+    /// layout, ratios included, and is gone from the tab bar.
+    #[test]
+    fn a_dropped_tab_brings_its_whole_layout_and_leaves_the_tab_bar() {
+        let (mut tabs, left) = Tabs::new();
+        let right = tabs.split(Axis::Row);
+        let target = tabs.active().id;
+        let a = tabs.new_tab();
+        let b = tabs.split(Axis::Row);
+        let c = tabs.split(Axis::Column);
+        // Its dividers moved off the middle.
+        let layout = split(
+            Axis::Row,
+            0.3,
+            Node::Leaf(a),
+            split(Axis::Column, 0.7, Node::Leaf(b), Node::Leaf(c)),
+        );
+        tabs.active_mut().root = layout.clone();
+        let dragged = Dragged::Tab(tabs.active().id);
+        tabs.activate(0);
+        assert!(tabs.drop_in_split(dragged, right, Direction::Down));
+        assert_eq!(order(&tabs), [target]);
+        let expected = split(
+            Axis::Row,
+            0.5,
+            Node::Leaf(left),
+            split(Axis::Column, 0.5, Node::Leaf(right), layout),
+        );
+        assert_eq!(tabs.active().root, expected);
+    }
+
+    /// Spec 0007, flow 3: the dropped tab's focused pane takes the focus,
+    /// and the target tab's zoom ends.
+    #[test]
+    fn a_dropped_tabs_focused_pane_takes_the_focus_and_the_zoom_ends() {
+        let (mut tabs, _) = Tabs::new();
+        let zoomed = tabs.split(Axis::Row);
+        tabs.toggle_zoom();
+        // Focused on its first pane, not its newest.
+        let first = tabs.new_tab();
+        tabs.split(Axis::Row);
+        tabs.focus(first);
+        let dragged = Dragged::Tab(tabs.active().id);
+        tabs.activate(0);
+        assert!(tabs.drop_in_split(dragged, zoomed, Direction::Left));
+        let tab = tabs.active();
+        assert_eq!((tab.focused, tab.zoomed), (first, None));
+    }
+
+    /// AC4 (spec 0007), flow 4: a pane dropped on the top side of another
+    /// pane of its tab leaves its place to its sibling, ends up above the
+    /// other one, and keeps the focus.
+    #[test]
+    fn a_pane_dropped_on_the_top_side_of_another_ends_up_above_it() {
+        let (mut tabs, left) = Tabs::new();
+        let top = tabs.split(Axis::Row);
+        let bottom = tabs.split(Axis::Column);
+        // left | (top over bottom), with `bottom` focused.
+        assert!(tabs.drop_in_split(Dragged::Pane(bottom), left, Direction::Up));
+        let expected = split(
+            Axis::Row,
+            0.5,
+            split(Axis::Column, 0.5, Node::Leaf(bottom), Node::Leaf(left)),
+            Node::Leaf(top),
+        );
+        assert_eq!(tabs.active().root, expected);
+        assert_eq!(tabs.active().focused, bottom);
+    }
+
+    /// AC4 (spec 0007): dropping a pane on itself, or a tab on one of its
+    /// own panes, changes nothing, and no side of them is a target.
+    #[test]
+    fn dropping_a_pane_on_itself_or_a_tab_on_its_own_panes_changes_nothing() {
+        let (mut tabs, left) = Tabs::new();
+        let right = tabs.split(Axis::Row);
+        let own = Dragged::Tab(tabs.active().id);
+        let before = tabs.tabs().to_vec();
+        let sides = [
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ];
+        for (dragged, target) in [(Dragged::Pane(left), left), (own, left), (own, right)] {
+            for side in sides {
+                let drop = format!("{dragged:?} on the {side:?} side of {target}");
+                let area = (2000.0, 2000.0);
+                assert!(
+                    !tabs.can_drop(dragged, target, side, area, PANE_MIN, DIVIDER),
+                    "{drop}"
+                );
+                assert!(!tabs.drop_in_split(dragged, target, side), "{drop}");
+            }
+        }
+        assert_eq!(tabs.tabs(), before);
+    }
+
+    /// AC5 (spec 0007), flow 4: a pane moved within its tab has left its
+    /// place when it's inserted, so the space it leaves counts as room.
+    #[test]
+    fn room_for_a_pane_moved_within_its_tab_counts_the_space_it_leaves() {
+        let (mut tabs, left) = Tabs::new();
+        let right = tabs.split(Axis::Row);
+        tabs.new_tab();
+        let other = Dragged::Tab(tabs.active().id);
+        tabs.activate(0);
+        // 150 px each of a 300 px tab: no room beside `left` for a pane
+        // from elsewhere, but `right` leaving gives it the whole width.
+        let area = (300.0, 600.0);
+        let side = Direction::Left;
+        assert!(!tabs.can_drop(other, left, side, area, PANE_MIN, DIVIDER));
+        let moved = Dragged::Pane(right);
+        assert!(tabs.can_drop(moved, left, side, area, PANE_MIN, DIVIDER));
+    }
+
+    /// AC3 (spec 0007), flow 5: a pane dragged to the tab bar becomes a tab
+    /// where the marker shows, or at the end past the last tab, and that tab
+    /// activates with the pane focused.
+    #[test]
+    fn a_pane_dragged_to_the_tab_bar_becomes_a_tab_at_the_marked_place() {
+        let (mut tabs, first) = Tabs::new();
+        let second = tabs.split(Axis::Row);
+        tabs.split(Axis::Row);
+        tabs.new_tab();
+        let [a, b]: [TabId; 2] = order(&tabs).try_into().expect("two tabs");
+        tabs.activate(0);
+        assert!(tabs.pane_to_tab(second, 1));
+        let moved = tabs.active();
+        assert_eq!((&moved.root, moved.focused), (&Node::Leaf(second), second));
+        assert_eq!(order(&tabs), [a, moved.id, b]);
+        tabs.activate(0);
+        assert!(tabs.pane_to_tab(first, usize::MAX));
+        assert_eq!(tabs.active_index(), tabs.tabs().len() - 1);
+        assert_eq!(tabs.active().root, Node::Leaf(first));
+    }
+
+    /// AC3 (spec 0007): the panes a pane dragged to the tab bar leaves
+    /// behind fill their tab: its sibling takes its place and, as on close,
+    /// its focus.
+    #[test]
+    fn a_pane_dragged_out_leaves_no_dead_space_in_its_old_tab() {
+        let (mut tabs, left) = Tabs::new();
+        let top = tabs.split(Axis::Row);
+        let bottom = tabs.split(Axis::Column);
+        // left | (top over bottom), `top` dragged out.
+        tabs.focus(top);
+        let old = tabs.active().id;
+        assert!(tabs.pane_to_tab(top, usize::MAX));
+        let old = &tabs.tabs()[tabs.index_of(old).expect("the old tab stays")];
+        let expected = split(Axis::Row, 0.5, Node::Leaf(left), Node::Leaf(bottom));
+        assert_eq!(old.root, expected);
+        assert_eq!(old.focused, bottom);
+    }
+
+    /// Spec 0007, flow 1: a tab's only pane has no handle, the tab itself
+    /// being dragged instead, so it doesn't become a tab of its own.
+    #[test]
+    fn a_tabs_only_pane_doesnt_become_a_tab_of_its_own() {
+        let (mut tabs, only) = Tabs::new();
+        tabs.new_tab();
+        tabs.activate(0);
+        let before = tabs.tabs().to_vec();
+        assert!(!tabs.pane_to_tab(only, 2));
+        assert_eq!(tabs.tabs(), before);
     }
 }

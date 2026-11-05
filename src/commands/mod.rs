@@ -20,6 +20,11 @@ actions!(
         PreviousTab,
         SplitRight,
         SplitDown,
+        /// Picks a profile or host to split the focused pane with, on the
+        /// right (spec 0007, flow 6).
+        SplitRightWithProfile,
+        /// Picks a profile or host to split the focused pane with, below.
+        SplitDownWithProfile,
         FocusLeft,
         FocusRight,
         FocusUp,
@@ -62,6 +67,16 @@ pub const COMMANDS: &[AppCommand] = &[
         Box::new(SplitRight)
     }),
     command("pane.splitDown", Some("Split down"), || Box::new(SplitDown)),
+    command(
+        "pane.splitRightWithProfile",
+        Some("Split right with profile…"),
+        || Box::new(SplitRightWithProfile),
+    ),
+    command(
+        "pane.splitDownWithProfile",
+        Some("Split down with profile…"),
+        || Box::new(SplitDownWithProfile),
+    ),
     command("pane.close", Some("Close pane"), || Box::new(ClosePane)),
     command("tab.close", Some("Close tab"), || Box::new(CloseTab)),
     command("tab.rename", Some("Rename tab"), || Box::new(RenameTab)),
@@ -228,5 +243,30 @@ mod tests {
             "runs {}",
             action.name()
         );
+    }
+
+    /// Spec 0007, flow 6: "Split right with profile…" and "Split down with
+    /// profile…" are in the palette and bindable as
+    /// `pane.splitRightWithProfile` and `pane.splitDownWithProfile`.
+    #[test]
+    fn splitting_with_a_profile_is_in_the_palette_and_bindable_by_its_id() {
+        let cases: [(&str, &str, &dyn Action); 2] = [
+            (
+                "pane.splitRightWithProfile",
+                "Split right with profile…",
+                &SplitRightWithProfile,
+            ),
+            (
+                "pane.splitDownWithProfile",
+                "Split down with profile…",
+                &SplitDownWithProfile,
+            ),
+        ];
+        for (id, title, runs) in cases {
+            let command = by_id(id).unwrap_or_else(|| panic!("no command has the ID `{id}`"));
+            assert_eq!(command.title, Some(title));
+            let action = (command.action)();
+            assert!(action.partial_eq(runs), "`{id}` runs {}", action.name());
+        }
     }
 }
