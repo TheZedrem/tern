@@ -25,6 +25,11 @@ Only phases that have started get specs and tasks; later phases stay one
 row here. Phase 2 started before Phase 1 finished (owner's call,
 2026-11-04), so its tasks wait for the Phase 1 tasks they build on.
 
+**Considered.** Ideas that aren't committed to a phase yet. They get no
+specs or tasks until they're promoted to one.
+
+- **Plugin system.** Let users and third parties extend Tern.
+
 ## Platforms
 
 **Modern platforms only [load-bearing].** Tern takes no dependency on
