@@ -54,6 +54,17 @@ pub struct Config {
     /// What `Ctrl+Shift+T` opens; `Ctrl+Alt+Shift+T` opens the other
     /// (spec 0004).
     pub new_tab: NewTab,
+    /// Whether to look for a new release on GitHub (spec 0011). `None`:
+    /// not chosen yet, so Tern asks; nothing ever writes that as a value.
+    pub update_check: Option<UpdateCheck>,
+}
+
+/// The two answers to "check GitHub for new releases?" (spec 0011).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateCheck {
+    Daily,
+    Off,
 }
 
 /// What the new-tab key opens: asks which profile, or the default one
@@ -219,6 +230,7 @@ impl Default for Config {
             open_links: OpenLinks::CtrlClick,
             tab_bar: TabBarSide::Top,
             new_tab: NewTab::Ask,
+            update_check: None,
         }
     }
 }
@@ -1020,6 +1032,7 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.new_tab = new_tab;
                     }
                 }
+                "update_check" => config.update_check = map.next_value()?,
                 unknown => {
                     map.next_value::<IgnoredAny>()?;
                     self.unknown_key(unknown, key.line);
@@ -1597,6 +1610,58 @@ pub(crate) mod tests {
         assert!(config.copy_on_select);
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(notices[0].contains("new_tab"), "{}", notices[0]);
+    }
+
+    /// Spec 0011 §Model: `update_check` is unset unless it's `daily` or
+    /// `off`; a key with no value is unset too, without a notice.
+    #[test]
+    fn update_check_is_unset_unless_daily_or_off() {
+        assert_eq!(parse("").config.update_check, None);
+        for (text, update_check) in [
+            ("update_check:\n", None),
+            ("update_check: daily\n", Some(UpdateCheck::Daily)),
+            ("update_check: off\n", Some(UpdateCheck::Off)),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.update_check, update_check, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0011 §Model, spec 0005: any other value, `ask` included, is a
+    /// config error that leaves the key unset, so the question still
+    /// appears; the notice names the key and the rest of the file applies.
+    #[test]
+    fn a_bad_update_check_is_unset_with_a_notice_and_the_rest_applies() {
+        for value in ["ask", "weekly", "Daily", "true", "1", "[daily]"] {
+            let text = format!("scrollback: 500\nupdate_check: {value}\ncopy_on_select: true\n");
+            let Loaded { config, notices } = parse(&text);
+            assert_eq!(config.update_check, None, "{value}");
+            assert_eq!(config.scrollback, 500, "{value}");
+            assert!(config.copy_on_select, "{value}");
+            assert_eq!(notices.len(), 1, "{value}: {notices:?}");
+            assert!(notices[0].contains("update_check"), "{}", notices[0]);
+        }
+    }
+
+    /// Spec 0011 §Model: the template documents `update_check` only as a
+    /// comment, since a written value would answer the question for the
+    /// user.
+    #[test]
+    fn the_template_leaves_update_check_unset() {
+        assert_eq!(parse(TEMPLATE).config.update_check, None);
+        assert!(
+            TEMPLATE
+                .lines()
+                .any(|line| line.starts_with("# update_check:")),
+            "update_check isn't documented"
+        );
+        assert!(
+            !TEMPLATE
+                .lines()
+                .any(|line| line.trim_start().starts_with("update_check")),
+            "update_check is written"
+        );
     }
 
     /// AC1 (spec 0005).

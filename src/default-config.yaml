@@ -34,6 +34,11 @@ tab_bar: top          # top | bottom | left | right (left and right: vertical ta
 new_tab: ask          # what Ctrl+Shift+T does: ask (which profile) | default;
                       # Ctrl+Alt+Shift+T does the other
 
+# Look for a new Tern release on GitHub once a day: daily | off. Checking
+# sends your IP address to GitHub. Until you choose, Tern asks you once
+# after it starts.
+# update_check: daily
+
 cursor:
   style: block      # block | beam | underline; programs may change it
   blink: true

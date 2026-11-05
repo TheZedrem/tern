@@ -6,6 +6,7 @@
 
 pub mod tabs;
 pub mod tree;
+mod updates;
 
 use crate::commands::palette::{Entry, Palette, PaletteEvent};
 use crate::commands::{
@@ -331,6 +332,10 @@ pub struct Workspace {
     /// A session file that couldn't be restored, set aside before anything
     /// is saved over it (spec 0003, flow 7).
     bad_session: Option<PathBuf>,
+    /// The daily update check while `update_check: daily` (spec 0011).
+    update_timer: Option<Task<()>>,
+    /// This run asked whether to check for updates; it asks once.
+    update_asked: bool,
 }
 
 impl Workspace {
@@ -390,6 +395,8 @@ impl Workspace {
             save_task: None,
             save_failed: false,
             bad_session,
+            update_timer: None,
+            update_asked: false,
         };
         for (leaf, pane) in panes {
             let BootPane {
@@ -712,9 +719,10 @@ impl Workspace {
         self.after_first_frame(window, cx);
     }
 
-    /// What waits for the first frame (spec 0001): the boot notices and
-    /// config reloads. Runs once, at the first frame with output, or
-    /// [`SILENT_BOOT_WAIT`] after boot if the program prints nothing.
+    /// What waits for the first frame (spec 0001): the boot notices,
+    /// config reloads and the update check (spec 0011). Runs once, at the
+    /// first frame with output, or [`SILENT_BOOT_WAIT`] after boot if the
+    /// program prints nothing.
     fn after_first_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if std::mem::replace(&mut self.booted, true) {
             return;
@@ -724,6 +732,7 @@ impl Workspace {
         }
         self.set_aside_bad_session();
         self.start_reloads(window, cx);
+        self.follow_update_check(window, cx);
         cx.notify();
     }
 
@@ -842,6 +851,7 @@ impl Workspace {
         for notice in notices {
             show_notice(notice, window, cx);
         }
+        self.follow_update_check(window, cx);
     }
 
     /// Hands the current font, themes and config to the widgets and every
@@ -2477,6 +2487,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::close_focused_pane))
             .on_action(cx.listener(Self::open_config))
             .on_action(cx.listener(Self::open_config_folder))
+            .on_action(cx.listener(Self::check_for_updates))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.switch_tab(Tabs::next_tab, window, cx);
             }))

@@ -8,7 +8,8 @@ and Windows 11.
 **Status:** The core terminal works: tabs, splits, vertical tabs, the
 command palette, YAML config with a settings screen, themes and session
 restore, booting to a prompt in about 330 ms. SSH profiles, the host
-picker, stored passwords and host import from MobaXterm and Tabby are in;
+picker, stored passwords and host import from MobaXterm and Tabby are in,
+as is an opt-in daily check for new releases on GitHub;
 the SFTP panel and Linux packages are next. A Tauri/WebKitGTK version was
 built and measured first (1.07 s) and dropped; see OQ-009, OQ-010 and
 OQ-013.

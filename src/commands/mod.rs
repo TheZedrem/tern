@@ -54,6 +54,9 @@ actions!(
         OpenSettings,
         /// Picks a profile or host to open in a new tab (spec 0004).
         NewTabWithProfile,
+        /// Asks GitHub for a newer release now, whatever `update_check`
+        /// says (spec 0011, flow 6).
+        CheckForUpdates,
     ]
 );
 
@@ -143,6 +146,9 @@ pub const COMMANDS: &[AppCommand] = &[
     }),
     command("config.openFolder", Some("Open config folder"), || {
         Box::new(OpenConfigFolder)
+    }),
+    command("app.checkForUpdates", Some("Check for updates"), || {
+        Box::new(CheckForUpdates)
     }),
     command("tab.goTo1", Some("Go to tab 1"), || Box::new(GoToTab(0))),
     command("tab.goTo2", Some("Go to tab 2"), || Box::new(GoToTab(1))),
@@ -297,5 +303,20 @@ mod tests {
             let action = (command.action)();
             assert!(action.partial_eq(runs), "`{id}` runs {}", action.name());
         }
+    }
+
+    /// Spec 0011, flow 6 and AC8: "Check for updates" is in the palette,
+    /// bindable as `app.checkForUpdates`, and runs the check.
+    #[test]
+    fn checking_for_updates_is_in_the_palette_and_bindable_as_app_check_for_updates() {
+        let command =
+            by_id("app.checkForUpdates").expect("no command has the ID `app.checkForUpdates`");
+        assert_eq!(command.title, Some("Check for updates"));
+        let action = (command.action)();
+        assert!(
+            action.partial_eq(&CheckForUpdates),
+            "runs {}",
+            action.name()
+        );
     }
 }

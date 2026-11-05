@@ -1,5 +1,5 @@
 ---
-status: approved        # draft | approved | implemented
+status: implemented        # draft | approved | implemented
 phase: 2
 tasks: [T-029]
 related: [spec 0001, spec 0005, spec 0009, OQ-022, T-026]

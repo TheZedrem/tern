@@ -15,6 +15,7 @@ mod ssh;
 mod terminal;
 mod theme;
 mod timing;
+mod update;
 
 use bench::Mode;
 use gpui::WindowDecorations;

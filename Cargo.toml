@@ -29,6 +29,7 @@ keyring = "4.2"
 interprocess = "2.4"
 getrandom = "0.4"
 zeroize = "1"
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [target.'cfg(windows)'.dependencies]
 # What interprocess takes the askpass pipe's security descriptor as.

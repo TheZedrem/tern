@@ -321,6 +321,72 @@ font:
         assert_eq!(parse(&edited).config.font.size, 14.0);
     }
 
+    /// The settings screen's write of `update_check: value` (spec 0011).
+    fn update_check(value: &str) -> Change {
+        Change::Set {
+            path: vec!["update_check"],
+            value: value.into(),
+            reads: |config| super::super::update_check_name(config).to_owned(),
+        }
+    }
+
+    /// Spec 0011, AC1 and AC10: answering on the template writes
+    /// `update_check` and changes no other line.
+    #[test]
+    fn answering_the_update_question_on_the_template_adds_only_its_line() {
+        for value in ["daily", "off"] {
+            let edited = update_check(value).edited(TEMPLATE).unwrap();
+            let (gone, added) = changed(TEMPLATE, &edited);
+            assert!(gone.is_empty(), "{value}: {gone:?}");
+            let added: Vec<&String> = added.iter().filter(|line| !line.is_empty()).collect();
+            assert_eq!(added, [&format!("update_check: {value}")], "{value}");
+            assert_eq!(
+                super::super::update_check_name(&parse(&edited).config),
+                value
+            );
+        }
+    }
+
+    /// Spec 0011, AC1: a config without the key gets it, and nothing else
+    /// changes.
+    #[test]
+    fn answering_the_update_question_keeps_the_rest_of_the_file() {
+        let edited = update_check("daily").edited(TWO_PROFILES).unwrap();
+        let (gone, added) = changed(TWO_PROFILES, &edited);
+        assert!(gone.is_empty(), "{gone:?}");
+        let added: Vec<&String> = added.iter().filter(|line| !line.is_empty()).collect();
+        assert_eq!(added, ["update_check: daily"]);
+        let loaded = parse(&edited);
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        assert_eq!(loaded.config.profiles, parse(TWO_PROFILES).config.profiles);
+    }
+
+    /// Spec 0011 §Model, settings screen: switching between `daily` and
+    /// `off` rewrites that line alone.
+    #[test]
+    fn switching_update_check_changes_only_its_line() {
+        let text = "scrollback: 500\nupdate_check: daily\nfont:\n  size: 13 # pt\n";
+        let edited = update_check("off").edited(text).unwrap();
+        let (gone, added) = changed(text, &edited);
+        assert_eq!(gone, ["update_check: daily"]);
+        assert_eq!(added.len(), 1, "{added:?}");
+        assert!(added[0].starts_with("update_check: off"), "{added:?}");
+        assert_eq!(
+            parse(&edited).config.update_check,
+            Some(crate::config::UpdateCheck::Off)
+        );
+    }
+
+    /// Spec 0011 §Model, AC10: nothing writes an `ask` value or any other
+    /// than `daily` or `off`; such a write doesn't read back and is
+    /// refused.
+    #[test]
+    fn an_update_check_other_than_daily_or_off_is_never_written() {
+        for value in ["ask", "weekly", "\"\""] {
+            assert!(update_check(value).edited(TEMPLATE).is_err(), "{value}");
+        }
+    }
+
     /// Spec 0009, in-place edits and AC 6: a key in flow style isn't
     /// written, and the notice names the key to edit by hand.
     #[test]

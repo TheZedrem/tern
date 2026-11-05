@@ -12,6 +12,7 @@ pub mod yaml;
 use crate::commands::{self, AppCommand, OpenConfigFolder, keymap};
 use crate::config::{
     CloseOnExit, Config, CursorStyle, NewTab, OpenLinks, Profile, ProfileKind, TabBarSide,
+    UpdateCheck,
 };
 use crate::layout::show_notice;
 use change::{Change, ProfileForm};
@@ -51,6 +52,7 @@ pub const FIELDS: &[&str] = &[
     "theme.default",
     "tab_bar",
     "new_tab",
+    "update_check",
 ];
 
 /// Template keys the screen leaves to the file, and why: custom themes are
@@ -521,6 +523,16 @@ fn new_tab_name(config: &Config) -> &'static str {
     }
 }
 
+/// `update_check` as the file writes it; empty while it's not chosen,
+/// which is never written (spec 0011).
+pub fn update_check_name(config: &Config) -> &'static str {
+    match config.update_check {
+        Some(UpdateCheck::Daily) => "daily",
+        Some(UpdateCheck::Off) => "off",
+        None => "",
+    }
+}
+
 /// `tab_bar` as the file writes it.
 fn tab_bar_side(config: &Config) -> &'static str {
     match config.tab_bar {
@@ -977,6 +989,32 @@ impl Render for SettingsView {
                 .into_any_element(),
             ),
             row(
+                Page::General,
+                "Updates",
+                "Check GitHub for new releases",
+                "update upgrade new version release github check",
+                self.options(
+                    "update-check",
+                    &[("daily", "Check daily"), ("off", "Don't check")],
+                    update_check_name(config),
+                    |value| {
+                        choice(vec!["update_check"], value, |config| {
+                            update_check_name(config).to_owned()
+                        })
+                    },
+                    cx,
+                )
+                .when(config.update_check.is_none(), |options| {
+                    options.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Not chosen yet"),
+                    )
+                })
+                .into_any_element(),
+            ),
+            row(
                 Page::Appearance,
                 "Font",
                 "Font family",
@@ -1325,6 +1363,8 @@ mod tests {
         "open_links",
         "tab_bar",
         "new_tab",
+        // Spec 0011's, documented with spec 0005's.
+        "update_check",
         "close_on_exit",
         "restore_session",
         "keybindings",
@@ -1434,6 +1474,22 @@ mod tests {
             })
             .collect();
         assert!(missing.is_empty(), "no settings field for {missing:?}");
+    }
+
+    /// Spec 0011, AC10: the Updates field shows `daily` or `off` as set,
+    /// and neither while the question is still open.
+    #[test]
+    fn the_updates_field_shows_neither_choice_while_unset() {
+        let name = |update_check| {
+            update_check_name(&Config {
+                update_check,
+                ..Config::default()
+            })
+        };
+        assert_eq!(name(None), "");
+        assert_eq!(name(Some(UpdateCheck::Daily)), "daily");
+        assert_eq!(name(Some(UpdateCheck::Off)), "off");
+        assert!(FIELDS.contains(&"update_check"));
     }
 
     /// Spec 0009, always complete: every field names a key spec 0005 knows,
