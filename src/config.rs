@@ -47,6 +47,17 @@ pub struct Config {
     /// flow 4).
     pub copy_on_select: bool,
     pub cursor: Cursor,
+    /// What opens a link (spec 0002, flow 7).
+    pub open_links: OpenLinks,
+}
+
+/// What opens a link: a plain click, the owner's default, or Ctrl+click
+/// (Cmd+click on macOS), as most terminals do.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenLinks {
+    Click,
+    CtrlClick,
 }
 
 /// The cursor a pane starts with; a program may change it, as vim does in
@@ -173,6 +184,7 @@ impl Default for Config {
             restore_session: true,
             copy_on_select: false,
             cursor: Cursor::default(),
+            open_links: OpenLinks::Click,
         }
     }
 }
@@ -948,6 +960,11 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                 "cursor" => {
                     config.cursor = map.next_value_seed(Optional(CursorReader(self)))?;
                 }
+                "open_links" => {
+                    if let Some(open) = map.next_value()? {
+                        config.open_links = open;
+                    }
+                }
                 unknown => {
                     map.next_value::<IgnoredAny>()?;
                     self.unknown_key(unknown, key.line);
@@ -1463,6 +1480,38 @@ pub(crate) mod tests {
         );
     }
 
+    /// Spec 0005 §Model, spec 0002 flow 7: links open on a plain click
+    /// unless `open_links: ctrl_click` makes it Ctrl+click.
+    #[test]
+    fn open_links_is_click_unless_set_to_ctrl_click() {
+        assert_eq!(parse("").config.open_links, OpenLinks::Click);
+        for (text, open_links) in [
+            ("open_links: click\n", OpenLinks::Click),
+            ("open_links: ctrl_click\n", OpenLinks::CtrlClick),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.open_links, open_links, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a value `open_links` doesn't take, like `ctrl-click`,
+    /// falls back to `click` with a notice naming the key; the rest of the
+    /// file still applies.
+    #[test]
+    fn a_bad_open_links_falls_back_to_click_with_a_notice_and_the_rest_applies() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "open_links: ctrl-click\n",
+            "copy_on_select: true\n",
+        ));
+        assert_eq!(config.open_links, OpenLinks::Click);
+        assert_eq!(config.scrollback, 500);
+        assert!(config.copy_on_select);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("open_links"), "{}", notices[0]);
+    }
+
     /// AC1 (spec 0005).
     #[test]
     fn no_config_file_boots_the_login_shell_on_dark_with_the_bundled_font() {
@@ -1823,6 +1872,7 @@ font: { family: null, size: 13, line_height: 1.2 }   # null → the bundled font
 scrollback: 10000
 cursor: { style: block, blink: true }
 copy_on_select: false
+open_links: click                   # click | ctrl_click (spec 0002, flow 7)
 close_on_exit: clean                # always | clean | never
 restore_session: true
 keybindings: { "ctrl+shift+d": pane.splitRight }
@@ -1837,7 +1887,8 @@ theme:
       cursor: "#f5c2e7"
 "##;
 
-    /// Its `cursor` and `copy_on_select` spell out the defaults.
+    /// Its `cursor`, `copy_on_select` and `open_links` spell out the
+    /// defaults.
     #[test]
     fn the_spec_example_loads_every_profile_without_a_notice() {
         let Loaded { config, notices } = parse(SPEC_EXAMPLE);
@@ -1886,7 +1937,7 @@ theme:
                 default: "dark".into(),
                 custom: vec![("midnight".into(), midnight)],
             },
-            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 28)],
+            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 29)],
             ..Config::default()
         };
         assert_eq!(config, expected);

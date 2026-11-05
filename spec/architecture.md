@@ -199,8 +199,11 @@ says how it handles it in its **Security & privacy** section.
    terminal are off unless enabled. Terminal-supplied strings (titles,
    links, filenames) are rendered as plain text and never interpreted.
 2. **Opening things.** Only `http`/`https` links open in the OS handler,
-   and only on an explicit Ctrl/Cmd+click. The app never executes a path
-   or command that came from terminal output.
+   and only on the user's click: a plain click by default, Ctrl/Cmd+click
+   with `open_links: ctrl_click` (owner's decision, 2026-11-05: having to
+   hold Ctrl is what annoys in Tabby). Hovering shows the target first.
+   The app never executes a path or command that came from terminal
+   output.
 3. **Credentials (Phase 2).** Keychain only. Passwords reach `ssh` via
    `SSH_ASKPASS`, never through env vars, command-line args, logs or the
    PTY.

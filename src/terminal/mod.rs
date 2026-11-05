@@ -206,6 +206,7 @@ pub struct PaneSettings {
     pub scrollback: usize,
     pub copy_on_select: bool,
     pub cursor: config::Cursor,
+    pub open_links: config::OpenLinks,
 }
 
 impl PaneSettings {
@@ -471,6 +472,9 @@ pub struct TerminalPane {
     urls: Option<RegexSearch>,
     /// The link under the pointer, underlined, its target shown.
     hovered_link: Option<link::Link>,
+    /// A link a plain click pressed, and the cell it pressed: it opens if
+    /// the button comes up there (`open_links: click`).
+    pressed_link: Option<(link::Link, alacritty_terminal::index::Point)>,
     /// What an input method is composing, shown at the cursor until it's
     /// committed (spec 0002, flow 2).
     preedit: Option<String>,
@@ -526,6 +530,7 @@ impl TerminalPane {
             search: None,
             urls: None,
             hovered_link: None,
+            pressed_link: None,
             preedit: None,
             cursor_shown: true,
             blink: None,
@@ -1069,18 +1074,33 @@ impl TerminalPane {
 
     /// Starts a selection under the left button: dragging selects from
     /// there, a double click a word, a triple click a line (spec 0002,
-    /// flow 4). Ctrl+click (Cmd+click on macOS) on a link opens it instead
-    /// (flow 7).
-    fn mouse_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let open = if cfg!(target_os = "macos") {
+    /// flow 4). Over a link, a click opens it as `open_links` says (flow
+    /// 7).
+    fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let ctrl = if cfg!(target_os = "macos") {
             event.modifiers.platform
         } else {
             event.modifiers.control
         };
-        if open && let Some(link) = self.link_under(event.position) {
-            // GPUI's URL opener, never a shell (TM-escape-03).
-            cx.open_url(&link.target);
-            return;
+        let others = event.modifiers.number_of_modifiers() > u8::from(ctrl);
+        let focused = self.focus.is_focused(window);
+        let press = link::press(
+            self.settings.open_links,
+            ctrl,
+            others,
+            event.click_count,
+            focused,
+        );
+        let mut armed = None;
+        if press != link::Press::Select
+            && let Some(link) = self.link_under(event.position)
+        {
+            if press == link::Press::Open {
+                // GPUI's URL opener, never a shell (TM-escape-03).
+                cx.open_url(&link.target);
+                return;
+            }
+            armed = Some(link);
         }
         let State::Running(running) = &self.state else {
             return;
@@ -1096,6 +1116,7 @@ impl TerminalPane {
         };
         term.selection = Some(Selection::new(kind, point, side));
         drop(term);
+        self.pressed_link = armed.map(|link| (link, point));
         self.selecting = true;
         cx.notify();
     }
@@ -1123,6 +1144,15 @@ impl TerminalPane {
         };
         if let Some(selection) = &mut term.selection {
             selection.update(point, side);
+        }
+        drop(term);
+        // Leaving the pressed cell makes the click a drag, which selects.
+        if self
+            .pressed_link
+            .as_ref()
+            .is_some_and(|(_, pressed)| *pressed != point)
+        {
+            self.pressed_link = None;
         }
         cx.notify();
     }
@@ -1152,6 +1182,15 @@ impl TerminalPane {
         if !std::mem::take(&mut self.selecting) {
             return;
         }
+        // A click on a link, with `open_links: click` (spec 0002, flow 7).
+        if let Some((link, _)) = self.pressed_link.take() {
+            if let State::Running(running) = &self.state {
+                running.term.lock().selection = None;
+            }
+            cx.open_url(&link.target);
+            cx.notify();
+            return;
+        }
         let Some(text) = self.selected_text() else {
             if let State::Running(running) = &self.state {
                 running.term.lock().selection = None;
@@ -1164,6 +1203,13 @@ impl TerminalPane {
         if self.settings.copy_on_select {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+    }
+
+    /// The button came up outside the pane: that was a drag, never a click
+    /// on a link.
+    fn mouse_up_out(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.pressed_link = None;
+        self.mouse_up(event, window, cx);
     }
 
     /// Middle-click pastes the primary selection (Linux).
@@ -1580,7 +1626,7 @@ impl Render for TerminalPane {
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::middle_click))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up_out))
             .on_scroll(cx.listener(Self::scroll_wheel))
             .on_hover(cx.listener(Self::hover_ended))
             .child(content);
@@ -1958,6 +2004,7 @@ mod tests {
             scrollback: config.scrollback as usize,
             copy_on_select: config.copy_on_select,
             cursor: config.cursor,
+            open_links: config.open_links,
         }
     }
 

@@ -95,9 +95,13 @@ mapping from keys to bytes. Pane IDs are `u32`, unique per app run.
    next/previous, case-sensitive and regex toggles (`alacritty_terminal`'s
    regex search), and highlights all matches. `Esc` closes it and returns
    focus to the pane.
-7. **Links:** OSC 8 hyperlinks and detected URLs are underlined on hover and
-   open with Ctrl/Cmd+click in the OS handler, with the target shown in a
-   tooltip.
+7. **Links:** OSC 8 hyperlinks and detected URLs are underlined on hover,
+   with the target shown, and open in the OS handler on a plain click,
+   one that ends on the cell it started without a drag (a drag still
+   selects). `open_links: ctrl_click` makes it Ctrl+click (Cmd+click on
+   macOS), which opens in either mode, in a pane it focuses too, being
+   deliberate. The plain click that only focuses a pane opens nothing, and
+   a double or triple click selects, with Ctrl or without.
 8. **Exit:** the pane shows `[process exited with code N]`.
    `config.close_on_exit` (`always | clean | never`, default `clean`) decides
    whether it closes. A clean exit (code 0) closes the pane.
@@ -129,7 +133,7 @@ only there.
   [threat model 0002](threat-model/0002-escape-sequences.md); decisions:
   - **Titles (OSC 0/2):** honored as plain text (spec 0003).
   - **cwd (OSC 7) [load-bearing]:** honored only in a local pane, as a `file://` URL whose host is empty, `localhost` or this machine's name, naming an existing local directory, at most 4 KiB. An SSH pane's reports set no local cwd (TM-escape-09).
-  - **Links (OSC 8 and detected URLs) [load-bearing]:** only `http`/`https` targets, checked on the parsed URL, are links at all, and they open only on Ctrl/Cmd+click, through GPUI's URL opener, never a shell. Hovering shows the target as plain text, marking a host with non-ASCII letters; targets over 2 KiB are ignored (TM-escape-02, -03, -10).
+  - **Links (OSC 8 and detected URLs) [load-bearing]:** only `http`/`https` targets, checked on the parsed URL, are links at all, and they open only on the user's click (flow 7), through GPUI's URL opener, never a shell. Hovering shows the target as plain text, marking a host with non-ASCII letters; targets over 2 KiB are ignored (TM-escape-02, -03, -10).
   - **Clipboard (OSC 52) [load-bearing]:** writes are ignored and reads are never answered (TM-escape-04, -05).
   - **Replies:** only fixed strings and numbers go back to the program; none echoes terminal text (TM-escape-06).
   - **Paste:** ESC and every other control character but tab, `\n` and `\r` are dropped, then the text is bracketed when the program asked for it (TM-escape-07). Copy drops zero-width and direction-override characters (TM-escape-12).
@@ -143,7 +147,7 @@ only there.
 5. Search finds a term 5 000 lines up in scrollback, highlights it, and `Esc` returns focus to the shell.
 6. A configured nonexistent shell shows an error in the pane instead of a blank pane or a crash. `exit 0` closes the pane under the default config, and `exit 3` leaves it open showing code 3.
 7. Quitting the app leaves no child shell processes running.
-8. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on Ctrl+click, while an `https://` link opens in the browser.
+8. An OSC 8 link to `javascript:alert(1)` or `file:///etc/passwd` does nothing on a click or Ctrl+click, while an `https://` link opens in the browser on a click (Ctrl+click with `open_links: ctrl_click`), and dragging across it selects without opening it.
 9. With the pwsh snippet sourced on Windows 11, `cd C:\Users` then split: the new pane starts in `C:\Users`.
 10. Typing with an IME (e.g. ibus with a CJK layout on Linux) shows the preedit at the cursor and delivers the committed text to the shell.
 

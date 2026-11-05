@@ -73,6 +73,7 @@ font: { family: null, size: 13, line_height: 1.2 }   # null → the bundled font
 scrollback: 10000
 cursor: { style: block, blink: true }
 copy_on_select: false
+open_links: click                   # click | ctrl_click (spec 0002, flow 7)
 close_on_exit: clean                # always | clean | never
 restore_session: true
 keybindings: { "ctrl+shift+d": pane.splitRight }

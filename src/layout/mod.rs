@@ -585,6 +585,7 @@ impl Workspace {
             scrollback: self.config.scrollback as usize,
             copy_on_select: self.config.copy_on_select,
             cursor: self.config.cursor,
+            open_links: self.config.open_links,
         }
     }
 

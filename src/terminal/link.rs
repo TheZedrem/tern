@@ -4,6 +4,7 @@
 //! longer than 2 KiB (TM-escape-10).
 
 use super::clean_title;
+use crate::config::OpenLinks;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Direction, Point};
 use alacritty_terminal::term::Term;
@@ -98,6 +99,41 @@ pub fn host(target: &str) -> Option<&str> {
             .rsplit_once('@')
             .map_or(authority, |(_, host)| host),
     )
+}
+
+/// What pressing the left button over a link does (spec 0002, flow 7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    /// Opens it now.
+    Open,
+    /// Opens it if the button comes up on the same cell: a click, not a
+    /// drag, which selects.
+    OpenOnRelease,
+    /// Selects, as anywhere else.
+    Select,
+}
+
+/// What a press does over a link under `open_links`: Ctrl+click (Cmd+click
+/// on macOS) always opens; with `click`, so does a plain single click,
+/// unless it's the click that focuses the pane. Any other modifier, or a
+/// double or triple click, selects.
+pub fn press(
+    open_links: OpenLinks,
+    ctrl: bool,
+    other_modifiers: bool,
+    click_count: usize,
+    focused: bool,
+) -> Press {
+    if other_modifiers || click_count != 1 {
+        Press::Select
+    } else if ctrl {
+        // Deliberate, so it opens in a pane it focuses too.
+        Press::Open
+    } else if open_links == OpenLinks::Click && focused {
+        Press::OpenOnRelease
+    } else {
+        Press::Select
+    }
 }
 
 /// What hovering a link shows: its target as plain text by the title
@@ -235,8 +271,8 @@ mod tests {
 
     /// AC8 (spec 0002), TM-escape-03 [load-bearing]: an OSC 8 link to
     /// `javascript:alert(1)`, `file:///etc/passwd` or any other non-web
-    /// target is no link at all, so Ctrl+click has nothing to open, while
-    /// an `https://` one is.
+    /// target is no link at all, so neither a click nor Ctrl+click has
+    /// anything to open, while an `https://` one is.
     #[test]
     fn an_osc_8_link_to_anything_but_http_or_https_is_no_link() {
         let printed = |target: &str| {
@@ -285,6 +321,66 @@ mod tests {
         // "Docs", the full stop, "Or", the comma and "b".
         for col in [0, 31, 33, 57, 59] {
             assert_eq!(link_at(&term, col), None, "column {col}");
+        }
+    }
+
+    /// Spec 0002, flow 7: under `open_links: click`, the default, a plain
+    /// single click on a link in the focused pane opens it once the button
+    /// comes up on the same cell. Under `ctrl_click` it selects.
+    #[test]
+    fn a_plain_click_opens_a_link_on_release_under_click_and_selects_under_ctrl_click() {
+        let plain_click = |open_links| press(open_links, false, false, 1, true);
+        assert_eq!(plain_click(OpenLinks::Click), Press::OpenOnRelease);
+        assert_eq!(plain_click(OpenLinks::CtrlClick), Press::Select);
+    }
+
+    /// Spec 0002, flow 7: Ctrl+click (Cmd+click on macOS) opens a link at
+    /// once, on the press, in either mode.
+    #[test]
+    fn ctrl_click_opens_a_link_at_once_in_either_mode() {
+        for open_links in [OpenLinks::Click, OpenLinks::CtrlClick] {
+            let ctrl_click = press(open_links, true, false, 1, true);
+            assert_eq!(ctrl_click, Press::Open, "{open_links:?}");
+        }
+    }
+
+    /// Spec 0002, flow 7: the click that only focuses a pane opens nothing,
+    /// even a plain click on a link under `open_links: click`.
+    #[test]
+    fn the_click_that_focuses_a_pane_opens_nothing() {
+        let focusing_click = press(OpenLinks::Click, false, false, 1, false);
+        assert_eq!(focusing_click, Press::Select);
+    }
+
+    /// Spec 0002, flow 7: a double or triple click on a link selects, as it
+    /// does anywhere else, in either mode and with Ctrl held or not.
+    #[test]
+    fn a_double_or_triple_click_on_a_link_selects_even_with_ctrl() {
+        for open_links in [OpenLinks::Click, OpenLinks::CtrlClick] {
+            for ctrl in [false, true] {
+                for click_count in [2, 3] {
+                    assert_eq!(
+                        press(open_links, ctrl, false, click_count, true),
+                        Press::Select,
+                        "{open_links:?}, ctrl: {ctrl}, click {click_count}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Spec 0002, flow 7: only a plain click or Ctrl+click opens a link, so
+    /// a click with another modifier, like Shift, selects, Ctrl held or not.
+    #[test]
+    fn a_click_with_another_modifier_selects_even_with_ctrl() {
+        for open_links in [OpenLinks::Click, OpenLinks::CtrlClick] {
+            for ctrl in [false, true] {
+                assert_eq!(
+                    press(open_links, ctrl, true, 1, true),
+                    Press::Select,
+                    "{open_links:?}, ctrl: {ctrl}"
+                );
+            }
         }
     }
 }
