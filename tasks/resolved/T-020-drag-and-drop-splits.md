@@ -16,8 +16,9 @@ Spec: ../spec/0007-drag-and-drop-splits.md
 
 ## Result (2026-11-05)
 
-Not on the boot path: the first frame draws one pane, which has no
-handle, so no TTFP run was needed.
+TTFP warm median 338.1 ms (p90 360.8, cold 373.4), budget 500 ms; T-014
+measured 337.8 ms. Not on the boot path: the first frame draws one pane,
+which has no handle.
 
 Built: the split tree puts a pane or a whole tree on any side of a pane
 (`Node::insert`), with room only if each half of the even split holds its
@@ -34,10 +35,12 @@ local profiles (group "Local") and the host picker's hosts.
 Verified: 327 tests, the 15 new ones written by a separate agent against
 spec 0007 (AC1–AC5 at the model, the commands, the picker entries). One
 caught the room check adding both minimums together instead of fitting
-each into its half of the even split; fixed before the commit. The debug
-build boots and renders (`--bench-startup 1`).
+each into its half of the even split; fixed before the commit. The owner
+checked the running app on Linux: a tab dragged into a split, a pane
+dragged by its handle out to the tab bar and onto another pane's side,
+the handle on hover (it vanished when hovered itself until a fix), and
+"Split right with profile…" connecting to a host.
 
-Not verified: dragging in the running window (no input automation here),
-so AC6–AC8 and the on-screen halves of AC1–AC5; Windows (added to T-011).
-Flow 7 waits for T-006: before session restore there are no unstarted
-panes to move.
+Not verified: AC8 (moving a pane while its askpass dialog is open) and
+Windows (added to T-011). Flow 7 waits for T-006: before session restore
+there are no unstarted panes to move.
