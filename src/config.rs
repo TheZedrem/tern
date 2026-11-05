@@ -49,17 +49,26 @@ pub struct Config {
     pub cursor: Cursor,
     /// What opens a link (spec 0002, flow 7).
     pub open_links: OpenLinks,
-    /// Where the tabs are: a bar on top, or a list down the left side
-    /// (spec 0003).
+    /// Which side of the window the tabs are on (spec 0003).
     pub tab_bar: TabBarSide,
 }
 
-/// Where the tabs are (spec 0003).
+/// Which side of the window the tabs are on: a bar on top or at the
+/// bottom, a list down the left or the right (spec 0003).
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TabBarSide {
     Top,
+    Bottom,
     Left,
+    Right,
+}
+
+impl TabBarSide {
+    /// A list down a side, rather than a bar.
+    pub fn vertical(self) -> bool {
+        matches!(self, TabBarSide::Left | TabBarSide::Right)
+    }
 }
 
 /// What opens a link: Ctrl+click, the owner's default, or a plain click
@@ -1901,7 +1910,7 @@ scrollback: 10000
 cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
-tab_bar: top                        # top | left: vertical tabs (spec 0003)
+tab_bar: top                        # top | bottom | left | right (spec 0003)
 close_on_exit: clean                # always | clean | never
 restore_session: true
 keybindings: { "ctrl+shift+d": pane.splitRight }

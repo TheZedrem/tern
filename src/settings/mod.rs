@@ -466,6 +466,16 @@ fn field_change(field: Field, typed: &str) -> Result<Change, &'static str> {
     }
 }
 
+/// `tab_bar` as the file writes it.
+fn tab_bar_side(config: &Config) -> &'static str {
+    match config.tab_bar {
+        TabBarSide::Top => "top",
+        TabBarSide::Bottom => "bottom",
+        TabBarSide::Left => "left",
+        TabBarSide::Right => "right",
+    }
+}
+
 /// A number as YAML: no `.0` on a whole one.
 fn number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 {
@@ -903,21 +913,19 @@ impl Render for SettingsView {
                 Page::Appearance,
                 "Tabs",
                 "Tab bar",
-                "tabs vertical sidebar left top position",
+                "tabs vertical sidebar left right top bottom position side",
                 self.options(
                     "tab-bar",
-                    &[("top", "On top"), ("left", "Down the left (vertical)")],
-                    match config.tab_bar {
-                        TabBarSide::Top => "top",
-                        TabBarSide::Left => "left",
-                    },
+                    &[
+                        ("top", "Top"),
+                        ("bottom", "Bottom"),
+                        ("left", "Left"),
+                        ("right", "Right"),
+                    ],
+                    tab_bar_side(config),
                     |value| {
                         choice(vec!["tab_bar"], value, |config| {
-                            match config.tab_bar {
-                                TabBarSide::Top => "top",
-                                TabBarSide::Left => "left",
-                            }
-                            .to_owned()
+                            tab_bar_side(config).to_owned()
                         })
                     },
                     cx,

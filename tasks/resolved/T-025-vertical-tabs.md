@@ -29,4 +29,10 @@ Verified: 405 tests, among them the settings completeness test, which
 now covers `tab_bar`; a debug build boots and renders a restored 2-tab
 session with `tab_bar: left`.
 
+Then, asked for by the owner: any side. `tab_bar: top | bottom | left |
+right`, top and bottom as a bar (only the top one doubles as the title
+bar; elsewhere a slim title bar stays on top where the compositor draws
+no frame), left and right as the list. A debug build boots and renders
+with `bottom` and with `right`.
+
 Not verified: the running window (the owner tests it), Windows (T-011).

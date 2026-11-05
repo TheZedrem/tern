@@ -1888,7 +1888,10 @@ impl Workspace {
                 }))
         });
 
-        let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
+        // Only a bar on top doubles as the title bar; one at the bottom
+        // leaves that to `render_title_bar`.
+        let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. })
+            && self.config.tab_bar == TabBarSide::Top;
         let new_tab = Button::new("new-tab")
             .icon(IconName::Plus)
             .ghost()
@@ -1908,9 +1911,9 @@ impl Workspace {
             .last_empty_space(self.title_bar_space(client_decorated, cx))
     }
 
-    /// The tabs as a list down the left side, `tab_bar: left` (spec 0003):
-    /// the same clicks, renames, drags and drops as the bar on top, the
-    /// drop markers above and below instead of beside.
+    /// The tabs as a list down the left or right side, `tab_bar: left` or
+    /// `right` (spec 0003): the same clicks, renames, drags and drops as the
+    /// bar, the drop markers above and below instead of beside.
     fn render_side_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (bar, active, active_text, text, border) = (
@@ -2030,7 +2033,10 @@ impl Workspace {
             .gap(px(2.))
             .p(px(6.))
             .bg(bar)
-            .border_r_1()
+            .map(|list| match self.config.tab_bar {
+                TabBarSide::Right => list.border_l_1(),
+                _ => list.border_r_1(),
+            })
             .border_color(border)
             .overflow_y_scroll()
             .children(tabs)
@@ -2349,16 +2355,22 @@ impl Render for Workspace {
         });
         // The tabs on top as a bar, or down the left as a list with only the
         // title bar left on top, where the compositor draws no frame.
-        let (top, side) = match self.config.tab_bar {
-            TabBarSide::Top => (Some(self.render_tabs(window, cx).into_any_element()), None),
-            TabBarSide::Left => {
-                let client_decorated =
-                    matches!(window.window_decorations(), Decorations::Client { .. });
-                let title_bar =
-                    client_decorated.then(|| self.render_title_bar(window, cx).into_any_element());
-                let tabs = self.render_side_tabs(window, cx).into_any_element();
-                (title_bar, Some(tabs))
-            }
+        // Elsewhere than on top, the tabs leave the title bar on top where
+        // the compositor draws no frame (spec 0003, flow 8).
+        let side = self.config.tab_bar;
+        let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
+        let top = match side {
+            TabBarSide::Top => Some(self.render_tabs(window, cx).into_any_element()),
+            _ => client_decorated.then(|| self.render_title_bar(window, cx).into_any_element()),
+        };
+        let bottom =
+            (side == TabBarSide::Bottom).then(|| self.render_tabs(window, cx).into_any_element());
+        let list = side
+            .vertical()
+            .then(|| self.render_side_tabs(window, cx).into_any_element());
+        let (left, right) = match side {
+            TabBarSide::Right => (None, list),
+            _ => (list, None),
         };
         let workspace = div()
             .size_full()
@@ -2447,18 +2459,25 @@ impl Render for Workspace {
             }))
             .children(top)
             .child(
-                div().flex_1().min_h_0().flex().children(side).child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .relative()
-                        .child(content)
-                        .child(measure_size(Rc::clone(&self.content_size)))
-                        .children(self.render_settings())
-                        .children(self.render_palette(cx)),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .children(left)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .relative()
+                            .child(content)
+                            .child(measure_size(Rc::clone(&self.content_size)))
+                            .children(self.render_settings())
+                            .children(self.render_palette(cx)),
+                    )
+                    .children(right),
             )
+            .children(bottom)
             .children(badge);
         // Shadow and resize edges when the compositor draws no frame;
         // nothing otherwise.

@@ -75,7 +75,7 @@ scrollback: 10000
 cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
-tab_bar: top                        # top | left: vertical tabs (spec 0003)
+tab_bar: top                        # top | bottom | left | right (spec 0003)
 close_on_exit: clean                # always | clean | never
 restore_session: true
 keybindings: { "ctrl+shift+d": pane.splitRight }

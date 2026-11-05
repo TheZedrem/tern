@@ -123,7 +123,8 @@ pub fn defaults() -> Vec<(String, &'static str)> {
     let mut keys = vec![
         (format!("{app}-p"), "palette.open"),
         (format!("{app}-h"), "host.connect"),
-        (format!("{app}-t"), "tab.new"),
+        // Asks which profile; `tab.new` opens the default one (owner).
+        (format!("{app}-t"), "tab.newWithProfile"),
         (format!("{app}-w"), "pane.close"),
         (format!("{app}-d"), "pane.splitRight"),
         (format!("{app}-e"), "pane.splitDown"),
@@ -420,7 +421,7 @@ mod tests {
         let table = [
             ("ctrl-shift-p", "palette.open"),
             ("ctrl-shift-h", "host.connect"),
-            ("ctrl-shift-t", "tab.new"),
+            ("ctrl-shift-t", "tab.newWithProfile"),
             ("ctrl-shift-w", "pane.close"),
             ("ctrl-tab", "tab.next"),
             ("ctrl-shift-tab", "tab.previous"),
