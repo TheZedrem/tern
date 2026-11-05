@@ -64,6 +64,7 @@ machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
 | Package manager | cargo | |
 | Linux packages | `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE) and AppImage, all from one release binary built on `ubuntu-24.04` (glibc 2.39) | Owner's choice (2026-11-05): native packages for the two big families, AppImage for every other distro. No Flatpak for now: its sandbox changes how shells and `ssh` are spawned (OQ-020) |
 | Hosting / CI | GitHub + GitHub Actions | Hosted Linux and Windows runners. TTFP isn't gated in CI (shared runners are too noisy); the bench runs locally |
+| Package repositories | Signed dnf/zypper and apt repositories on GitHub Pages; the packages stay in GitHub Releases | Owner's choice (2026-11-05): no host besides GitHub, and no binaries in git (T-031) |
 
 ## Code layout
 
