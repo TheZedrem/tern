@@ -1556,7 +1556,9 @@ impl ReloadJob {
 
 /// The 6-dot handle a pane of a split tab is dragged by, in the pane's top
 /// right corner, shown while the pointer is over the pane's `group` (spec
-/// 0007, flow 1). The terminal below it doesn't get its mouse events.
+/// 0007, flow 1). It keeps the mouse from the terminal below, which ends
+/// the pane's hover too, so it also shows while hovered itself. It's
+/// faded out rather than hidden: a hidden element can't be hovered.
 fn grab_handle(leaf: LeafId, group: &SharedString, theme: Theme) -> Stateful<Div> {
     let dot = || {
         div()
@@ -1578,8 +1580,9 @@ fn grab_handle(leaf: LeafId, group: &SharedString, theme: Theme) -> Stateful<Div
         .bg(theme::hsla(theme.background).opacity(0.85))
         .cursor_grab()
         .occlude()
-        .invisible()
-        .group_hover(group.clone(), |style| style.visible())
+        .opacity(0.)
+        .hover(|style| style.opacity(1.))
+        .group_hover(group.clone(), |style| style.opacity(1.))
         .child(row())
         .child(row())
         .child(row())
