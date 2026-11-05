@@ -50,3 +50,12 @@ OQ-013.
 - Backlog: [`tasks/`](tasks/)
 - Dev setup: [`docs/development.md`](docs/development.md)
 - Working agreement for humans and agents: [`AGENTS.md`](AGENTS.md)
+
+## Contributing
+
+Suggestions and feature requests are welcome as
+[GitHub issues](https://github.com/TheZedrem/tern/issues). Tern is a
+personal project, so a request isn't a promise that it gets built.
+
+Forks and pull requests are welcome too, as long as they keep Tern fast and
+easy to use and add something genuinely useful.
