@@ -115,7 +115,8 @@ arguments, the environment or a log.
      `(user@host)` prefix itself, so a server can't name another target,
      and a jump host's prompts name the jump host (TM-askpass-04, -19).
    - Each fill shows a notice naming the target, never the secret:
-     "Logged in with the password saved for `<target>`" (TM-askpass-10).
+     "Used the password saved for `<target>`" (TM-askpass-10). It doesn't
+     claim the login worked: a wrong one gets the replace dialog next.
    - Every other prompt opens a dialog over the pane: host-key questions,
      one-time codes, a jump host's password, a second password prompt
      after the stored one failed. Nothing else is answered automatically.

@@ -978,11 +978,12 @@ async fn within<T>(
 }
 
 /// The notice when the keychain answered a prompt: it names what it used,
-/// never the secret (TM-askpass-10).
+/// never the secret (TM-askpass-10). It can't say the secret worked: a
+/// wrong one gets the replace dialog right after.
 fn filled_notice(key: &Key) -> String {
     match key {
-        Key::Password(target) => format!("Logged in with the password saved for {target}"),
-        Key::Passphrase(file) => format!("Unlocked {file} with the passphrase saved for it"),
+        Key::Password(target) => format!("Used the password saved for {target}"),
+        Key::Passphrase(file) => format!("Used the passphrase saved for {file}"),
     }
 }
 
@@ -1400,7 +1401,7 @@ mod tests {
     fn a_fill_notice_names_the_target_or_key_file_it_used() {
         assert_eq!(
             filled_notice(&Key::Password("alice@prod.example.com:22".into())),
-            "Logged in with the password saved for alice@prod.example.com:22"
+            "Used the password saved for alice@prod.example.com:22"
         );
         let file = "/home/alice/.ssh/id_ed25519";
         let notice = filled_notice(&Key::Passphrase(file.into()));
