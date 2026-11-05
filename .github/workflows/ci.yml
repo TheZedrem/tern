@@ -34,10 +34,11 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt,clippy
           rustup default stable
 
-      # The build links only libxkbcommon on Linux (docs/development.md).
-      - name: Install the Linux build dependency
+      # The build links libxkbcommon and needs fontconfig's pkg-config file
+      # (docs/development.md).
+      - name: Install the Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libfontconfig-dev
 
       - uses: actions/cache@v4
         with:

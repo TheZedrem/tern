@@ -9,10 +9,11 @@ How to get a working dev setup. Day-to-day commands are in
   - **Fedora:** `sudo dnf install rust cargo rustfmt clippy`
   - elsewhere: `rustup component add rustfmt clippy`
 - **Linux:** a Wayland session (X11 is not supported) and a Vulkan driver.
-  The build links only `libxkbcommon`; the Wayland client and the Vulkan
-  loader are loaded at runtime.
-  - **Fedora:** `sudo dnf install libxkbcommon-devel vulkan-loader mesa-vulkan-drivers`
-  - **Debian/Ubuntu:** `sudo apt install libxkbcommon-dev libvulkan1 mesa-vulkan-drivers`
+  The build links only `libxkbcommon`, but GPUI's font loader also needs
+  fontconfig's pkg-config file at build time (the binary doesn't link it).
+  The Wayland client and the Vulkan loader are loaded at runtime.
+  - **Fedora:** `sudo dnf install libxkbcommon-devel fontconfig-devel vulkan-loader mesa-vulkan-drivers`
+  - **Debian/Ubuntu:** `sudo apt install libxkbcommon-dev libfontconfig-dev libvulkan1 mesa-vulkan-drivers`
 - **Windows 11:** the MSVC toolchain (Visual Studio Build Tools).
 - **macOS:** Xcode Command Line Tools (compile-only platform).
 

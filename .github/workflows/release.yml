@@ -28,7 +28,7 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+          sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libfontconfig-dev
           cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
           curl -sSfLo appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
           echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" | sha256sum -c
