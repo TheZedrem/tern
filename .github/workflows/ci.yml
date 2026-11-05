@@ -1,12 +1,12 @@
 # CI (T-007, OQ-004): format, lint, test and release-build on Linux and
 # Windows. TTFP isn't gated here, since shared runners are too noisy; the
 # bench stays local (spec 0001). Only GitHub's own actions are used.
+# Runs on release tags only for now, next to release.yml.
 name: CI
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    tags: ["v*"]
 
 permissions:
   contents: read

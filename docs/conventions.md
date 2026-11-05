@@ -51,4 +51,6 @@ verdict.
 
 ## CI
 
-GitHub Actions, Linux and Windows runners. Not set up yet: task T-007.
+GitHub Actions on Linux and Windows runners, triggered by `v*` tags only
+(`.github/workflows/ci.yml`); commits to `main` don't run CI, so fmt,
+clippy and tests run locally before every commit.
