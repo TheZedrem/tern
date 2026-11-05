@@ -14,6 +14,13 @@ packages; the SFTP panel and package repositories are next. A Tauri/WebKitGTK ve
 built and measured first (1.07 s) and dropped; see OQ-009, OQ-010 and
 OQ-013.
 
+## Why Tern
+
+My main problem with Tabby is speed: Electron slows it down, so a quick SSH
+session becomes a wait. MobaXterm is faster, but it's unintuitive and in
+places hard to use and understand. Tern aims for both: native speed and an
+interface that explains itself.
+
 ## Features
 
 **Terminal**
