@@ -62,7 +62,7 @@ stay):**
 |---|---|
 | Command palette | `Ctrl+Shift+P` |
 | Connect to host (spec 0006) | `Ctrl+Shift+H` |
-| New tab, asking which profile or host (`tab.newWithProfile`) / close pane | `Ctrl+Shift+T` / `Ctrl+Shift+W` |
+| New tab, asking which profile or host (`tab.newWithProfile`; with nothing but the default profile to pick, it opens that without asking, as "Split with profile…" does) / close pane | `Ctrl+Shift+T` / `Ctrl+Shift+W` |
 | New tab with the default profile (`tab.new`) | `Ctrl+Alt+Shift+T` (macOS: `Cmd+Alt+T`); `new_tab: default` swaps it with `Ctrl+Shift+T` (owner's choice) |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Go to tab 1–9 | `Alt+1` … `Alt+9` (macOS: `Cmd+1` … `Cmd+9`) |

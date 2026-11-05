@@ -952,9 +952,25 @@ impl Workspace {
         local
     }
 
+    /// Opens profile or host `id` in a new tab.
+    fn open_profile_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let profile = self.config.profile_or_default(id);
+        let leaf = self.tabs.new_tab();
+        self.spawn_pane(leaf, profile, None, window, cx);
+        self.save_soon(window, cx);
+    }
+
+    /// Splits the focused pane along `axis` with profile or host `id`.
+    fn split_with(&mut self, id: &str, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
+        let profile = self.config.profile_or_default(id);
+        self.split(axis, Some(profile), window, cx);
+    }
+
     /// Opens the host picker over `first`, then the SSH profiles and the
     /// hosts of `~/.ssh/config`, which is read each time, off the UI thread,
-    /// so its edits show. `entry` says what picking a host does.
+    /// so its edits show. `entry` says what picking a host does. A picker
+    /// over local profiles that would list only the default profile runs it
+    /// without asking (spec 0004).
     fn pick_host(
         &mut self,
         first: Vec<ssh::Host>,
@@ -964,6 +980,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let profiles = self.config.profiles.clone();
+        let only_default = first.len() == 1;
         let found = cx.background_spawn(async move {
             let path = ssh::config_path().unwrap_or_default();
             ssh::hosts(&profiles, &path)
@@ -974,7 +991,17 @@ impl Workspace {
                 for notice in notices {
                     show_notice(notice, window, cx);
                 }
-                let entries = first.into_iter().chain(hosts).map(entry).collect();
+                let mut entries: Vec<Entry> = first.into_iter().chain(hosts).map(entry).collect();
+                if only_default && entries.len() == 1 {
+                    match entries.pop() {
+                        Some(Entry::Host(host)) => this.open_profile_tab(&host.id, window, cx),
+                        Some(Entry::SplitWith { host, axis }) => {
+                            this.split_with(&host.id, axis, window, cx)
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
                 this.show_palette(None, window, cx, |window, cx| {
                     Palette::new(entries, placeholder, None, window, cx).with_empty(
                         "No hosts yet: add `type: ssh` profiles to config.yaml, \
@@ -1080,17 +1107,9 @@ impl Workspace {
             return;
         }
         match event {
-            PaletteEvent::OpenProfile(id) => {
-                let profile = self.config.profile_or_default(id);
-                let leaf = self.tabs.new_tab();
-                self.spawn_pane(leaf, profile, None, window, cx);
-                self.save_soon(window, cx);
-            }
+            PaletteEvent::OpenProfile(id) => self.open_profile_tab(id, window, cx),
             PaletteEvent::ForgetHost(id) => self.forget_host(id, window, cx),
-            PaletteEvent::SplitWith { id, axis } => {
-                let profile = self.config.profile_or_default(id);
-                self.split(*axis, Some(profile), window, cx);
-            }
+            PaletteEvent::SplitWith { id, axis } => self.split_with(id, *axis, window, cx),
             PaletteEvent::PreviewTheme(name) => {
                 self.theme = self.theme_for(Some(name), window, cx);
                 self.apply_settings(cx);
