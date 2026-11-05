@@ -511,10 +511,14 @@ impl Workspace {
     }
 
     /// The last save, as the window closes: the session as it stands
-    /// (spec 0003, flow 5).
-    fn save_on_exit(&mut self, cx: &App) {
+    /// (spec 0003, flow 5). Then every program stops, so no shell outlives
+    /// the window (spec 0002, flow 10).
+    fn save_on_exit(&mut self, cx: &mut App) {
         let session = self.snapshot(cx);
         self.save_last(session);
+        for pane in self.panes.values() {
+            pane.update(cx, |pane, _| pane.shutdown());
+        }
     }
 
     /// Writes `session` as the last save, or deletes the saved one with
@@ -580,6 +584,7 @@ impl Workspace {
             close_on_exit: self.config.close_on_exit,
             scrollback: self.config.scrollback as usize,
             copy_on_select: self.config.copy_on_select,
+            cursor: self.config.cursor,
         }
     }
 

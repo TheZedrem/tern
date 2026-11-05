@@ -206,6 +206,9 @@ pub fn spawn(
     let proxy = EventProxy { tx, timing };
     let config = term::Config {
         scrolling_history: scrollback,
+        // OSC 52 isn't even parsed into events: the terminal never writes
+        // or reads the clipboard (TM-escape-04, -05).
+        osc52: term::Osc52::Disabled,
         ..Default::default()
     };
     let term = Arc::new(FairMutex::new(Term::new(config, &size, proxy.clone())));

@@ -51,8 +51,7 @@ pub struct Config {
 
 /// The cursor a pane starts with; a program may change it, as vim does in
 /// insert mode (spec 0002).
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cursor {
     pub style: CursorStyle,
     pub blink: bool,
@@ -947,9 +946,7 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                     }
                 }
                 "cursor" => {
-                    if let Some(cursor) = map.next_value()? {
-                        config.cursor = cursor;
-                    }
+                    config.cursor = map.next_value_seed(Optional(CursorReader(self)))?;
                 }
                 unknown => {
                     map.next_value::<IgnoredAny>()?;
@@ -1167,6 +1164,42 @@ impl<'de> MapReader<'de> for FontReader<'_> {
     }
 }
 
+/// `cursor:`, read key by key so an unknown one is a notice (spec 0005).
+struct CursorReader<'a>(Attempt<'a>);
+
+impl<'de> MapReader<'de> for CursorReader<'_> {
+    type Value = Cursor;
+    const EXPECTING: &'static str = "`style` and `blink`";
+
+    fn empty(self) -> Cursor {
+        Cursor::default()
+    }
+
+    fn read<A: MapAccess<'de>>(self, mut map: A) -> Result<Cursor, A::Error> {
+        let attempt = self.0;
+        let mut cursor = Cursor::default();
+        while let Some(key) = attempt.key(&mut map, Some(Part::Key("cursor".into())))? {
+            match key.name.as_str() {
+                "style" => {
+                    if let Some(style) = map.next_value()? {
+                        cursor.style = style;
+                    }
+                }
+                "blink" => {
+                    if let Some(blink) = map.next_value()? {
+                        cursor.blink = blink;
+                    }
+                }
+                unknown => {
+                    map.next_value::<IgnoredAny>()?;
+                    attempt.unknown_key(&format!("cursor.{unknown}"), key.line);
+                }
+            }
+        }
+        Ok(cursor)
+    }
+}
+
 /// `theme:`, read key by key so `custom` can fail theme by theme.
 struct ThemeReader<'a>(Attempt<'a>);
 
@@ -1350,6 +1383,84 @@ pub(crate) mod tests {
             assert_eq!(config.restore_session, restore, "{text}");
             assert!(notices.is_empty(), "{text}: {notices:?}");
         }
+    }
+
+    /// Spec 0002, flow 4: copy-on-select is a config option, off by
+    /// default.
+    #[test]
+    fn copy_on_select_is_off_unless_set_to_true() {
+        assert!(!parse("").config.copy_on_select);
+        for (text, copy) in [
+            ("copy_on_select: true\n", true),
+            ("copy_on_select: false\n", false),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.copy_on_select, copy, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: `cursor` is a style (`block`, `beam` or `underline`) and
+    /// whether it blinks, by default a blinking block. A key it leaves out
+    /// keeps its default.
+    #[test]
+    fn the_cursor_takes_each_style_and_blink_and_a_partial_map_keeps_the_defaults() {
+        use CursorStyle::{Beam, Block, Underline};
+        let default = Cursor {
+            style: Block,
+            blink: true,
+        };
+        assert_eq!(parse("").config.cursor, default);
+        let cases = [
+            ("{ style: beam, blink: false }", Beam, false),
+            ("{ style: underline, blink: true }", Underline, true),
+            ("{ style: block, blink: false }", Block, false),
+            ("{ style: underline }", Underline, true),
+            ("{ blink: false }", Block, false),
+        ];
+        for (cursor, style, blink) in cases {
+            let text = format!("cursor: {cursor}\n");
+            let Loaded { config, notices } = parse(&text);
+            assert_eq!(config.cursor, Cursor { style, blink }, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a value that doesn't fit resets its top-level key, here
+    /// all of `cursor`, with a notice naming it; the rest still applies.
+    #[test]
+    fn a_bad_cursor_style_resets_the_cursor_with_a_notice_and_the_rest_applies() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "cursor:\n",
+            "  style: bar\n",
+            "  blink: false\n",
+            "copy_on_select: true\n",
+        ));
+        assert_eq!(config.cursor, Cursor::default());
+        assert_eq!(config.scrollback, 500);
+        assert!(config.copy_on_select);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("cursor"), "{}", notices[0]);
+    }
+
+    /// Spec 0005: "Unknown keys produce a notice, not an error", in every
+    /// settings map, so `shape: beam` (alacritty's name for the style)
+    /// doesn't silently do nothing. The rest of `cursor` still applies.
+    #[test]
+    fn an_unknown_key_inside_cursor_is_a_notice_and_the_rest_of_it_applies() {
+        let Loaded { config, notices } = parse("cursor:\n  shape: beam\n  blink: false\n");
+        let expected = Cursor {
+            blink: false,
+            ..Cursor::default()
+        };
+        assert_eq!(config.cursor, expected);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].contains("cursor.shape") && notices[0].contains("line 2"),
+            "{}",
+            notices[0]
+        );
     }
 
     /// AC1 (spec 0005).
@@ -1726,7 +1837,7 @@ theme:
       cursor: "#f5c2e7"
 "##;
 
-    /// The keys a later task reads (cursor, copy_on_select) pass silently.
+    /// Its `cursor` and `copy_on_select` spell out the defaults.
     #[test]
     fn the_spec_example_loads_every_profile_without_a_notice() {
         let Loaded { config, notices } = parse(SPEC_EXAMPLE);

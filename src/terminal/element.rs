@@ -1,6 +1,7 @@
 //! Paints a pane's visible grid: cell backgrounds, then text locked to the
-//! cell grid, then the cursor. Only visible rows are shaped, and GPUI caches
-//! shaped lines, so unchanged rows cost little per frame.
+//! cell grid, then the cursor and what an input method composes there. Only
+//! visible rows are shaped, and GPUI caches shaped lines, so unchanged rows
+//! cost little per frame.
 
 use super::grid;
 use super::pty::{GridSize, PADDING, Terminal};
@@ -8,10 +9,10 @@ use super::{FontSettings, TerminalPane};
 use crate::theme::Theme;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 use gpui::{
-    App, BorderStyle, Bounds, Element, ElementId, Entity, Font, FontStyle, FontWeight,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, Point,
-    Rgba, ShapedLine, SharedString, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle,
-    Window, fill, font, outline, point, px, relative, size,
+    App, BorderStyle, Bounds, Element, ElementId, ElementInputHandler, Entity, FocusHandle, Font,
+    FontStyle, FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId,
+    PaintQuad, Pixels, Point, Rgba, ShapedLine, SharedString, StrikethroughStyle, Style, TextAlign,
+    TextRun, UnderlineStyle, Window, fill, font, outline, point, px, relative, size,
 };
 
 pub struct TerminalElement {
@@ -20,8 +21,10 @@ pub struct TerminalElement {
     font: FontSettings,
     theme: Theme,
     focused: bool,
-    /// Search matches to highlight.
+    /// Highlights, the cursor's blink and an input method's preedit.
     marks: grid::Marks,
+    /// The grid's focus, which an input method types into.
+    focus: FocusHandle,
 }
 
 impl TerminalElement {
@@ -32,6 +35,7 @@ impl TerminalElement {
         theme: Theme,
         focused: bool,
         marks: grid::Marks,
+        focus: FocusHandle,
     ) -> Self {
         Self {
             pane,
@@ -40,6 +44,7 @@ impl TerminalElement {
             theme,
             focused,
             marks,
+            focus,
         }
     }
 }
@@ -50,6 +55,8 @@ pub struct Layout {
     backgrounds: Vec<PaintQuad>,
     lines: Vec<(Point<Pixels>, ShapedLine)>,
     cursor: Option<PaintQuad>,
+    /// What an input method composes, over the cursor's cells.
+    preedit: Option<(PaintQuad, Point<Pixels>, ShapedLine)>,
 }
 
 impl IntoElement for TerminalElement {
@@ -102,14 +109,18 @@ impl Element for TerminalElement {
         self.pane
             .update(cx, |pane, _| pane.lay_out(bounds.origin, cell, grid_size));
 
-        let frame = {
+        let (frame, cursor_cell) = {
             let term = self.term.lock();
-            grid::build(
+            let point = term.grid().cursor.point;
+            let row = point.line.0 + term.grid().display_offset() as i32;
+            let cursor_cell = usize::try_from(row).ok().map(|row| (row, point.column.0));
+            let frame = grid::build(
                 term.renderable_content(),
                 &self.theme,
                 self.focused,
                 &self.marks,
-            )
+            );
+            (frame, cursor_cell)
         };
 
         let origin = bounds.origin + point(px(PADDING), px(PADDING));
@@ -195,11 +206,44 @@ impl Element for TerminalElement {
             }
         });
 
+        // Underlined over the cursor's cells, on the background, until the
+        // input method commits it.
+        let preedit = self
+            .marks
+            .preedit
+            .clone()
+            .zip(cursor_cell)
+            .map(|(text, (row, col))| {
+                let origin = at(row, col);
+                let color = hsla(super::colors::rgb(self.theme.foreground));
+                let text: SharedString = text.into();
+                let run = TextRun {
+                    len: text.len(),
+                    font: font(self.font.family.clone()),
+                    color,
+                    background_color: None,
+                    underline: Some(UnderlineStyle {
+                        thickness: px(1.),
+                        color: Some(color),
+                        wavy: false,
+                    }),
+                    strikethrough: None,
+                };
+                let line = window
+                    .text_system()
+                    .shape_line(text, self.font.size, &[run], None);
+                let width = line.width.max(cell.width);
+                let background = hsla(super::colors::rgb(self.theme.background));
+                let quad = fill(Bounds::new(origin, size(width, cell.height)), background);
+                (quad, origin, line)
+            });
+
         Layout {
             line_height: cell.height,
             backgrounds,
             lines,
             cursor,
+            preedit,
         }
     }
 
@@ -207,12 +251,18 @@ impl Element for TerminalElement {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         layout: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        // While the grid has the keyboard, input methods type into the pane.
+        window.handle_input(
+            &self.focus,
+            ElementInputHandler::new(bounds, self.pane.clone()),
+            cx,
+        );
         for quad in layout.backgrounds.drain(..) {
             window.paint_quad(quad);
         }
@@ -229,6 +279,17 @@ impl Element for TerminalElement {
         }
         if let Some(cursor) = layout.cursor.take() {
             window.paint_quad(cursor);
+        }
+        if let Some((background, origin, line)) = layout.preedit.take() {
+            window.paint_quad(background);
+            let _ = line.paint(
+                origin,
+                layout.line_height,
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            );
         }
     }
 }

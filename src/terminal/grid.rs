@@ -62,14 +62,17 @@ pub struct Cursor {
     pub color: Rgb,
 }
 
-/// What a frame highlights besides the selection: the search bar's matches
-/// on screen, in reading order, and the one the view is on (spec 0002,
-/// flow 6), and the hovered link, underlined (flow 7).
+/// What a frame draws besides the grid and the selection: the search bar's
+/// matches on screen, in reading order, and the one the view is on (spec
+/// 0002, flow 6); the hovered link, underlined (flow 7); the cursor's blink
+/// phase; and what an input method composes at the cursor (flow 2).
 #[derive(Debug, Default)]
 pub struct Marks {
     pub matches: Vec<Match>,
     pub current: Option<Match>,
     pub link: Option<Match>,
+    pub hide_cursor: bool,
+    pub preedit: Option<String>,
 }
 
 /// Builds the frame for `content`. `focused` decides between a solid and a
@@ -86,6 +89,7 @@ pub fn build(content: RenderableContent<'_>, theme: &Theme, focused: bool, marks
     let offset = content.display_offset as i32;
     let cursor_point = content.cursor.point;
     let cursor_shape = match content.cursor.shape {
+        _ if marks.hide_cursor => CursorShape::Hidden,
         CursorShape::Block if !focused => CursorShape::HollowBlock,
         shape => shape,
     };
@@ -239,6 +243,8 @@ mod tests {
     use crate::terminal::tests::term_with;
     use crate::theme::DARK;
     use alacritty_terminal::grid::Scroll;
+    use alacritty_terminal::index::{Column, Line, Point, Side};
+    use alacritty_terminal::selection::{Selection, SelectionType};
 
     const COLS: u16 = 12;
     const ROWS: u16 = 3;
@@ -408,5 +414,89 @@ mod tests {
             .map(|row| row_text(&frame, row))
             .collect();
         assert_eq!(rows, ["2", "3", "4"]);
+    }
+
+    /// Cell `col` of the top row.
+    fn top(col: usize) -> Point {
+        Point::new(Line(0), Column(col))
+    }
+
+    /// The frame of an unfocused pane that has printed `bytes`, with `marks`.
+    fn marked(bytes: &[u8], marks: &Marks) -> Frame {
+        let term = term_with(COLS, ROWS, bytes);
+        build(term.renderable_content(), &DARK, false, marks)
+    }
+
+    /// Spec 0002, flow 4: what's selected is painted in the theme's
+    /// selection color, its text drawn as before.
+    #[test]
+    fn the_selection_is_painted_in_the_selection_color() {
+        let mut term = term_with(COLS, ROWS, b"hello world");
+        let mut selection = Selection::new(SelectionType::Simple, top(0), Side::Left);
+        selection.update(top(4), Side::Right);
+        term.selection = Some(selection);
+        let frame = build(term.renderable_content(), &DARK, false, &Marks::default());
+        assert_eq!(frame.backgrounds, [span(0, 5, DARK.selection)]);
+        assert_eq!(run_at(&frame, 0, 0).style.color, rgb(DARK.foreground));
+        assert_eq!(row_text(&frame, 0), "hello world");
+    }
+
+    /// Spec 0002, flow 6: every match on screen is highlighted. The one the
+    /// search is on is painted in the accent color, its text in the
+    /// background color so it stays readable; the others are tinted, their
+    /// text as it was.
+    #[test]
+    fn the_current_match_is_painted_in_the_accent_color_and_the_others_tinted() {
+        let (first, second) = (top(0)..=top(2), top(8)..=top(10));
+        let marks = Marks {
+            matches: vec![first, second.clone()],
+            current: Some(second),
+            ..Marks::default()
+        };
+        let frame = marked(b"foo bar foo", &marks);
+        let [other, current] = &frame.backgrounds[..] else {
+            panic!("not two highlights: {:?}", frame.backgrounds);
+        };
+        assert_eq!(current, &span(8, 3, DARK.accent));
+        assert_eq!(run_at(&frame, 0, 8).style.color, rgb(DARK.background));
+        assert_eq!((other.row, other.col, other.width), (0, 0, 3));
+        let plain = [rgb(DARK.background), rgb(DARK.accent)];
+        assert!(!plain.contains(&other.color), "not tinted: {other:?}");
+        assert_eq!(run_at(&frame, 0, 0).style.color, rgb(DARK.foreground));
+    }
+
+    /// Spec 0002, flow 7: the link under the pointer is underlined, over
+    /// its cells only.
+    #[test]
+    fn the_hovered_link_is_underlined() {
+        let marks = Marks {
+            link: Some(top(6)..=top(9)),
+            ..Marks::default()
+        };
+        let frame = marked(b"go to docs!", &marks);
+        for col in 6..=9 {
+            assert!(run_at(&frame, 0, col).style.underline, "column {col}");
+        }
+        for col in [0, 5, 10] {
+            assert!(!run_at(&frame, 0, col).style.underline, "column {col}");
+        }
+    }
+
+    /// Spec 0005, `cursor.blink`: in the off half of its blink the cursor
+    /// isn't drawn, focused or not, and the cell under it keeps its colors.
+    #[test]
+    fn a_cursor_in_the_off_half_of_its_blink_is_not_drawn() {
+        let marks = Marks {
+            hide_cursor: true,
+            ..Marks::default()
+        };
+        for focused in [true, false] {
+            let term = term_with(COLS, ROWS, b"ab\r");
+            let frame = build(term.renderable_content(), &DARK, focused, &marks);
+            assert_eq!(frame.cursor, None, "focused: {focused}");
+            assert!(frame.backgrounds.is_empty(), "focused: {focused}");
+            let under = run_at(&frame, 0, 0).style.color;
+            assert_eq!(under, rgb(DARK.foreground), "focused: {focused}");
+        }
     }
 }

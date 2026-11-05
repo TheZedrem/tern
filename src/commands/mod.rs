@@ -175,10 +175,10 @@ mod tests {
         assert!(untitled.is_empty(), "not in the palette: {untitled:?}");
     }
 
-    /// AC7 (spec 0004): the Phase 1 actions of spec 0003 (tabs and
-    /// splits), spec 0004 (font size) and spec 0005 (theme picker, config
-    /// file) are in the palette and bindable by ID. Copy, paste and search
-    /// (spec 0002) arrive with T-002.
+    /// AC7 (spec 0004): the Phase 1 actions of spec 0002 (copy, paste,
+    /// search), spec 0003 (tabs and splits), spec 0004 (font size) and
+    /// spec 0005 (theme picker, config file) are in the palette and
+    /// bindable by ID.
     #[test]
     fn every_phase_1_action_is_in_the_palette_and_bindable_by_its_id() {
         let tabs = [
@@ -206,6 +206,9 @@ mod tests {
             "pane.focusRight",
             "pane.focusUp",
             "pane.focusDown",
+            "pane.copy",
+            "pane.paste",
+            "pane.search",
         ];
         let settings = [
             "font.increase",

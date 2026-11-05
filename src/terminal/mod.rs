@@ -23,8 +23,8 @@ use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::color::{COUNT as COLOR_SLOTS, Colors};
 use alacritty_terminal::term::search::{Match, RegexSearch};
-use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+use alacritty_terminal::term::{Config as TermConfig, Osc52, Term, TermMode};
+use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle, Processor, StdSyncHandler};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot;
@@ -37,6 +37,7 @@ use gpui::{
     SharedString, Size, StatefulInteractiveElement, Styled, Subscription, Task, Window, actions,
     div, font, px, size,
 };
+use gpui::{Bounds, EntityInputHandler, UTF16Selection};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Selectable, Sizable};
@@ -69,6 +70,8 @@ pub const DEFAULT_FONT_FAMILY: &str = "Lilex";
 const KEY_CONTEXT: &str = "Terminal";
 /// The search bar's key context.
 const SEARCH_CONTEXT: &str = "TerminalSearch";
+/// How long the cursor stays on, then off, while it blinks.
+const BLINK: Duration = Duration::from_millis(530);
 
 actions!(zed_term, [CloseSearch]);
 
@@ -202,6 +205,28 @@ pub struct PaneSettings {
     pub close_on_exit: CloseOnExit,
     pub scrollback: usize,
     pub copy_on_select: bool,
+    pub cursor: config::Cursor,
+}
+
+impl PaneSettings {
+    /// What the terminal takes from these: scrollback and the cursor a
+    /// program starts with; OSC 52 stays off (TM-escape-04, -05).
+    fn term_config(&self) -> TermConfig {
+        let shape = match self.cursor.style {
+            config::CursorStyle::Block => CursorShape::Block,
+            config::CursorStyle::Beam => CursorShape::Beam,
+            config::CursorStyle::Underline => CursorShape::Underline,
+        };
+        TermConfig {
+            scrolling_history: self.scrollback,
+            default_cursor_style: CursorStyle {
+                shape,
+                blinking: self.cursor.blink,
+            },
+            osc52: Osc52::Disabled,
+            ..TermConfig::default()
+        }
+    }
 }
 
 /// The profile a pane was started from, as it was then: profile edits
@@ -446,6 +471,13 @@ pub struct TerminalPane {
     urls: Option<RegexSearch>,
     /// The link under the pointer, underlined, its target shown.
     hovered_link: Option<link::Link>,
+    /// What an input method is composing, shown at the cursor until it's
+    /// committed (spec 0002, flow 2).
+    preedit: Option<String>,
+    /// The cursor is in the visible half of its blink.
+    cursor_shown: bool,
+    /// Blinks the cursor while the pane has the keyboard.
+    blink: Option<Task<()>>,
 }
 
 /// The search bar while it's open (spec 0002, flow 6).
@@ -494,6 +526,9 @@ impl TerminalPane {
             search: None,
             urls: None,
             hovered_link: None,
+            preedit: None,
+            cursor_shown: true,
+            blink: None,
         };
         match start {
             Start::Started(session) => pane.attach(session, cx),
@@ -532,6 +567,8 @@ impl TerminalPane {
             }
         })
         .detach();
+        // The cursor the config asks for, from the first frame on.
+        session.term.lock().set_options(self.settings.term_config());
         self.state = State::Running(Running {
             term: session.term,
             proxy: session.proxy,
@@ -785,20 +822,19 @@ impl TerminalPane {
     /// apply at once, `close_on_exit` at the next exit.
     pub fn apply(&mut self, settings: PaneSettings, cx: &mut Context<Self>) {
         if let State::Running(running) = &self.state
-            && settings.scrollback != self.settings.scrollback
+            && (settings.scrollback != self.settings.scrollback
+                || settings.cursor != self.settings.cursor)
         {
-            running.term.lock().set_options(TermConfig {
-                scrolling_history: settings.scrollback,
-                ..TermConfig::default()
-            });
+            running.term.lock().set_options(settings.term_config());
         }
         self.settings = settings;
+        self.blink = None;
         cx.notify();
     }
 
     /// The program's working directory, so a split starts in the same place
-    /// (spec 0003, flow 1). Read from `/proc` on Linux; elsewhere unknown
-    /// until OSC 7 tracking lands (T-002).
+    /// (spec 0003, flow 1). Read from `/proc` on Linux; elsewhere unknown.
+    // TODO(OQ-018): prefer the cwd the shell reports with OSC 7 (T-022).
     pub fn cwd(&self) -> Option<PathBuf> {
         let State::Running(running) = &self.state else {
             return None;
@@ -928,7 +964,71 @@ impl TerminalPane {
             bytes
         };
         running.notifier.notify(bytes);
+        self.keep_cursor_shown();
         cx.stop_propagation();
+    }
+
+    /// Typing shows the cursor and starts its blink over.
+    fn keep_cursor_shown(&mut self) {
+        self.cursor_shown = true;
+        self.blink = None;
+    }
+
+    /// Blinks the cursor while the pane has the keyboard and its style
+    /// blinks, by `cursor.blink` or by the program's choice.
+    fn blink(&mut self, blinking: bool, cx: &mut Context<Self>) {
+        if !blinking {
+            self.blink = None;
+            self.cursor_shown = true;
+            return;
+        }
+        if self.blink.is_some() {
+            return;
+        }
+        self.blink = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(BLINK).await;
+                let blinked = this.update(cx, |pane, cx| {
+                    pane.cursor_shown = !pane.cursor_shown;
+                    cx.notify();
+                });
+                if blinked.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// Writes what an input method committed to the program, as is.
+    fn type_text(&mut self, text: &str) {
+        // As for keys: nothing reaches a program waiting on a dialog.
+        if self.exited || self.dialog.is_some() {
+            return;
+        }
+        let State::Running(running) = &self.state else {
+            return;
+        };
+        running.term.lock().scroll_display(Scroll::Bottom);
+        running.notifier.notify(text.as_bytes().to_vec());
+        self.keep_cursor_shown();
+    }
+
+    /// Where the cursor's cell is on screen, for the input method's
+    /// candidate window.
+    fn cursor_bounds(&self) -> Option<Bounds<Pixels>> {
+        let (origin, cell) = self.geometry?;
+        let State::Running(running) = &self.state else {
+            return None;
+        };
+        let term = running.term.lock();
+        let point = term.grid().cursor.point;
+        let row = point.line.0 + term.grid().display_offset() as i32;
+        let at = origin
+            + gpui::point(
+                px(pty::PADDING) + cell.width * point.column.0 as f32,
+                px(pty::PADDING) + cell.height * row.max(0) as f32,
+            );
+        Some(Bounds::new(at, cell))
     }
 
     /// Takes the grid's place on screen from the element: its origin and cell
@@ -1262,6 +1362,7 @@ impl TerminalPane {
             matches: search::on_screen(&term, compiled),
             current: bar.current.clone(),
             link,
+            ..Default::default()
         }
     }
 
@@ -1339,6 +1440,91 @@ impl TerminalPane {
     }
 }
 
+/// Input methods (spec 0002, flow 2): what they compose shows at the
+/// cursor, and what they commit goes to the program as is. The grid's text
+/// isn't theirs to read, so there is nothing to select or replace.
+impl EntityInputHandler for TerminalPane {
+    fn text_for_range(
+        &mut self,
+        _: std::ops::Range<usize>,
+        _: &mut Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        None
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: 0..0,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<std::ops::Range<usize>> {
+        let preedit = self.preedit.as_ref()?;
+        Some(0..preedit.encode_utf16().count())
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.preedit.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.preedit = None;
+        self.type_text(text);
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.preedit = Some(text.to_owned()).filter(|text| !text.is_empty());
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _: std::ops::Range<usize>,
+        _: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        self.cursor_bounds()
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+}
+
 impl Render for TerminalPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let text_only = matches!(self.state, State::Failed(_) | State::Waiting(_));
@@ -1350,15 +1536,24 @@ impl Render for TerminalPane {
             });
         }
 
-        let marks = self.marks();
+        let focused = self.focus.is_focused(window);
+        let blinking = match &self.state {
+            State::Running(running) => focused && running.term.lock().cursor_style().blinking,
+            _ => false,
+        };
+        self.blink(blinking, cx);
+        let mut marks = self.marks();
+        marks.hide_cursor = !self.cursor_shown;
+        marks.preedit = self.preedit.clone();
         let content = match &self.state {
             State::Running(running) => element::TerminalElement::new(
                 cx.entity(),
                 running.term.clone(),
                 self.settings.font.clone(),
                 self.settings.theme,
-                self.focus.is_focused(window),
+                focused,
                 marks,
+                self.focus.clone(),
             )
             .into_any_element(),
             State::Failed(message) => self
@@ -1484,10 +1679,13 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::config::tests::ssh_to;
-    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::event::{EventListener, VoidListener};
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
-    use alacritty_terminal::term::Term;
+    use alacritty_terminal::term::{ClipboardType, Term};
+    use alacritty_terminal::vte::ansi::Rgb;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     /// A `cols`×`rows` terminal that has parsed `bytes`, as a pane's event
     /// loop would. Shared by the tests of the terminal module.
@@ -1729,6 +1927,157 @@ mod tests {
             (settings.size, settings.line_height),
             (defaults.size, defaults.line_height)
         );
+    }
+
+    /// Keeps the events a terminal raises, which a pane hears of through
+    /// its event proxy.
+    #[derive(Clone, Default)]
+    struct Recorder(Rc<RefCell<Vec<Event>>>);
+
+    impl EventListener for Recorder {
+        fn send_event(&self, event: Event) {
+            self.0.borrow_mut().push(event);
+        }
+    }
+
+    /// 80×24 cells of 8×16 pixels.
+    const GRID: GridSize = GridSize {
+        cols: 80,
+        rows: 24,
+        cell_width: 8,
+        cell_height: 16,
+    };
+
+    /// What a pane takes from the default config.
+    fn default_settings() -> PaneSettings {
+        let config = Config::default();
+        PaneSettings {
+            font: FontSettings::from_config(&config.font),
+            theme: theme::DARK,
+            close_on_exit: config.close_on_exit,
+            scrollback: config.scrollback as usize,
+            copy_on_select: config.copy_on_select,
+            cursor: config.cursor,
+        }
+    }
+
+    /// A pane's terminal under `settings` once its program printed `bytes`,
+    /// and the events that raised.
+    fn printed(settings: &PaneSettings, bytes: &[u8]) -> (Term<Recorder>, Vec<Event>) {
+        let recorder = Recorder::default();
+        let mut term = Term::new(settings.term_config(), &GRID, recorder.clone());
+        Processor::<StdSyncHandler>::new().advance(&mut term, bytes);
+        let events = recorder.0.take();
+        (term, events)
+    }
+
+    /// What a pane under the default config sends back for `bytes` from
+    /// its program.
+    fn replies(bytes: &[u8]) -> Vec<String> {
+        let (term, events) = printed(&default_settings(), bytes);
+        events
+            .into_iter()
+            .filter_map(|event| reply(event, term.colors(), &theme::DARK, GRID))
+            .collect()
+    }
+
+    /// TM-escape-04, -05 [load-bearing]: output can neither write the
+    /// clipboard with OSC 52 nor read it. The pane's terminal raises no
+    /// clipboard event for either, and one raised anyway gets no reply.
+    #[test]
+    fn osc_52_can_neither_write_nor_read_the_clipboard() {
+        // "rm -rf ~" to the clipboard and to the primary selection, then
+        // reads of both, ended by BEL and by ST.
+        let requests: [&[u8]; 4] = [
+            b"\x1b]52;c;cm0gLXJmIH4=\x07",
+            b"\x1b]52;p;cm0gLXJmIH4=\x1b\\",
+            b"\x1b]52;c;?\x07",
+            b"\x1b]52;p;?\x1b\\",
+        ];
+        for request in requests {
+            let (_, events) = printed(&default_settings(), request);
+            let clipboard = events
+                .iter()
+                .any(|event| matches!(event, Event::ClipboardStore(..) | Event::ClipboardLoad(..)));
+            let request = String::from_utf8_lossy(request);
+            assert!(!clipboard, "{} raised {events:?}", request.escape_debug());
+        }
+        let colors = Colors::default();
+        for kind in [ClipboardType::Clipboard, ClipboardType::Selection] {
+            let store = Event::ClipboardStore(kind, "rm -rf ~".into());
+            assert_eq!(reply(store, &colors, &theme::DARK, GRID), None);
+            let load =
+                Event::ClipboardLoad(kind, Arc::new(|text: &str| format!("\x1b]52;c;{text}")));
+            assert_eq!(reply(load, &colors, &theme::DARK, GRID), None);
+        }
+    }
+
+    /// TM-escape-06, -11: replies are fixed strings and numbers. What
+    /// alacritty_terminal writes back itself (device attributes, status,
+    /// cursor position, modes) passes as it is, colors go back as the
+    /// theme's `rgb:` values and the text area as its size in pixels. A
+    /// title report, which would echo text the program chose, gets nothing.
+    #[test]
+    fn replies_are_fixed_strings_and_numbers_never_terminal_text() {
+        let attributes = Event::PtyWrite("\x1b[?6c".into());
+        let passed = reply(attributes, &Colors::default(), &theme::DARK, GRID);
+        assert_eq!(passed.as_deref(), Some("\x1b[?6c"));
+        // The foreground, the background and palette color 1, each asked
+        // for and answered the way xterm does.
+        let queries = [
+            ("10", theme::DARK.foreground),
+            ("11", theme::DARK.background),
+            ("4;1", theme::DARK.ansi[1]),
+        ];
+        for (code, value) in queries {
+            let query = format!("\x1b]{code};?\x07");
+            let Rgb { r, g, b } = colors::rgb(value);
+            let answer =
+                format!("\x1b]{code};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x07");
+            assert_eq!(replies(query.as_bytes()), [answer], "OSC {code}");
+        }
+        // 24 rows of 16 pixels by 80 columns of 8.
+        assert_eq!(replies(b"\x1b[14t"), ["\x1b[4;384;640t"]);
+        // The title and icon label reports, after a title was set.
+        let reports = replies(b"\x1b]2;rm -rf ~\x07\x1b[21t\x1b[20t");
+        assert!(reports.is_empty(), "{reports:?}");
+    }
+
+    /// Spec 0005, `cursor`: the configured style and blink are the cursor
+    /// a program starts with. A program may change it, as vim does in
+    /// insert mode, and its reset goes back to the configured one.
+    #[test]
+    fn the_configured_cursor_is_the_one_a_program_starts_with_and_resets_to() {
+        let shapes = [
+            (config::CursorStyle::Block, CursorShape::Block),
+            (config::CursorStyle::Beam, CursorShape::Beam),
+            (config::CursorStyle::Underline, CursorShape::Underline),
+        ];
+        for (style, shape) in shapes {
+            for blink in [true, false] {
+                let settings = PaneSettings {
+                    cursor: config::Cursor { style, blink },
+                    ..default_settings()
+                };
+                let configured = CursorStyle {
+                    shape,
+                    blinking: blink,
+                };
+                let (mut term, _) = printed(&settings, b"");
+                assert_eq!(term.cursor_style(), configured, "{style:?}, blink {blink}");
+                // vim's insert mode, a blinking bar (DECSCUSR 5), then the
+                // reset as it leaves (DECSCUSR 0).
+                let mut parser = Processor::<StdSyncHandler>::new();
+                parser.advance(&mut term, b"\x1b[5 q");
+                let bar = CursorStyle {
+                    shape: CursorShape::Beam,
+                    blinking: true,
+                };
+                assert_eq!(term.cursor_style(), bar);
+                parser.advance(&mut term, b"\x1b[0 q");
+                assert_eq!(term.cursor_style(), configured, "{style:?}, blink {blink}");
+            }
+        }
     }
 
     /// `raw` cleans to `words`, joined by single spaces or by nothing: a
