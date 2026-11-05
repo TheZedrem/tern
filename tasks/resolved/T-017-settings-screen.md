@@ -41,5 +41,6 @@ notice not naming `keybindings`, fixed). The owner found the font size
 field couldn't be typed into: the screen's backdrop let clicks through to
 the terminal below, which took the keyboard; it now blocks them.
 
-Not verified: the screen in the running window after that fix, and
-Windows (T-011).
+The owner then checked the running app on Linux after the fix: all good.
+
+Not verified: Windows (T-011).
