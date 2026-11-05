@@ -19,7 +19,7 @@ local, single-user app: no accounts, no backend, no telemetry.
 | Phase | Scope | Specs |
 |---|---|---|
 | 1 — Core terminal | Local shell and local profiles, tabs + splits, shortcuts, clipboard, scrollback, search, command palette, YAML config + themes, session restore | 0001–0005, 0007, 0009 |
-| 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, SFTP panel, secrets in the OS keychain | 0006, 0008 |
+| 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, SFTP panel, secrets in the OS keychain | 0006, 0008, 0010 |
 | 3 — AI agents | Agent profiles (command, cwd, optional SSH host), one-click launch into tab/pane, running-agents overview, "waiting for input" notification | not yet written |
 | 4 — ACP | Structured agent integration via the Agent Client Protocol (diffs, plans, tool-call approvals) — keep the architecture open for it, build nothing yet | — |
 

@@ -1,6 +1,6 @@
 ---
 status: later
-blocked-by: [T-012]
+blocked-by: [spec 0010 approval]
 ---
 # T-018: Import sessions from MobaXterm and Tabby
 
@@ -9,6 +9,10 @@ Turn an existing MobaXterm session export (`.mxtsessions` /
 `config.yaml`, keeping folders as host groups. This is a one-off import the
 user starts, not a sync. Hosts and settings only: stored passwords and
 vault contents stay behind, because they would bypass the keychain flow in
-spec 0006. It needs its own spec before building. Area: src.
+spec 0006. Spec 0010 pins it (drafted 2026-11-05, for the owner's
+approval). Before building, get real exports from the owner (a
+`MobaXterm.ini` and a Tabby `config.yaml`, passwords removed) to test the
+parsers against. Area: src.
 
+Spec: ../spec/0010-import-hosts.md
 Spec: ../spec/0006-ssh-hosts.md
