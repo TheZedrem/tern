@@ -1866,6 +1866,7 @@ impl Workspace {
 
     fn render_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> TabBar {
         let renaming = self.rename.as_ref().map(|rename| rename.tab);
+        let settings = Self::settings_button("settings-button", cx);
         let tabs = self.tabs.tabs().iter().enumerate().map(|(ix, tab)| {
             let title = self.tab_title(tab, cx);
             let is_renaming = renaming == Some(tab.id);
@@ -1954,6 +1955,7 @@ impl Workspace {
             .flex()
             .items_center()
             .child(new_tab)
+            .child(settings)
             .when(client_decorated, |suffix| {
                 suffix.child(Self::window_controls(window))
             });
@@ -2095,6 +2097,20 @@ impl Workspace {
             .children(tabs)
             .child(new_tab)
             .child(rest)
+            .child(Self::settings_button("side-settings-button", cx))
+    }
+
+    /// The gear in the tab list's corner that opens the settings screen
+    /// (spec 0009, flow 1).
+    fn settings_button(id: &'static str, cx: &mut Context<Self>) -> Button {
+        Button::new(id)
+            .icon(IconName::Settings)
+            .ghost()
+            .small()
+            .tooltip("Settings")
+            .on_click(
+                cx.listener(|this, _, window, cx| this.open_settings(&OpenSettings, window, cx)),
+            )
     }
 
     /// With the tabs down the side, what's left on top where the compositor

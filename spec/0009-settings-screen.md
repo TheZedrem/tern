@@ -66,7 +66,8 @@ can be changed from the screen, the change applies within a second, and
 
 ### Flows
 
-1. **Open:** the palette command shows the screen as a panel over the
+1. **Open:** the palette command, or the gear in the tab list's corner
+   (after `+` in a bar, at the bottom of a side list), shows the screen as a panel over the
    window; Esc or its close button leaves it. It shows the config as
    loaded, and follows reloads while open. Like Tabby's, it has tabs down
    its left side (General, Appearance, Terminal, Keyboard, Profiles), each
