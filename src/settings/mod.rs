@@ -17,8 +17,9 @@ use change::{Change, ProfileForm};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyBinding, Keystroke, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, actions, div, px,
+    InteractiveElement, IntoElement, KeyBinding, Keystroke, ParentElement, PathPromptOptions,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, actions, div,
+    px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -350,6 +351,38 @@ impl SettingsView {
             problem: None,
         });
         cx.notify();
+    }
+
+    /// Asks the OS's folder picker for the profile form's directory and
+    /// writes the pick into its field; cancelling leaves the field alone.
+    fn pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let value = change::home_relative(&path, dirs::home_dir().as_deref());
+            let _ = this.update_in(cx, |this, window, cx| {
+                let input = this.form.as_ref().and_then(|form| {
+                    form.inputs
+                        .iter()
+                        .find(|(label, _)| *label == "Directory")
+                        .map(|(_, input)| input.clone())
+                });
+                if let Some(input) = input {
+                    input.update(cx, |input, cx| input.set_value(value, window, cx));
+                }
+            });
+        })
+        .detach();
     }
 
     /// Saves the form as a profile (spec 0009, flow 4), unless it isn't
@@ -705,7 +738,24 @@ impl SettingsView {
                 .gap(px(6.))
                 .child(Self::heading(title, cx))
                 .children(form.inputs.iter().map(|(label, input)| {
-                    Self::row(*label, div().w(px(320.)).child(Input::new(input).small()))
+                    let field = div()
+                        .w(px(320.))
+                        .flex()
+                        .gap(px(6.))
+                        .child(div().flex_1().child(Input::new(input).small()));
+                    let field = match *label {
+                        "Directory" => field.child(
+                            Button::new("profile-browse-cwd")
+                                .label("Browse…")
+                                .small()
+                                .ghost()
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.pick_folder(window, cx)),
+                                ),
+                        ),
+                        _ => field,
+                    };
+                    Self::row(*label, field)
                 }))
                 .children(form.problem.map(|problem| div().text_xs().child(problem)))
                 .child(

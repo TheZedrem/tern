@@ -126,14 +126,19 @@ pub struct ProfileForm {
     pub env: Vec<(String, String)>,
 }
 
+/// `path` as a form shows it: under the home folder, written with `~`.
+pub fn home_relative(path: &Path, home: Option<&Path>) -> String {
+    match home.and_then(|home| path.strip_prefix(home).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 impl ProfileForm {
     /// The form for `profile`, paths under the home folder written with `~`.
     pub fn of(profile: &Profile, home: Option<&Path>) -> Self {
-        let path = |path: &Path| match home.and_then(|home| path.strip_prefix(home).ok()) {
-            Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-            Some(rest) => format!("~/{}", rest.display()),
-            None => path.display().to_string(),
-        };
+        let path = |path: &Path| home_relative(path, home);
         let mut form = Self {
             name: profile.name.clone().unwrap_or_default(),
             theme: profile.theme.clone().unwrap_or_default(),

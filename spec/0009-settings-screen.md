@@ -83,6 +83,8 @@ can be changed from the screen, the change applies within a second, and
    over goes to the shell, under spec 0004's rules. "Reset" removes the
    entry.
 4. **Profiles:** "Add" opens an empty profile form (type local or SSH);
+   its directory field has a "Browse…" button that opens the OS's folder
+   picker (the XDG portal on Linux) and fills in the pick, `~` for home;
    saving appends its block under `profiles:`. Editing rewrites its block;
    deleting it asks first and removes its block only.
 5. **Failure:** a write that fails or is refused shows a notice and leaves
