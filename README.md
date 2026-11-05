@@ -9,10 +9,42 @@ and Windows 11.
 command palette, YAML config with a settings screen, themes and session
 restore, booting to a prompt in about 330 ms. SSH profiles, the host
 picker, stored passwords and host import from MobaXterm and Tabby are in,
-as is an opt-in daily check for new releases on GitHub;
-the SFTP panel and Linux packages are next. A Tauri/WebKitGTK version was
+as are an opt-in daily check for new releases on GitHub and Linux
+packages; the SFTP panel and package repositories are next. A Tauri/WebKitGTK version was
 built and measured first (1.07 s) and dropped; see OQ-009, OQ-010 and
 OQ-013.
+
+## Features
+
+**Terminal**
+
+- [x] Boots to a prompt in about 330 ms, with a TTFP badge in dev builds ([spec 0001](spec/0001-startup-performance.md))
+- [x] Terminal pane: rendering, input and IME, resize, scrollback, search, clickable links, copy/paste and the Linux primary selection ([spec 0002](spec/0002-terminal-pane.md))
+- [x] Tabs, vertical tabs and split panes ([spec 0003](spec/0003-tabs-splits-and-session-restore.md))
+- [x] Dragging tabs and panes into and out of splits ([spec 0007](spec/0007-drag-and-drop-splits.md))
+- [x] Session restore ([spec 0003](spec/0003-tabs-splits-and-session-restore.md))
+- [x] Command palette and rebindable keybindings that leave `Ctrl`/`Alt` to the shell ([spec 0004](spec/0004-commands-keybindings-palette.md))
+- [x] YAML config with hot reload, profiles and themes ([spec 0005](spec/0005-config-and-themes.md))
+- [x] Settings screen ([spec 0009](spec/0009-settings-screen.md))
+- [ ] Tracking the shell's working directory via OSC 7, with opt-in shell snippets ([T-022](tasks/T-022-osc7-cwd-tracking.md))
+
+**SSH / SFTP**
+
+- [x] SSH profiles and hosts from `~/.ssh/config`, connecting through the system `ssh` ([spec 0006](spec/0006-ssh-hosts.md))
+- [x] Host picker with groups and filtering
+- [x] ssh prompts answered in the app, passwords remembered in the OS keychain on request
+- [x] Importing hosts from MobaXterm and Tabby ([spec 0010](spec/0010-import-hosts.md))
+- [ ] SFTP panel: browse, edit remote files in a local app, upload, download, rename, delete ([spec 0008](spec/0008-sftp-panel.md), [T-023](tasks/T-023-sftp-panel.md))
+- [ ] Dragging files out of the SFTP panel into the file manager ([T-027](tasks/T-027-sftp-drag-out-local-files.md))
+
+**Distribution**
+
+- [x] Opt-in daily check for new releases on GitHub ([spec 0011](spec/0011-update-check.md))
+- [x] `.deb`, `.rpm` and AppImage packages
+- [ ] Packages checked on their distros ([T-030](tasks/T-030-check-linux-packages.md))
+- [ ] Signed dnf and apt repositories on GitHub Pages ([T-031](tasks/T-031-package-repositories.md))
+- [ ] CI for Linux and Windows ([T-007](tasks/T-007-ci-pipeline.md))
+- [ ] Verified on Windows 11 ([T-011](tasks/T-011-verify-t010-on-windows.md))
 
 - What we're building and why: [`spec/architecture.md`](spec/architecture.md)
 - Backlog: [`tasks/`](tasks/)
