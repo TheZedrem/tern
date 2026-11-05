@@ -6,8 +6,8 @@ represented in `tasks/`. Read this file fully before your first task.
 
 ## What Tern is
 
-A desktop terminal emulator with built-in SSH/SFTP and one-click AI coding
-agents. Think Tabby's feature set with the boot time of a native terminal.
+A desktop terminal emulator with built-in SSH/SFTP. Think Tabby's feature
+set with the boot time of a native terminal.
 It's pure Rust on GPUI, Zed's GPU UI framework, with `gpui-component` for
 widgets and `alacritty_terminal` for the terminal itself, for developers
 who open a terminal fifty times a day and notice every 100 ms.

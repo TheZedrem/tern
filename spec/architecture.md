@@ -7,10 +7,9 @@ here but never restates decisions. Anything not yet decided is an entry in
 
 ## Product summary
 
-Tern is a desktop terminal emulator with built-in SSH/SFTP and one-click
-AI coding agents (Claude Code, Hermes Agent, …) — Tabby's feature set, minus
-Tabby's boot time. It is for developers who live in terminals and remote
-hosts and are tired of waiting for Electron. The constraint that shapes
+Tern is a desktop terminal emulator with built-in SSH/SFTP — Tabby's
+feature set, minus Tabby's boot time. It is for developers who live in
+terminals and remote hosts and are tired of waiting for Electron. The constraint that shapes
 everything: **a usable shell prompt in under 500 ms** from launch. It is a
 local, single-user app: no accounts, no backend, no telemetry.
 
@@ -20,8 +19,6 @@ local, single-user app: no accounts, no backend, no telemetry.
 |---|---|---|
 | 1 — Core terminal | Local shell and local profiles, tabs + splits, shortcuts, clipboard, scrollback, search, command palette, YAML config + themes, session restore | 0001–0005, 0007, 0009 |
 | 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, SFTP panel, secrets in the OS keychain | 0006, 0008, 0010 |
-| 3 — AI agents | Agent profiles (command, cwd, optional SSH host), one-click launch into tab/pane, running-agents overview, "waiting for input" notification | not yet written |
-| 4 — ACP | Structured agent integration via the Agent Client Protocol (diffs, plans, tool-call approvals) — keep the architecture open for it, build nothing yet | — |
 
 Only phases that have started get specs and tasks; later phases stay one
 row here. Phase 2 started before Phase 1 finished (owner's call,
@@ -172,16 +169,13 @@ disk — it can contain secrets the user typed or printed.
   widget library's fixed timeout). Boot
   notices are collected before the window exists and shown on the first
   frame. A notice never takes keyboard focus from the pane.
-- **ACP readiness (Phase 4).** A pane's content source is an abstraction
-  (a terminal today), so a future structured agent view can live in a pane
-  without rewriting layout or tabs.
 
 ## Ground rules (binding)
 
 1. **No network at startup.** No update checks, fonts, analytics, or
    anything else over the network before the first prompt; deferred work
    waits until after the first frame. The only outbound traffic is what the
-   user explicitly starts (SSH, agents).
+   user explicitly starts (SSH, SFTP).
 2. **No telemetry.** Nothing about the user's sessions, hosts, or commands
    is collected or sent anywhere.
 3. **Secrets live in the OS keychain only** — never in `config.yaml`,
@@ -210,6 +204,3 @@ says how it handles it in its **Security & privacy** section.
 3. **Credentials (Phase 2).** Keychain only. Passwords reach `ssh` via
    `SSH_ASKPASS`, never through env vars, command-line args, logs or the
    PTY.
-4. **Agents (Phase 3).** Agent profiles run arbitrary commands locally or
-   over SSH. Launching one is always an explicit user action, never
-   triggered by terminal output.

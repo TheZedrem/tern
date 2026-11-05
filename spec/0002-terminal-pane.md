@@ -27,12 +27,12 @@ works in a pane on Linux and Windows 11 without glitches.
 - Spawning by profile ID (spec 0005): command, environment, working directory
 - Parsing and rendering, input and IME, resize, exit handling
 - Copy/paste (plus the primary selection on Linux), scrollback, search, clickable links
-- A `command` override on spawn, so Phase 2 (`ssh …`) and Phase 3 (agents) reuse panes unchanged
+- A `command` override on spawn, so Phase 2 (`ssh …`) reuses panes unchanged
 
 **Out of scope:**
 
 - Multi-line paste warning, "process still running" close prompt: *Later*
-- SSH and agent specifics: Phase 2/3 specs
+- SSH specifics: Phase 2 specs
 - Persisting scrollback: never (`architecture.md` §Ground rules)
 - Ligatures: *Later*
 

@@ -1,14 +1,17 @@
 # Tern
 
-A fast terminal emulator with built-in SSH/SFTP and one-click AI coding
-agents. Tabby's feature set, with a prompt in under 500 ms. Pure Rust:
-GPUI, Zed's UI framework, for the window and `alacritty_terminal` for the
-terminal. Runs on Linux (Wayland) and Windows 11.
+A fast terminal emulator with built-in SSH/SFTP. Tabby's feature set, with
+a prompt in under 500 ms. Pure Rust: GPUI, Zed's UI framework, for the
+window and `alacritty_terminal` for the terminal. Runs on Linux (Wayland)
+and Windows 11.
 
-**Status:** Phase 1 (core terminal) in progress. A single-pane terminal
-boots to a prompt in about 330 ms (T-010); clipboard, tabs, the palette and
-config follow. A Tauri/WebKitGTK version was built and measured first
-(1.07 s) and dropped; see OQ-009, OQ-010 and OQ-013.
+**Status:** The core terminal works: tabs, splits, vertical tabs, the
+command palette, YAML config with a settings screen, themes and session
+restore, booting to a prompt in about 330 ms. SSH profiles, the host
+picker, stored passwords and host import from MobaXterm and Tabby are in;
+the SFTP panel and Linux packages are next. A Tauri/WebKitGTK version was
+built and measured first (1.07 s) and dropped; see OQ-009, OQ-010 and
+OQ-013.
 
 - What we're building and why: [`spec/architecture.md`](spec/architecture.md)
 - Backlog: [`tasks/`](tasks/)

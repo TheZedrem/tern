@@ -13,8 +13,6 @@ stable so tasks and bugs can cite them.
 2. **Escape sequences from programs and remote hosts** (§Security 1):
    titles, OSC 8 links and OSC 52 clipboard writes, before T-002 honors
    any of them. Done: 0002.
-3. **Agent profiles** (Phase 3, §Security 4): commands run locally or over
-   SSH, before the Phase 3 spec is approved.
 
 ## Register
 
