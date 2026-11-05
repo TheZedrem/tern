@@ -36,7 +36,8 @@ switching themes previews live.
 
 - What `type: ssh` profiles do, and the host picker: spec 0006 (the schema below shows them so the shape is fixed here)
 - Agent profiles: Phase 3
-- Per-profile fonts, graphical settings page: *Later*
+- Per-profile fonts: *Later*
+- The graphical settings page: spec 0009
 
 ## Design
 
