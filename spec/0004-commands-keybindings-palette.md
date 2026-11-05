@@ -62,7 +62,7 @@ stay):**
 |---|---|
 | Command palette | `Ctrl+Shift+P` |
 | Connect to host (spec 0006) | `Ctrl+Shift+H` |
-| New tab / close pane | `Ctrl+Shift+T` / `Ctrl+Shift+W` |
+| New tab, asking which profile or host (`tab.newWithProfile`) / close pane | `Ctrl+Shift+T` / `Ctrl+Shift+W` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Go to tab 1–9 | `Alt+1` … `Alt+9` (macOS: `Cmd+1` … `Cmd+9`) |
 | Split right / down | `Ctrl+Shift+D` / `Ctrl+Shift+E` |

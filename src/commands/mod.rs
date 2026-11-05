@@ -73,9 +73,11 @@ pub struct AppCommand {
 pub const COMMANDS: &[AppCommand] = &[
     command("palette.open", None, || Box::new(OpenPalette)),
     command("tab.new", Some("New tab"), || Box::new(NewTab)),
-    command("tab.newWithProfile", Some("New tab with profile…"), || {
-        Box::new(NewTabWithProfile)
-    }),
+    command(
+        "tab.newWithProfile",
+        Some("New tab with profile…"),
+        || Box::new(NewTabWithProfile),
+    ),
     command("pane.splitRight", Some("Split right"), || {
         Box::new(SplitRight)
     }),

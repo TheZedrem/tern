@@ -10,9 +10,10 @@ pub mod tree;
 use crate::commands::palette::{Entry, Palette, PaletteEvent};
 use crate::commands::{
     self, ClosePane, CloseTab, ConnectToHost, CopySelection, DecreaseFontSize, FocusDown,
-    FocusLeft, FocusRight, FocusUp, ForgetPassword, GoToTab, IncreaseFontSize, NewTab, NextTab,
-    OpenConfig, OpenPalette, OpenSettings, Paste, PreviousTab, RenameTab, ResetFontSize, Search,
-    SelectTheme, SplitDown, SplitDownWithProfile, SplitRight, SplitRightWithProfile, ZoomPane,
+    FocusLeft, FocusRight, FocusUp, ForgetPassword, GoToTab, IncreaseFontSize, NewTab,
+    NewTabWithProfile, NextTab, OpenConfig, OpenPalette, OpenSettings, Paste, PreviousTab,
+    RenameTab, ResetFontSize, Search, SelectTheme, SplitDown, SplitDownWithProfile, SplitRight,
+    SplitRightWithProfile, ZoomPane,
 };
 use crate::config::{self, Config, Profile, ProfileKind, TabBarSide};
 use crate::secrets;
@@ -902,7 +903,37 @@ impl Workspace {
         if !self.has_room(axis, window) {
             return;
         }
-        let local = self
+        let placeholder = match axis {
+            Axis::Row => "Split right with a profile or host",
+            Axis::Column => "Split down with a profile or host",
+        };
+        let entry = move |host| Entry::SplitWith { host, axis };
+        self.pick_host(self.local_hosts(), entry, placeholder, window, cx);
+    }
+
+    /// Asks which profile or host a new tab opens, the default profile
+    /// first so Enter opens it (spec 0004, `Ctrl+Shift+T`).
+    fn new_tab_with_profile(
+        &mut self,
+        _: &NewTabWithProfile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let local = self.local_hosts();
+        self.pick_host(
+            local,
+            Entry::Host,
+            "Open a profile or host in a new tab",
+            window,
+            cx,
+        );
+    }
+
+    /// The local profiles as picker lines in group "Local", the default
+    /// profile first.
+    fn local_hosts(&self) -> Vec<ssh::Host> {
+        let default = self.config.default_profile().id;
+        let mut local: Vec<ssh::Host> = self
             .profiles()
             .into_iter()
             .filter(|profile| matches!(profile.kind, ProfileKind::Local(_)))
@@ -913,12 +944,8 @@ impl Workspace {
                 id: profile.id,
             })
             .collect();
-        let placeholder = match axis {
-            Axis::Row => "Split right with a profile or host",
-            Axis::Column => "Split down with a profile or host",
-        };
-        let entry = move |host| Entry::SplitWith { host, axis };
-        self.pick_host(local, entry, placeholder, window, cx);
+        local.sort_by_key(|host| host.id != default);
+        local
     }
 
     /// Opens the host picker over `first`, then the SSH profiles and the
@@ -2381,6 +2408,7 @@ impl Render for Workspace {
             .text_color(theme::hsla(self.theme.foreground))
             .key_context(CONTEXT)
             .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::new_tab_with_profile))
             .on_action(cx.listener(Self::close_focused_pane))
             .on_action(cx.listener(Self::open_config))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
