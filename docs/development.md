@@ -25,7 +25,12 @@ cargo run
 The TTFP badge in the window corner is the startup time of this run. See
 [spec 0001](../spec/0001-startup-performance.md) for what it measures, and
 use `cargo build --release && target/release/zed-term --bench-startup 10`
-for numbers you can compare.
+for numbers you can compare. With `ZED_TERM_BENCH_SESSION=<session.json>`
+the bench restores that session instead of starting one pane, to measure a
+restored layout (spec 0003, AC7).
+
+Sessions are saved in `~/.local/share/zed-term/session.json` (Linux). To
+try one without touching yours, point `XDG_DATA_HOME` elsewhere.
 
 To try the title bar zed-term draws on GNOME (spec 0003) on any other
 Wayland compositor, start it with `ZED_TERM_CLIENT_DECORATIONS=1`.

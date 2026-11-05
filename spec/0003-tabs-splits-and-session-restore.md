@@ -114,8 +114,10 @@ frame themselves. Windows 11 always draws its own frame.
 
 - Stored: `<data_local_dir>/zed-term/session.json` holds window size, layout,
   and profile ID, cwd and title per pane. No command history, no scrollback, no environment.
-  Overwritten on every save. Setting `restore_session: false` deletes it on
-  the next quit.
+  Overwritten on every save, readable by the user only (0600). Setting
+  `restore_session: false` deletes it on the next quit. A file that can't be
+  restored is set aside after the first frame, since the boot path writes
+  no files (spec 0001).
 - Trust boundaries: crosses §Security 1, because tab titles come from
   terminal output (OSC 0/2). They render as plain text on one line, capped
   at 200 characters, with control characters and invisible ones that could

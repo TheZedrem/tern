@@ -1,12 +1,14 @@
-//! Boot path (spec 0001), in this order: Wayland check, config, PTY spawn,
-//! GPUI platform, window, first frame. Everything else waits for the first
-//! frame. Anything added here needs a TTFP measurement in its commit.
+//! Boot path (spec 0001), in this order: Wayland check, config and session,
+//! PTY spawns for the shown tab, GPUI platform, window, first frame.
+//! Everything else waits for the first frame. Anything added here needs a
+//! TTFP measurement in its commit.
 
 mod bench;
 mod commands;
 mod config;
 mod layout;
 mod secrets;
+mod session;
 mod ssh;
 mod terminal;
 mod theme;
@@ -16,16 +18,19 @@ use bench::Mode;
 use gpui::WindowDecorations;
 use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use terminal::FontSettings;
 use terminal::pty::{self, Command, GridSize};
 use timing::{Mark, Timing};
 
-/// Initial window size in logical pixels, until session restore (T-006)
-/// remembers the last one.
+/// The window's size in logical pixels when no session remembers one.
 const WINDOW_SIZE: (f32, f32) = (1000.0, 640.0);
+
+/// A session the bench restores instead of none, to measure a restored
+/// layout (spec 0003, AC7). The bench never reads or writes the user's.
+const BENCH_SESSION_VAR: &str = "ZED_TERM_BENCH_SESSION";
 
 fn main() {
     // ssh runs zed-term as its askpass helper (spec 0006, flow 3), which
@@ -60,44 +65,98 @@ fn main() {
             config: config::Config::default(),
             notices: vec![],
         });
+    // The last session (spec 0003), so its shown tab starts with the window.
+    // One that can't be restored is set aside as session.json.bad.
+    let session_path = if bench { None } else { session::path() };
+    let restore_from = if bench {
+        std::env::var_os(BENCH_SESSION_VAR).map(PathBuf::from)
+    } else {
+        session_path.clone().filter(|_| config.restore_session)
+    };
+    // Set aside after the first frame: the boot path writes no files.
+    let mut bad_session = None;
+    let restored = restore_from.and_then(|path| match session::load(&path) {
+        Ok(session) => session,
+        Err(why) => {
+            boot_notices.push(format!(
+                "The last session couldn't be restored ({why}); it's kept as session.json.bad."
+            ));
+            bad_session = (!bench).then_some(path);
+            None
+        }
+    });
+    let area = restored
+        .as_ref()
+        .and_then(|session| session.window)
+        .map_or(WINDOW_SIZE, |window| (window.width, window.height));
     // Resolved now, so the first frame has its colors. `system` is `dark`
     // until the OS is asked, after the first frame (spec 0005).
-    let profile = config.default_profile();
-    let (theme, pane_theme) = {
-        let dir = config::themes_dir();
-        let library = theme::Library::new(&config.theme.custom, dir.as_deref());
-        let mut resolve =
-            |name: &str| library.resolve(theme::effective(name, false), &mut boot_notices);
-        let theme = resolve(&config.theme.default);
-        let pane_theme = profile.theme.as_deref().map_or(theme, &mut resolve);
-        (theme, pane_theme)
-    };
+    let dir = config::themes_dir();
+    let library = theme::Library::new(&config.theme.custom, dir.as_deref());
+    let mut theme_notices = Vec::new();
+    let mut resolve =
+        |name: &str| library.resolve(theme::effective(name, false), &mut theme_notices);
+    let theme = resolve(&config.theme.default);
     timing.mark(Mark::Config);
 
-    // The shell starts now and boots while GPUI comes up. An SSH profile
-    // waits for Enter instead: no network at startup (spec 0006, flow 6).
-    let launch = terminal::Launch {
-        command: if bench {
-            Command::bench()
+    // Each shown pane's program starts now and boots while GPUI comes up.
+    // An SSH profile waits for Enter instead: no network at startup (spec
+    // 0006, flow 6). The bench runs its own command in every pane.
+    let cell = FontSettings::from_config(&config.font).estimated_cell();
+    let mut start_pane = |profile: &config::Profile,
+                          cwd: Option<PathBuf>,
+                          area: (f32, f32),
+                          title: Option<String>| {
+        let launch = terminal::Launch {
+            command: if bench {
+                Command::bench()
+            } else {
+                Command::of_profile(profile)
+            },
+            cwd,
+            timing: Arc::clone(&timing),
+        };
+        let start = if !bench && matches!(profile.kind, config::ProfileKind::Ssh(_)) {
+            terminal::Start::OnEnter(terminal::connect_prompt(profile.display_name()))
         } else {
-            Command::of_profile(&profile)
-        },
-        cwd: profile.cwd().map(Path::to_path_buf),
-        timing: Arc::clone(&timing),
+            terminal::Start::Started(pty::spawn(
+                &launch.command,
+                GridSize::fit(area, cell),
+                launch.cwd.as_deref(),
+                config.scrollback as usize,
+                Arc::clone(&timing),
+            ))
+        };
+        layout::BootPane {
+            start,
+            launch,
+            profile: profile.into(),
+            theme: profile.theme.as_deref().map_or(theme, &mut resolve),
+            title,
+        }
     };
-    let start = if !bench && matches!(profile.kind, config::ProfileKind::Ssh(_)) {
-        terminal::Start::OnEnter(terminal::connect_prompt(profile.display_name()))
-    } else {
-        let font = FontSettings::from_config(&config.font);
-        let grid = GridSize::fit(WINDOW_SIZE, font.estimated_cell());
-        terminal::Start::Started(pty::spawn(
-            &launch.command,
-            grid,
-            launch.cwd.as_deref(),
-            config.scrollback as usize,
-            Arc::clone(&timing),
-        ))
-    };
+    let mut restore_notices = Vec::new();
+    let boot = restored.as_ref().and_then(|session| {
+        layout::Boot::restore(session, area, |leaf, area| {
+            let profile = layout::restored_profile(&config, &leaf.profile, &mut restore_notices);
+            let cwd = leaf
+                .cwd
+                .clone()
+                .or_else(|| profile.cwd().map(Path::to_path_buf));
+            start_pane(&profile, cwd, area, leaf.title.clone())
+        })
+    });
+    let boot = match boot {
+        Some(boot) => boot,
+        None => {
+            let profile = config.default_profile();
+            let cwd = profile.cwd().map(Path::to_path_buf);
+            layout::Boot::fresh(start_pane(&profile, cwd, area, None))
+        }
+    }
+    .setting_aside(bad_session);
+    boot_notices.extend(theme_notices);
+    boot_notices.extend(restore_notices);
     timing.mark(Mark::Pty);
 
     let app = gpui_platform::application().with_assets(gpui_kit_assets::Assets);
@@ -125,7 +184,7 @@ fn main() {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
-                size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)),
+                size(px(area.0), px(area.1)),
                 cx,
             ))),
             titlebar: Some(TitlebarOptions {
@@ -139,12 +198,6 @@ fn main() {
                 .map(|_| WindowDecorations::Client),
             ..Default::default()
         };
-        let boot = layout::BootPane {
-            start,
-            launch,
-            profile: (&profile).into(),
-            theme: pane_theme,
-        };
         let opened = cx.open_window(options, |window, cx| {
             let workspace = cx.new(|cx| {
                 layout::Workspace::new(
@@ -153,6 +206,7 @@ fn main() {
                     font,
                     theme,
                     boot_notices,
+                    session_path,
                     Arc::clone(&timing),
                     bench,
                     window,

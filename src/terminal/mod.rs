@@ -707,6 +707,12 @@ impl TerminalPane {
         self.title.as_deref()
     }
 
+    /// Shows `title`, by the title rules, until the program sets its own: a
+    /// restored pane's last one (spec 0003).
+    pub fn set_title(&mut self, title: Option<&str>) {
+        self.title = title.map(clean_title).filter(|title| !title.is_empty());
+    }
+
     pub fn profile(&self) -> &PaneProfile {
         &self.profile
     }

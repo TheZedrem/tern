@@ -90,7 +90,9 @@ command (`sh -c 'echo ready'` / `cmd /c echo ready`) instead of the user's
 shell, so the number measures zed-term, not dotfiles. It prints one JSON
 line with all six marks and exits. `zed-term --bench-startup N` re-spawns
 itself once cold, then N times warm, and prints the median and p90 per
-mark.
+mark. The bench never reads or writes the user's session; with
+`ZED_TERM_BENCH_SESSION=<file>` it restores that one, read-only, with the
+same command in every pane (spec 0003, AC7).
 
 ### Startup impact
 

@@ -57,6 +57,26 @@ impl Tabs {
         (tabs, leaf)
     }
 
+    /// Restored tabs, tab `active` shown (spec 0003, flow 6). Their IDs are
+    /// this run's own, and new tabs and panes get IDs past the restored
+    /// panes'. `None` without tabs, or with pane IDs too large to count on
+    /// from.
+    pub fn restore(tabs: Vec<Tab>, active: usize) -> Option<Self> {
+        let last_leaf = tabs.iter().flat_map(|tab| tab.root.leaves()).max()?;
+        let next_id = last_leaf.checked_add(1)?;
+        // The restored tabs take the IDs after it.
+        next_id.checked_add(tabs.len() as u64)?;
+        let mut restored = Self {
+            active: active.min(tabs.len() - 1),
+            tabs,
+            next_id,
+        };
+        for ix in 0..restored.tabs.len() {
+            restored.tabs[ix].id = restored.next_id();
+        }
+        Some(restored)
+    }
+
     fn next_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -353,6 +373,7 @@ impl Tabs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     /// The tabs' IDs, left to right.
     fn order(tabs: &Tabs) -> Vec<TabId> {
@@ -843,5 +864,65 @@ mod tests {
         let before = tabs.tabs().to_vec();
         assert!(!tabs.pane_to_tab(only, 2));
         assert_eq!(tabs.tabs(), before);
+    }
+
+    /// The tabs of a saved session as boot hands them over, every tab ID
+    /// left at 0: pane 7, then panes 3 over 12, named, zoomed on 12.
+    fn saved_tabs() -> Vec<Tab> {
+        vec![
+            Tab {
+                id: 0,
+                name: None,
+                root: Node::Leaf(7),
+                focused: 7,
+                zoomed: None,
+            },
+            Tab {
+                id: 0,
+                name: Some("logs".into()),
+                root: split(Axis::Column, 0.7, Node::Leaf(3), Node::Leaf(12)),
+                focused: 12,
+                zoomed: Some(12),
+            },
+        ]
+    }
+
+    /// AC3 (spec 0003), flow 6: restored tabs come back with their layout,
+    /// names, focus and zoom, their panes keeping their IDs (§Model: leaf
+    /// IDs are stable across restarts), and the saved tab is shown.
+    #[test]
+    fn restored_tabs_keep_their_layout_and_pane_ids_and_show_the_saved_tab() {
+        let saved = saved_tabs();
+        let tabs = Tabs::restore(saved.clone(), 1).expect("tabs to restore");
+        assert_eq!(tabs.active_index(), 1);
+        let kept = |tab: &Tab| (tab.name.clone(), tab.root.clone(), tab.focused, tab.zoomed);
+        let restored: Vec<_> = tabs.tabs().iter().map(kept).collect();
+        let expected: Vec<_> = saved.iter().map(kept).collect();
+        assert_eq!(restored, expected);
+    }
+
+    /// Spec 0003 §Model: after a restore, every tab has an ID of its own, and
+    /// new tabs and panes get IDs no restored one has, so no two are ever
+    /// taken for each other.
+    #[test]
+    fn after_a_restore_new_tabs_and_panes_get_ids_nothing_restored_has() {
+        let mut tabs = Tabs::restore(saved_tabs(), 0).expect("tabs to restore");
+        let mut pane_ids = vec![7, 3, 12];
+        pane_ids.push(tabs.new_tab());
+        pane_ids.push(tabs.split(Axis::Row));
+        let tab_ids = order(&tabs);
+        let distinct = |ids: &[u64]| ids.iter().collect::<BTreeSet<_>>().len() == ids.len();
+        assert!(distinct(&tab_ids), "tab IDs: {tab_ids:?}");
+        assert!(distinct(&pane_ids), "pane IDs: {pane_ids:?}");
+    }
+
+    /// Spec 0003, flow 7: a window always has a tab, so there's nothing to
+    /// restore without one (boot opens a fresh tab instead), and a shown tab
+    /// past the end shows one that is there.
+    #[test]
+    fn a_restore_needs_a_tab_and_shows_one_that_is_there() {
+        assert!(Tabs::restore(Vec::new(), 0).is_none());
+        let tabs = Tabs::restore(saved_tabs(), 5).expect("tabs to restore");
+        assert!(tabs.active_index() < tabs.tabs().len());
     }
 }

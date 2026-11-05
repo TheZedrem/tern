@@ -6,7 +6,8 @@
 /// persists it.
 pub type LeafId = u64;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Axis {
     /// Side by side, divided by a vertical line.
     Row,

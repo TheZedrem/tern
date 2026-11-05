@@ -16,10 +16,12 @@ use crate::commands::{
 };
 use crate::config::{self, Config, Profile, ProfileKind};
 use crate::secrets;
+use crate::session::{self, SavedLeaf, SavedNode, SavedTab, Session, WindowSize};
 use crate::ssh;
 use crate::terminal::pty::{self, Command, GridSize};
 use crate::terminal::{
     FONT_SIZES, FontSettings, Launch, PaneEvent, PaneProfile, PaneSettings, Start, TerminalPane,
+    connect_prompt,
 };
 use crate::theme::{self, Theme};
 use crate::timing::{Mark, Timing};
@@ -30,7 +32,7 @@ use gpui::{
     Anchor, AnyElement, App, AppContext, Bounds, ClickEvent, Context, Decorations, Div,
     DragMoveEvent, ElementId, Entity, InteractiveElement, IntoElement, KeyBinding, MouseButton,
     ParentElement, Pixels, Point, Render, SharedString, Size, Stateful, StatefulInteractiveElement,
-    Styled, Subscription, Window, WindowAppearance, actions, canvas, div, px,
+    Styled, Subscription, Task, Window, WindowAppearance, actions, canvas, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -66,6 +68,9 @@ const RELOAD_DEBOUNCE: Duration = Duration::from_millis(200);
 /// How long boot waits for the first frame with output before starting
 /// what waits for it anyway.
 const SILENT_BOOT_WAIT: Duration = Duration::from_secs(1);
+/// How long the layout must stay put before the session is saved (spec
+/// 0003, flow 5).
+const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 
 actions!(zed_term, [CancelRename]);
 
@@ -134,13 +139,122 @@ struct Rename {
     input: Entity<InputState>,
 }
 
-/// The first pane, its program started before the window existed (spec
-/// 0001).
+/// A pane of the window's first frame, its program started before the
+/// window existed (spec 0001).
 pub struct BootPane {
     pub start: Start,
     pub launch: Launch,
     pub profile: PaneProfile,
     pub theme: Theme,
+    /// A restored pane's last title.
+    pub title: Option<String>,
+}
+
+/// What the window starts with (spec 0003): a fresh tab of one pane, or a
+/// restored session whose shown tab's panes started with the window.
+pub struct Boot {
+    tabs: Tabs,
+    panes: Vec<(LeafId, BootPane)>,
+    /// The other tabs' panes, started when their tab is first shown.
+    pending: HashMap<LeafId, SavedLeaf>,
+    /// A session that couldn't be restored, to set aside after the first
+    /// frame (spec 0003, flow 7).
+    bad_session: Option<PathBuf>,
+}
+
+impl Boot {
+    /// One tab of `pane`.
+    pub fn fresh(pane: BootPane) -> Self {
+        let (tabs, leaf) = Tabs::new();
+        Self {
+            tabs,
+            panes: vec![(leaf, pane)],
+            pending: HashMap::new(),
+            bad_session: None,
+        }
+    }
+
+    /// This boot, with the session file at `bad`, if any, to be set aside
+    /// as `session.json.bad` once the first frame is on screen.
+    pub fn setting_aside(self, bad: Option<PathBuf>) -> Self {
+        Self {
+            bad_session: bad,
+            ..self
+        }
+    }
+
+    /// The tabs of `session` (spec 0003, flow 6). `start` makes a pane for
+    /// each leaf of the shown tab, given its share of the window's `area`
+    /// in pixels; the others wait. `None` for a session without tabs.
+    pub fn restore(
+        session: &Session,
+        area: (f32, f32),
+        mut start: impl FnMut(&SavedLeaf, (f32, f32)) -> BootPane,
+    ) -> Option<Self> {
+        let tabs = session
+            .tabs
+            .iter()
+            .map(|saved| tabs::Tab {
+                id: 0,
+                name: saved.name.clone(),
+                root: saved.root.tree(),
+                focused: saved.focused,
+                zoomed: saved.zoomed,
+            })
+            .collect();
+        let tabs = Tabs::restore(tabs, session.active)?;
+        let shown = tabs.active_index();
+        let rects = tabs.active().root.rects(Rect::UNIT);
+        let mut panes = Vec::new();
+        let mut pending = HashMap::new();
+        let zoomed = tabs.active().zoomed;
+        for (ix, saved) in session.tabs.iter().enumerate() {
+            for leaf in saved.root.leaves() {
+                if ix != shown {
+                    // Shown in the tab bar until it starts: the title rules
+                    // apply to a saved title too.
+                    let title = leaf.title.as_deref().map(crate::terminal::clean_title);
+                    let leaf = SavedLeaf {
+                        title: title.filter(|title| !title.is_empty()),
+                        ..leaf.clone()
+                    };
+                    pending.insert(leaf.id, leaf);
+                    continue;
+                }
+                let rect = match zoomed {
+                    // A zoomed pane fills the window.
+                    Some(zoomed) if zoomed == leaf.id => Rect::UNIT,
+                    _ => rects
+                        .iter()
+                        .find(|(id, _)| *id == leaf.id)
+                        .map_or(Rect::UNIT, |(_, rect)| *rect),
+                };
+                panes.push((
+                    leaf.id,
+                    start(leaf, (rect.width * area.0, rect.height * area.1)),
+                ));
+            }
+        }
+        Some(Self {
+            tabs,
+            panes,
+            pending,
+            bad_session: None,
+        })
+    }
+}
+
+/// The profile a restored pane names, or `default_profile`, with a notice,
+/// if that profile no longer exists (spec 0003, flow 6).
+pub fn restored_profile(config: &Config, id: &str, notices: &mut Vec<String>) -> Profile {
+    config.profile(id).unwrap_or_else(|| {
+        let instead = config.default_profile();
+        notices.push(format!(
+            "A restored pane's profile `{id}` no longer exists, so it opened `{}`.",
+            instead.display_name()
+        ));
+        instead
+    })
 }
 
 /// The palette while it's open.
@@ -192,28 +306,47 @@ pub struct Workspace {
     /// The pane side a dragged tab or pane would land on now (spec 0007).
     /// Drawn only while a drag is on.
     drop_target: Option<(LeafId, Direction)>,
+    /// Restored panes whose tab hasn't been shown yet (spec 0003, flow 6).
+    pending: HashMap<LeafId, SavedLeaf>,
+    /// Where the session is saved; `None` in bench runs, and once the last
+    /// save is done.
+    session_path: Option<PathBuf>,
+    window_size: Option<WindowSize>,
+    /// The next save, waiting for the layout to settle.
+    save_task: Option<Task<()>>,
+    /// A failed save was reported; the next failure isn't, until a save
+    /// works again.
+    save_failed: bool,
+    /// A session file that couldn't be restored, set aside before anything
+    /// is saved over it (spec 0003, flow 7).
+    bad_session: Option<PathBuf>,
 }
 
 impl Workspace {
-    /// A workspace with one tab, showing `boot`.
+    /// A workspace showing `boot`, which saves its session to
+    /// `session_path` (spec 0003).
     #[allow(clippy::too_many_arguments, reason = "one call, from the boot path")]
     pub fn new(
-        boot: BootPane,
+        boot: Boot,
         config: Config,
         font: FontSettings,
         theme: Theme,
         notices: Vec<String>,
+        session_path: Option<PathBuf>,
         timing: Arc<Timing>,
         bench: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (tabs, leaf) = Tabs::new();
-        let themes = boot
-            .profile
-            .theme
+        let Boot {
+            tabs,
+            panes,
+            pending,
+            bad_session,
+        } = boot;
+        let themes = panes
             .iter()
-            .map(|name| (name.clone(), boot.theme))
+            .filter_map(|(_, pane)| Some((pane.profile.theme.clone()?, pane.theme)))
             .collect();
         let mut workspace = Self {
             tabs,
@@ -239,15 +372,35 @@ impl Workspace {
             title_bar_pressed: false,
             content_size: Rc::default(),
             drop_target: None,
+            pending,
+            session_path,
+            window_size: Some(window_size(window)),
+            save_task: None,
+            save_failed: false,
+            bad_session,
         };
-        let BootPane {
-            start,
-            launch,
-            profile,
-            theme,
-        } = boot;
-        workspace.add_pane(leaf, start, launch, profile, theme, window, cx);
+        for (leaf, pane) in panes {
+            let BootPane {
+                start,
+                launch,
+                profile,
+                theme,
+                title,
+            } = pane;
+            workspace.add_pane(leaf, start, launch, profile, theme, window, cx);
+            workspace.restore_title(leaf, title.as_deref(), cx);
+        }
         workspace.focus_active(window, cx);
+        if workspace.session_path.is_some() {
+            cx.observe_window_bounds(window, |this, window, cx| {
+                this.window_size = Some(window_size(window));
+                this.save_soon(window, cx);
+            })
+            .detach();
+            // Closing the window releases the workspace: the last chance
+            // to save (spec 0003, flow 5).
+            cx.on_release(|this, cx| this.save_on_exit(cx)).detach();
+        }
         if !bench {
             // A program that prints nothing never makes the first frame
             // with output; what waits for that frame starts anyway.
@@ -279,6 +432,144 @@ impl Workspace {
         });
         self.panes.insert(leaf, pane);
         self.pane_subscriptions.insert(leaf, subscription);
+    }
+
+    /// Shows a restored pane's last title until its program sets one.
+    fn restore_title(&self, leaf: LeafId, title: Option<&str>, cx: &mut Context<Self>) {
+        if let (Some(pane), Some(_)) = (self.panes.get(&leaf), title) {
+            pane.update(cx, |pane, _| pane.set_title(title));
+        }
+    }
+
+    /// Starts the shown tab's restored panes that haven't run yet: its tab
+    /// is shown for the first time, or was dragged into view (spec 0003,
+    /// flow 6; spec 0007, flow 7). SSH panes wait for Enter.
+    fn start_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for leaf in self.tabs.active().root.leaves() {
+            let Some(saved) = self.pending.remove(&leaf) else {
+                continue;
+            };
+            let mut notices = Vec::new();
+            let profile = restored_profile(&self.config, &saved.profile, &mut notices);
+            for notice in notices {
+                show_notice(notice, window, cx);
+            }
+            let cwd = saved
+                .cwd
+                .clone()
+                .or_else(|| profile.cwd().map(Path::to_path_buf));
+            if matches!(profile.kind, ProfileKind::Ssh(_)) {
+                let launch = Launch {
+                    command: Command::of_profile(&profile),
+                    cwd,
+                    timing: Arc::clone(&self.timing),
+                };
+                let theme = self.theme_for(profile.theme.as_deref(), window, cx);
+                let start = Start::OnEnter(connect_prompt(profile.display_name()));
+                self.add_pane(leaf, start, launch, (&profile).into(), theme, window, cx);
+            } else {
+                self.spawn_pane(leaf, profile, cwd, window, cx);
+            }
+            self.restore_title(leaf, saved.title.as_deref(), cx);
+        }
+    }
+
+    /// Saves the session once the layout has stayed put for a second (spec
+    /// 0003, flow 5), writing off the UI thread. Not in bench runs, nor with
+    /// `restore_session: false`.
+    fn save_soon(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(path) = self.session_path.clone() else {
+            return;
+        };
+        if !self.config.restore_session {
+            return;
+        }
+        // Replacing the waiting save cancels it.
+        self.save_task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(SAVE_DEBOUNCE).await;
+            let Ok(session) = this.update(cx, |this, cx| {
+                this.set_aside_bad_session();
+                this.snapshot(cx)
+            }) else {
+                return;
+            };
+            let saved = cx
+                .background_spawn(async move { session::save(&path, &session) })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| match saved {
+                Ok(()) => this.save_failed = false,
+                Err(error) if !std::mem::replace(&mut this.save_failed, true) => {
+                    show_notice(
+                        format!("The session couldn't be saved: {error}"),
+                        window,
+                        cx,
+                    );
+                }
+                Err(_) => {}
+            });
+        }));
+    }
+
+    /// The last save, as the window closes: the session as it stands
+    /// (spec 0003, flow 5).
+    fn save_on_exit(&mut self, cx: &App) {
+        let session = self.snapshot(cx);
+        self.save_last(session);
+    }
+
+    /// Writes `session` as the last save, or deletes the saved one with
+    /// `restore_session: false`. Once only, right away: nothing runs after.
+    fn save_last(&mut self, session: Session) {
+        let Some(path) = self.session_path.take() else {
+            return;
+        };
+        self.save_task = None;
+        self.set_aside_bad_session();
+        let result = if self.config.restore_session {
+            session::save(&path, &session)
+        } else {
+            session::delete(&path)
+        };
+        if let Err(error) = result {
+            eprintln!("zed-term: the session couldn't be saved: {error}");
+        }
+    }
+
+    /// The session as it stands: every tab's layout with each pane's
+    /// profile, directory and title (spec 0003). Never what a pane shows.
+    fn snapshot(&self, cx: &App) -> Session {
+        let tabs = self
+            .tabs
+            .tabs()
+            .iter()
+            .map(|tab| SavedTab {
+                name: tab.name.clone(),
+                root: SavedNode::of(&tab.root, &mut |leaf| self.saved_leaf(leaf, cx)),
+                focused: tab.focused,
+                zoomed: tab.zoomed,
+            })
+            .collect();
+        Session::new(self.window_size, tabs, self.tabs.active_index())
+    }
+
+    fn saved_leaf(&self, leaf: LeafId, cx: &App) -> SavedLeaf {
+        if let Some(saved) = self.pending.get(&leaf) {
+            return saved.clone();
+        }
+        let (profile, cwd, title) = match self.panes.get(&leaf) {
+            Some(pane) => {
+                let pane = pane.read(cx);
+                let title = pane.title().map(str::to_owned);
+                (pane.profile().id.clone(), pane.cwd(), title)
+            }
+            None => (self.config.default_profile().id, None, None),
+        };
+        SavedLeaf {
+            id: leaf,
+            profile,
+            cwd,
+            title,
+        }
     }
 
     /// What a pane with `theme` takes from the current config.
@@ -357,7 +648,10 @@ impl Workspace {
                     cx.notify();
                 }
             }
-            PaneEvent::TitleChanged => cx.notify(),
+            PaneEvent::TitleChanged => {
+                self.save_soon(window, cx);
+                cx.notify();
+            }
             PaneEvent::Exited => self.close_pane(leaf, window, cx),
             // The keyboard follows a prompt dialog of the focused pane in and
             // out, unless the palette or a rename has it.
@@ -408,8 +702,19 @@ impl Workspace {
         for notice in std::mem::take(&mut self.notices) {
             show_notice(notice, window, cx);
         }
+        self.set_aside_bad_session();
         self.start_reloads(window, cx);
         cx.notify();
+    }
+
+    /// Renames a session that couldn't be restored to `session.json.bad`,
+    /// once: after the first frame, or before a save that comes first.
+    fn set_aside_bad_session(&mut self) {
+        if let Some(path) = self.bad_session.take()
+            && let Err(error) = session::keep_bad(&path)
+        {
+            eprintln!("zed-term: the unrestorable session couldn't be set aside: {error}");
+        }
     }
 
     /// Reloads the config whenever `config.yaml` or a theme file changes,
@@ -723,6 +1028,7 @@ impl Workspace {
                 let profile = self.config.profile_or_default(id);
                 let leaf = self.tabs.new_tab();
                 self.spawn_pane(leaf, profile, None, window, cx);
+                self.save_soon(window, cx);
             }
             PaletteEvent::ForgetHost(id) => self.forget_host(id, window, cx),
             PaletteEvent::SplitWith { id, axis } => {
@@ -855,8 +1161,10 @@ impl Workspace {
         }
     }
 
-    /// Stops a pane's program and forgets the pane.
+    /// Stops a pane's program and forgets the pane, or a restored pane that
+    /// never started.
     fn stop_pane(&mut self, leaf: LeafId, cx: &mut Context<Self>) {
+        self.pending.remove(&leaf);
         self.pane_subscriptions.remove(&leaf);
         if let Some(pane) = self.panes.remove(&leaf) {
             pane.update(cx, |pane, _| pane.shutdown());
@@ -865,10 +1173,21 @@ impl Workspace {
 
     fn after_close(&mut self, closed: Closed, window: &mut Window, cx: &mut Context<Self>) {
         if closed == Closed::Last {
+            // Nothing is left to restore: the normal case, not a corrupt
+            // file (spec 0003, flow 7).
+            self.save_last(Session::new(self.window_size, Vec::new(), 0));
             cx.quit();
             return;
         }
+        self.show_active(window, cx);
+    }
+
+    /// After the shown tab or its layout changed: starts what hadn't run
+    /// yet, moves the keyboard there and saves soon.
+    fn show_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_pending(window, cx);
         self.focus_active(window, cx);
+        self.save_soon(window, cx);
         cx.notify();
     }
 
@@ -895,10 +1214,18 @@ impl Workspace {
         }
     }
 
-    /// A pane's title: its program's, else the name of its profile.
+    /// A pane's title: its program's, else the name of its profile. A
+    /// restored pane that hasn't started shows what it was saved with.
     fn pane_title(&self, leaf: LeafId, cx: &App) -> SharedString {
         let Some(pane) = self.panes.get(&leaf) else {
-            return SharedString::default();
+            let Some(saved) = self.pending.get(&leaf) else {
+                return SharedString::default();
+            };
+            let profile = self.config.profile(&saved.profile);
+            let name = profile
+                .as_ref()
+                .map_or(&*saved.profile, Profile::display_name);
+            return saved.title.as_deref().unwrap_or(name).to_owned().into();
         };
         let pane = pane.read(cx);
         pane.title()
@@ -912,8 +1239,7 @@ impl Workspace {
         let leaf = self.tabs.new_tab();
         let profile = self.config.default_profile();
         self.spawn_pane(leaf, profile, None, window, cx);
-        self.focus_active(window, cx);
-        cx.notify();
+        self.show_active(window, cx);
     }
 
     fn close_focused_pane(&mut self, _: &ClosePane, window: &mut Window, cx: &mut Context<Self>) {
@@ -959,8 +1285,7 @@ impl Workspace {
         };
         let leaf = self.tabs.split(axis);
         self.spawn_pane(leaf, profile, cwd, window, cx);
-        self.focus_active(window, cx);
-        cx.notify();
+        self.show_active(window, cx);
     }
 
     /// Whether the focused pane has room for a split along `axis` (spec
@@ -1025,7 +1350,7 @@ impl Workspace {
             return;
         };
         if self.tabs.drop_in_split(dragged, target, side) {
-            self.focus_active(window, cx);
+            self.show_active(window, cx);
         }
         cx.notify();
     }
@@ -1041,8 +1366,7 @@ impl Workspace {
     ) {
         self.drop_target = None;
         if self.tabs.pane_to_tab(leaf, at) {
-            self.focus_active(window, cx);
-            cx.notify();
+            self.show_active(window, cx);
         }
     }
 
@@ -1060,8 +1384,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         change(&mut self.tabs);
-        self.focus_active(window, cx);
-        cx.notify();
+        self.show_active(window, cx);
     }
 
     /// Opens the rename field over tab `ix`, holding its current title, all
@@ -1101,8 +1424,7 @@ impl Workspace {
         if let (Some(name), Some(ix)) = (name, self.tabs.index_of(rename.tab)) {
             self.tabs.rename(ix, Some(name));
         }
-        self.focus_active(window, cx);
-        cx.notify();
+        self.show_active(window, cx);
     }
 
     /// Sets a divider from the mouse, keeping both sides at least
@@ -1149,6 +1471,7 @@ impl Workspace {
         };
         let wanted = (offset - DIVIDER / 2.0) / (length - DIVIDER);
         *ratio = tree::clamp_ratio(wanted, length, first_min, second_min, DIVIDER);
+        self.save_soon(window, cx);
         cx.notify();
     }
 
@@ -1377,8 +1700,9 @@ impl Workspace {
                         Ordering::Equal => style,
                     }
                 })
-                .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
                     this.tabs.move_tab(dragged.index, ix);
+                    this.save_soon(window, cx);
                     cx.notify();
                 }))
                 // A pane dropped on a tab becomes the tab after it (spec
@@ -1649,6 +1973,15 @@ impl Workspace {
     }
 }
 
+/// The window's size in logical pixels, as the session keeps it.
+fn window_size(window: &Window) -> WindowSize {
+    let size = window.window_bounds().get_bounds().size;
+    WindowSize {
+        width: f32::from(size.width),
+        height: f32::from(size.height),
+    }
+}
+
 /// An invisible element covering its parent that records the parent's size
 /// at every layout.
 fn measure_size(size: Rc<Cell<Option<Size<Pixels>>>>) -> impl IntoElement {
@@ -1727,8 +2060,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusDown, window, cx| {
                 this.focus_toward(Direction::Down, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &ZoomPane, _, cx| {
+            .on_action(cx.listener(|this, _: &ZoomPane, window, cx| {
                 this.tabs.toggle_zoom();
+                this.save_soon(window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(Self::open_palette))
@@ -1764,5 +2098,155 @@ impl Render for Workspace {
         // Shadow and resize edges when the compositor draws no frame;
         // nothing otherwise.
         window_border().child(workspace)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::tests::TempDir;
+    use crate::session::tests::{leaf, split, tab};
+    use std::collections::BTreeMap;
+    use std::time::Instant;
+
+    /// A pane for `saved` that starts no program: it waits for Enter.
+    fn idle_pane(saved: &SavedLeaf) -> BootPane {
+        BootPane {
+            start: Start::OnEnter(String::new()),
+            launch: Launch {
+                command: Command::bench(),
+                cwd: saved.cwd.clone(),
+                timing: Arc::new(Timing::new(Instant::now())),
+            },
+            profile: (&Profile::shell()).into(),
+            theme: theme::DARK,
+            title: saved.title.clone(),
+        }
+    }
+
+    /// Three tabs, the middle one shown: a shell in `~/notes`; one pane a
+    /// quarter wide beside two stacked; an SSH host's beside a shell.
+    fn three_tabs() -> Session {
+        let notes = tab(
+            leaf(1, "shell", Some("/home/me/notes"), Some("vim todo.md")),
+            1,
+        );
+        let stacked = split(
+            Axis::Column,
+            0.5,
+            leaf(3, "shell", Some("/tmp"), None),
+            leaf(4, "htop", None, Some("htop")),
+        );
+        let shown = tab(
+            split(Axis::Row, 0.25, leaf(2, "shell", None, None), stacked),
+            2,
+        );
+        let servers = tab(
+            split(
+                Axis::Row,
+                0.5,
+                leaf(5, "ssh:prod", None, Some("me@prod: ~")),
+                leaf(6, "shell", Some("/srv"), None),
+            ),
+            6,
+        );
+        let window = WindowSize {
+            width: 1200.0,
+            height: 800.0,
+        };
+        Session::new(Some(window), vec![notes, shown, servers], 1)
+    }
+
+    /// AC3 and AC4 (spec 0003), flow 6: at boot only the shown tab's panes
+    /// start. The other tabs' panes wait, with the profile, cwd and title
+    /// they were saved with, until their tab is first shown.
+    #[test]
+    fn at_boot_only_the_shown_tabs_panes_start_and_the_others_wait_as_saved() {
+        let session = three_tabs();
+        let mut started = Vec::new();
+        let boot = Boot::restore(&session, (1200.0, 800.0), |saved, _| {
+            started.push(saved.id);
+            idle_pane(saved)
+        })
+        .expect("a session with tabs");
+        started.sort();
+        assert_eq!(started, [2, 3, 4]);
+        assert_eq!(boot.tabs.active_index(), 1);
+        let mut boot_panes: Vec<LeafId> = boot.panes.iter().map(|(leaf, _)| *leaf).collect();
+        boot_panes.sort();
+        assert_eq!(boot_panes, [2, 3, 4]);
+        let waiting: HashMap<LeafId, SavedLeaf> = [&session.tabs[0], &session.tabs[2]]
+            .into_iter()
+            .flat_map(|saved| saved.root.leaves())
+            .map(|saved| (saved.id, saved.clone()))
+            .collect();
+        assert_eq!(boot.pending, waiting);
+    }
+
+    /// Spec 0003, flow 6, and spec 0001, flow 4: each pane of the shown tab
+    /// starts at its share of the saved window, so its program draws for
+    /// the size it's shown at.
+    #[test]
+    fn each_pane_started_at_boot_gets_its_share_of_the_window() {
+        let mut areas = BTreeMap::new();
+        Boot::restore(&three_tabs(), (1200.0, 800.0), |saved, area| {
+            areas.insert(saved.id, area);
+            idle_pane(saved)
+        })
+        .expect("a session with tabs");
+        // A quarter of the width, beside two sharing the rest's height.
+        let expected = BTreeMap::from([
+            (2, (300.0, 800.0)),
+            (3, (900.0, 400.0)),
+            (4, (900.0, 400.0)),
+        ]);
+        assert_eq!(areas, expected);
+    }
+
+    /// AC6 (spec 0003), flow 7: quitting by closing the last tab saves a
+    /// session without tabs. That's the normal case, not a corrupt file, so
+    /// nothing is kept as `.bad`, and the relaunch boots one fresh tab.
+    #[test]
+    fn a_session_without_tabs_loads_without_error_and_boots_one_fresh_tab() {
+        let root = TempDir::new("session-no-tabs");
+        let path = root.path().join("session.json");
+        let window = WindowSize {
+            width: 900.0,
+            height: 600.0,
+        };
+        session::save(&path, &Session::new(Some(window), Vec::new(), 0)).expect("save");
+        let loaded = session::load(&path)
+            .expect("no error, so nothing to keep as .bad")
+            .expect("a saved session");
+        let boot = Boot::restore(&loaded, (900.0, 600.0), |_, _| {
+            panic!("a session without tabs started a pane")
+        });
+        assert!(boot.is_none(), "a session without tabs was restored");
+    }
+
+    /// Spec 0003, flow 6: a restored pane whose profile no longer exists
+    /// opens `default_profile`, with one notice naming the profile that's
+    /// gone. A pane whose profile is still there opens it without one.
+    #[test]
+    fn a_restored_pane_whose_profile_is_gone_opens_default_profile_with_a_notice() {
+        let config = config::parse(concat!(
+            "default_profile: htop\n",
+            "profiles:\n",
+            "  htop:\n",
+            "    type: local\n",
+            "    command: [htop]\n",
+            "  vim:\n",
+            "    type: local\n",
+            "    command: [vim]\n",
+        ))
+        .config;
+        let mut notices = Vec::new();
+        let opened = restored_profile(&config, "old-project", &mut notices);
+        assert_eq!(opened.id, "htop");
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("old-project"), "{}", notices[0]);
+        notices.clear();
+        assert_eq!(restored_profile(&config, "vim", &mut notices).id, "vim");
+        assert!(notices.is_empty(), "{notices:?}");
     }
 }

@@ -40,6 +40,9 @@ pub struct Config {
     pub theme: ThemeSettings,
     /// In file order; checked against the commands when they're bound.
     pub keybindings: Vec<Keybinding>,
+    /// Relaunch with the tabs of the last run; `false` deletes the saved
+    /// session on the next quit (spec 0003).
+    pub restore_session: bool,
 }
 
 /// One `keybindings:` entry as written (spec 0004).
@@ -138,6 +141,7 @@ impl Default for Config {
             close_on_exit: CloseOnExit::Clean,
             theme: ThemeSettings::default(),
             keybindings: Vec::new(),
+            restore_session: true,
         }
     }
 }
@@ -900,9 +904,13 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         })
                         .collect();
                 }
-                // Read by the tasks that build them: cursor and
-                // copy_on_select with T-002, restore_session with T-006.
-                "cursor" | "copy_on_select" | "restore_session" => {
+                "restore_session" => {
+                    if let Some(restore) = map.next_value()? {
+                        config.restore_session = restore;
+                    }
+                }
+                // Read by the task that builds them: T-002.
+                "cursor" | "copy_on_select" => {
                     map.next_value::<IgnoredAny>()?;
                 }
                 unknown => {
@@ -1291,6 +1299,21 @@ pub(crate) mod tests {
         }
     }
 
+    /// Spec 0003 §Security & privacy, spec 0005 §Model: the last session is
+    /// restored unless `restore_session: false` turns that off.
+    #[test]
+    fn restore_session_is_on_unless_set_to_false() {
+        assert!(parse("").config.restore_session);
+        for (text, restore) in [
+            ("restore_session: true\n", true),
+            ("restore_session: false\n", false),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.restore_session, restore, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
     /// AC1 (spec 0005).
     #[test]
     fn no_config_file_boots_the_login_shell_on_dark_with_the_bundled_font() {
@@ -1665,8 +1688,7 @@ theme:
       cursor: "#f5c2e7"
 "##;
 
-    /// The keys later tasks read (cursor, copy_on_select, restore_session)
-    /// pass silently.
+    /// The keys a later task reads (cursor, copy_on_select) pass silently.
     #[test]
     fn the_spec_example_loads_every_profile_without_a_notice() {
         let Loaded { config, notices } = parse(SPEC_EXAMPLE);
