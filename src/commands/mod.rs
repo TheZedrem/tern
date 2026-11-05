@@ -42,6 +42,12 @@ actions!(
         /// Opens the host picker to forget what's saved for a host (spec
         /// 0006, flow 7).
         ForgetPassword,
+        /// Copies the focused pane's selection (spec 0002, flow 4).
+        CopySelection,
+        /// Pastes the clipboard into the focused pane's program.
+        Paste,
+        /// Opens the focused pane's search bar (spec 0002, flow 6).
+        Search,
     ]
 );
 
@@ -77,6 +83,9 @@ pub const COMMANDS: &[AppCommand] = &[
         Some("Split down with profile…"),
         || Box::new(SplitDownWithProfile),
     ),
+    command("pane.copy", Some("Copy"), || Box::new(CopySelection)),
+    command("pane.paste", Some("Paste"), || Box::new(Paste)),
+    command("pane.search", Some("Search"), || Box::new(Search)),
     command("pane.close", Some("Close pane"), || Box::new(ClosePane)),
     command("tab.close", Some("Close tab"), || Box::new(CloseTab)),
     command("tab.rename", Some("Rename tab"), || Box::new(RenameTab)),

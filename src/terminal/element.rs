@@ -20,6 +20,8 @@ pub struct TerminalElement {
     font: FontSettings,
     theme: Theme,
     focused: bool,
+    /// Search matches to highlight.
+    marks: grid::Marks,
 }
 
 impl TerminalElement {
@@ -29,6 +31,7 @@ impl TerminalElement {
         font: FontSettings,
         theme: Theme,
         focused: bool,
+        marks: grid::Marks,
     ) -> Self {
         Self {
             pane,
@@ -36,6 +39,7 @@ impl TerminalElement {
             font,
             theme,
             focused,
+            marks,
         }
     }
 }
@@ -95,11 +99,17 @@ impl Element for TerminalElement {
             (f32::from(bounds.size.width), f32::from(bounds.size.height)),
             (f32::from(cell.width), f32::from(cell.height)),
         );
-        self.pane.update(cx, |pane, _| pane.resize(grid_size));
+        self.pane
+            .update(cx, |pane, _| pane.lay_out(bounds.origin, cell, grid_size));
 
         let frame = {
             let term = self.term.lock();
-            grid::build(term.renderable_content(), &self.theme, self.focused)
+            grid::build(
+                term.renderable_content(),
+                &self.theme,
+                self.focused,
+                &self.marks,
+            )
         };
 
         let origin = bounds.origin + point(px(PADDING), px(PADDING));

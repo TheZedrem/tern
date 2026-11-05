@@ -7,6 +7,8 @@ pub mod grid;
 pub mod input;
 mod prompt;
 pub mod pty;
+pub mod search;
+pub mod select;
 
 use crate::config::{self, CloseOnExit, Profile, ProfileKind};
 use crate::secrets::{self, Key};
@@ -17,18 +19,24 @@ use crate::timing::Timing;
 use alacritty_terminal::event::{Event, Notify, OnResize};
 use alacritty_terminal::event_loop::{Msg, Notifier};
 use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::term::color::COUNT as COLOR_SLOTS;
-use alacritty_terminal::term::{Config as TermConfig, TermMode};
+use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::color::{COUNT as COLOR_SLOTS, Colors};
+use alacritty_terminal::term::search::{Match, RegexSearch};
+use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot;
 use futures::future::{Either, select};
 use gpui::{
-    App, AppContext, BackgroundExecutor, Context, Entity, EventEmitter, FocusHandle,
-    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, MouseButton, NoAction,
-    ParentElement, Pixels, Render, SharedString, Size, Styled, Task, Window, div, font, px, size,
+    App, AppContext, BackgroundExecutor, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, NoAction, ParentElement, Pixels, Point, Render, ScrollEvent,
+    SharedString, Size, Styled, Subscription, Task, Window, actions, div, font, px, size,
 };
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::{ActiveTheme, Selectable, Sizable};
 use prompt::{Answer, PromptDialog, Remember};
 use pty::{EventProxy, GridSize, Terminal};
 use std::borrow::Cow;
@@ -56,6 +64,10 @@ pub const DEFAULT_FONT_FAMILY: &str = "Lilex";
 /// A pane's key context. Its bindings outrank those of the widget
 /// library's `Root`, which wraps every window.
 const KEY_CONTEXT: &str = "Terminal";
+/// The search bar's key context.
+const SEARCH_CONTEXT: &str = "TerminalSearch";
+
+actions!(zed_term, [CloseSearch]);
 
 const LILEX: [&[u8]; 4] = [
     include_bytes!("../../assets/fonts/lilex/Lilex-Regular.ttf"),
@@ -74,6 +86,7 @@ pub fn init(cx: &mut App) -> Result<(), String> {
         KeyBinding::new("tab", NoAction, Some(KEY_CONTEXT)),
         KeyBinding::new("shift-tab", NoAction, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-c", NoAction, Some(KEY_CONTEXT)),
+        KeyBinding::new("escape", CloseSearch, Some(SEARCH_CONTEXT)),
     ]);
     prompt::init(cx);
     cx.text_system()
@@ -185,6 +198,7 @@ pub struct PaneSettings {
     pub theme: Theme,
     pub close_on_exit: CloseOnExit,
     pub scrollback: usize,
+    pub copy_on_select: bool,
 }
 
 /// The profile a pane was started from, as it was then: profile edits
@@ -322,6 +336,23 @@ fn is_invisible_format(c: char) -> bool {
     )
 }
 
+/// What goes back to the program for `event`: replies to its queries,
+/// which are fixed strings and numbers only (TM-escape-06). Clipboard
+/// writes and reads (OSC 52) get nothing [load-bearing] (TM-escape-04,
+/// -05), and neither does anything else.
+fn reply(event: Event, colors: &Colors, theme: &Theme, size: GridSize) -> Option<String> {
+    match event {
+        // Device attributes, status, cursor position, modes.
+        Event::PtyWrite(text) => Some(text),
+        Event::ColorRequest(slot, format) if slot < COLOR_SLOTS => {
+            let color = colors[slot].unwrap_or_else(|| colors::default_for_slot(slot, theme));
+            Some(format(color))
+        }
+        Event::TextAreaSizeRequest(format) => Some(format(size.window_size())),
+        _ => None,
+    }
+}
+
 /// Whether a pane closes after its program exited with `code` (`None`:
 /// killed by a signal) under `policy` (spec 0002, flow 8).
 pub fn closes_on_exit(policy: CloseOnExit, code: Option<i32>) -> bool {
@@ -400,6 +431,26 @@ pub struct TerminalPane {
     askpass: Option<Task<()>>,
     /// The dialog over the pane while ssh waits on a prompt.
     dialog: Option<Entity<PromptDialog>>,
+    /// Where the grid was drawn last, its origin and cell size, for
+    /// turning mouse positions into cells.
+    geometry: Option<(Point<Pixels>, Size<Pixels>)>,
+    /// A selection is being dragged out with the left button.
+    selecting: bool,
+    /// Wheel movement short of a whole line, carried to the next event.
+    scroll_remainder: f32,
+    search: Option<SearchBar>,
+}
+
+/// The search bar while it's open (spec 0002, flow 6).
+struct SearchBar {
+    input: Entity<InputState>,
+    case_sensitive: bool,
+    regex: bool,
+    /// The query, compiled; `None` while it's empty or not a valid regex.
+    compiled: Option<RegexSearch>,
+    /// The match the view is on.
+    current: Option<Match>,
+    _events: Subscription,
 }
 
 impl EventEmitter<PaneEvent> for TerminalPane {}
@@ -430,6 +481,10 @@ impl TerminalPane {
             title: None,
             askpass: None,
             dialog: None,
+            geometry: None,
+            selecting: false,
+            scroll_remainder: 0.0,
+            search: None,
         };
         match start {
             Start::Started(session) => pane.attach(session, cx),
@@ -768,18 +823,6 @@ impl TerminalPane {
                 self.has_output = true;
                 cx.notify();
             }
-            // Replies to queries (device attributes, cursor position, ...).
-            Event::PtyWrite(text) => running.notifier.notify(text.into_bytes()),
-            Event::ColorRequest(slot, format) if slot < COLOR_SLOTS => {
-                let color = running.term.lock().colors()[slot]
-                    .unwrap_or_else(|| colors::default_for_slot(slot, &self.settings.theme));
-                running.notifier.notify(format(color).into_bytes());
-            }
-            Event::TextAreaSizeRequest(format) => {
-                running
-                    .notifier
-                    .notify(format(running.size.window_size()).into_bytes());
-            }
             Event::Title(title) => {
                 self.title = Some(clean_title(&title)).filter(|title| !title.is_empty());
                 cx.emit(PaneEvent::TitleChanged);
@@ -788,8 +831,15 @@ impl TerminalPane {
                 self.title = None;
                 cx.emit(PaneEvent::TitleChanged);
             }
-            // Bell and clipboard requests arrive with T-002.
-            _ => {}
+            event => {
+                let reply = {
+                    let term = running.term.lock();
+                    reply(event, term.colors(), &self.settings.theme, running.size)
+                };
+                if let Some(reply) = reply {
+                    running.notifier.notify(reply.into_bytes());
+                }
+            }
         }
     }
 
@@ -839,6 +889,23 @@ impl TerminalPane {
             }
             return;
         }
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        let paging = match keystroke.key.as_str() {
+            "pageup" => Some(Scroll::PageUp),
+            "pagedown" => Some(Scroll::PageDown),
+            _ => None,
+        };
+        // Shift+PageUp/PageDown page through the scrollback (spec 0002,
+        // flow 5); without Shift the keys go to the program.
+        if let Some(page) =
+            paging.filter(|_| modifiers.shift && modifiers.number_of_modifiers() == 1)
+        {
+            running.term.lock().scroll_display(page);
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         let bytes = {
             let mut term = running.term.lock();
             let modes = input::KeyModes {
@@ -855,8 +922,11 @@ impl TerminalPane {
         cx.stop_propagation();
     }
 
-    /// Resizes the terminal and the PTY when the grid that fits changed.
-    fn resize(&mut self, size: GridSize) {
+    /// Takes the grid's place on screen from the element: its origin and cell
+    /// size, and the grid that fits, which resizes the terminal and the PTY
+    /// when it changed.
+    fn lay_out(&mut self, origin: Point<Pixels>, cell: Size<Pixels>, size: GridSize) {
+        self.geometry = Some((origin, cell));
         let State::Running(running) = &mut self.state else {
             return;
         };
@@ -866,6 +936,326 @@ impl TerminalPane {
         running.size = size;
         running.term.lock().resize(size);
         running.notifier.on_resize(size.window_size());
+    }
+
+    /// The cell under `position` in `term`, and which half of it.
+    fn cell_at<T>(
+        &self,
+        position: Point<Pixels>,
+        term: &Term<T>,
+        size: GridSize,
+    ) -> Option<(
+        alacritty_terminal::index::Point,
+        alacritty_terminal::index::Side,
+    )> {
+        let (origin, cell) = self.geometry?;
+        Some(select::cell_at(
+            (f32::from(position.x), f32::from(position.y)),
+            (f32::from(origin.x), f32::from(origin.y)),
+            (f32::from(cell.width), f32::from(cell.height)),
+            size,
+            term.grid().display_offset(),
+        ))
+    }
+
+    /// Starts a selection under the left button: dragging selects from
+    /// there, a double click a word, a triple click a line (spec 0002,
+    /// flow 4).
+    fn mouse_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let State::Running(running) = &self.state else {
+            return;
+        };
+        let mut term = running.term.lock();
+        let Some((point, side)) = self.cell_at(event.position, &term, running.size) else {
+            return;
+        };
+        let kind = match event.click_count {
+            1 => SelectionType::Simple,
+            2 => SelectionType::Semantic,
+            _ => SelectionType::Lines,
+        };
+        term.selection = Some(Selection::new(kind, point, side));
+        drop(term);
+        self.selecting = true;
+        cx.notify();
+    }
+
+    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.selecting || event.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        let State::Running(running) = &self.state else {
+            return;
+        };
+        let mut term = running.term.lock();
+        let Some((point, side)) = self.cell_at(event.position, &term, running.size) else {
+            return;
+        };
+        if let Some(selection) = &mut term.selection {
+            selection.update(point, side);
+        }
+        cx.notify();
+    }
+
+    /// Ends a selection: a click that selected nothing clears it; anything
+    /// selected becomes the primary selection on Linux, and the clipboard
+    /// with `copy_on_select`.
+    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.selecting) {
+            return;
+        }
+        let Some(text) = self.selected_text() else {
+            if let State::Running(running) = &self.state {
+                running.term.lock().selection = None;
+            }
+            cx.notify();
+            return;
+        };
+        #[cfg(target_os = "linux")]
+        cx.write_to_primary(ClipboardItem::new_string(text.clone()));
+        if self.settings.copy_on_select {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    /// Middle-click pastes the primary selection (Linux).
+    fn middle_click(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "linux")]
+        if let Some(text) = cx.read_from_primary().and_then(|item| item.text()) {
+            self.paste_text(&text);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = cx;
+    }
+
+    /// The selection as copy puts it on the clipboard, if anything is
+    /// selected.
+    fn selected_text(&self) -> Option<String> {
+        let State::Running(running) = &self.state else {
+            return None;
+        };
+        let text = running.term.lock().selection_to_string()?;
+        Some(select::copy_text(&text)).filter(|text| !text.is_empty())
+    }
+
+    /// Whether anything is selected, so "Copy" has something to copy.
+    pub fn has_selection(&self) -> bool {
+        self.selected_text().is_some()
+    }
+
+    /// Copies the selection to the clipboard (spec 0002, flow 4).
+    pub fn copy(&self, cx: &mut App) {
+        if let Some(text) = self.selected_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    /// Pastes the clipboard into the program (spec 0002, flow 4).
+    pub fn paste(&self, cx: &mut App) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            self.paste_text(&text);
+        }
+    }
+
+    /// Sends `text` to the program as a paste (TM-escape-07). Nothing
+    /// reaches a program that has exited, or one waiting on a prompt
+    /// dialog: a pasted password would go to the remote shell.
+    fn paste_text(&self, text: &str) {
+        if self.exited || self.dialog.is_some() {
+            return;
+        }
+        let State::Running(running) = &self.state else {
+            return;
+        };
+        let bytes = {
+            let mut term = running.term.lock();
+            let bracketed = term.mode().contains(TermMode::BRACKETED_PASTE);
+            term.scroll_display(Scroll::Bottom);
+            select::paste_bytes(text, bracketed)
+        };
+        running.notifier.notify(bytes);
+    }
+
+    /// Scrolls through the scrollback, a line per wheel notch (spec 0002,
+    /// flow 5). Where a full-screen program (less, vim, man) asked for it,
+    /// the wheel sends arrow keys instead, so it scrolls itself.
+    fn scroll_wheel(&mut self, event: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, cell)) = self.geometry else {
+            return;
+        };
+        let State::Running(running) = &self.state else {
+            return;
+        };
+        let lines = f32::from(event.delta.pixel_delta(cell.height).y) / f32::from(cell.height)
+            + self.scroll_remainder;
+        self.scroll_remainder = lines.fract();
+        let lines = lines.trunc() as i32;
+        if lines == 0 {
+            return;
+        }
+        let mut term = running.term.lock();
+        let mode = *term.mode();
+        if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
+            let app_cursor = mode.contains(TermMode::APP_CURSOR);
+            let key = match (lines > 0, app_cursor) {
+                (true, true) => "\x1bOA",
+                (true, false) => "\x1b[A",
+                (false, true) => "\x1bOB",
+                (false, false) => "\x1b[B",
+            };
+            drop(term);
+            let keys = key.repeat(lines.unsigned_abs() as usize);
+            running.notifier.notify(keys.into_bytes());
+        } else {
+            term.scroll_display(Scroll::Delta(lines));
+            cx.notify();
+        }
+    }
+
+    /// Opens the search bar, or selects its query if it's open (spec 0002,
+    /// flow 6).
+    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.state, State::Running(_)) {
+            return;
+        }
+        if let Some(bar) = &self.search {
+            bar.input.update(cx, |input, cx| {
+                input.focus(window, cx);
+                input.select_all(window, cx);
+            });
+            return;
+        }
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let events = cx.subscribe_in(&input, window, |pane, _, event: &InputEvent, _, cx| {
+            match event {
+                InputEvent::Change => pane.search_changed(cx),
+                // Enter goes up to older output, Shift+Enter back down.
+                InputEvent::PressEnter { shift, .. } => pane.search_step(!shift, cx),
+                _ => {}
+            }
+        });
+        input.update(cx, |input, cx| input.focus(window, cx));
+        self.search = Some(SearchBar {
+            input,
+            case_sensitive: false,
+            regex: false,
+            compiled: None,
+            current: None,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    /// Closes the search bar; the keyboard goes back to the program.
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.take().is_some() {
+            window.focus(&self.focus, cx);
+            cx.notify();
+        }
+    }
+
+    /// Searches anew for the query as it is now, from the newest output up.
+    fn search_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(bar) = &mut self.search else {
+            return;
+        };
+        let query = bar.input.read(cx).value().to_string();
+        bar.compiled = search::compile(&query, bar.case_sensitive, bar.regex);
+        bar.current = None;
+        self.search_step(true, cx);
+    }
+
+    /// Moves to the next match, up to older output or down to newer, and
+    /// scrolls it into view.
+    fn search_step(&mut self, up: bool, cx: &mut Context<Self>) {
+        let (Some(bar), State::Running(running)) = (&mut self.search, &self.state) else {
+            return;
+        };
+        let Some(compiled) = &mut bar.compiled else {
+            cx.notify();
+            return;
+        };
+        let mut term = running.term.lock();
+        bar.current = search::step(&term, compiled, bar.current.as_ref(), up);
+        if let Some(found) = &bar.current {
+            term.scroll_to_point(*found.start());
+        }
+        cx.notify();
+    }
+
+    fn toggle_search_option(&mut self, regex: bool, cx: &mut Context<Self>) {
+        if let Some(bar) = &mut self.search {
+            if regex {
+                bar.regex = !bar.regex;
+            } else {
+                bar.case_sensitive = !bar.case_sensitive;
+            }
+            self.search_changed(cx);
+        }
+    }
+
+    /// The search highlights on screen now.
+    fn marks(&mut self) -> grid::Marks {
+        let (Some(bar), State::Running(running)) = (&mut self.search, &self.state) else {
+            return grid::Marks::default();
+        };
+        let Some(compiled) = &mut bar.compiled else {
+            return grid::Marks::default();
+        };
+        let term = running.term.lock();
+        grid::Marks {
+            matches: search::on_screen(&term, compiled),
+            current: bar.current.clone(),
+        }
+    }
+
+    /// The search bar over the pane's top right corner.
+    fn render_search(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let bar = self.search.as_ref()?;
+        let found = bar.current.is_some() || bar.compiled.is_none();
+        let theme = cx.theme();
+        let toggle = |id: &'static str, label: &'static str, on: bool, regex: bool| {
+            Button::new(id)
+                .label(label)
+                .ghost()
+                .xsmall()
+                .selected(on)
+                .on_click(cx.listener(move |pane, _, _, cx| {
+                    pane.toggle_search_option(regex, cx);
+                }))
+        };
+        let step = |id: &'static str, label: &'static str, up: bool| {
+            Button::new(id)
+                .label(label)
+                .ghost()
+                .xsmall()
+                .on_click(cx.listener(move |pane, _, _, cx| pane.search_step(up, cx)))
+        };
+        Some(
+            div()
+                .key_context(SEARCH_CONTEXT)
+                .on_action(cx.listener(|pane, _: &CloseSearch, window, cx| {
+                    pane.close_search(window, cx);
+                }))
+                .absolute()
+                .top(px(6.))
+                .right(px(6.))
+                .w(px(340.))
+                .p(px(4.))
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(if found { theme.border } else { theme.danger })
+                .bg(theme.popover)
+                .shadow_md()
+                .child(div().flex_1().child(Input::new(&bar.input).xsmall()))
+                .child(toggle("search-case", "Aa", bar.case_sensitive, false))
+                .child(toggle("search-regex", ".*", bar.regex, true))
+                .child(step("search-up", "↑", true))
+                .child(step("search-down", "↓", false)),
+        )
     }
 }
 
@@ -880,6 +1270,7 @@ impl Render for TerminalPane {
             });
         }
 
+        let marks = self.marks();
         let content = match &self.state {
             State::Running(running) => element::TerminalElement::new(
                 cx.entity(),
@@ -887,6 +1278,7 @@ impl Render for TerminalPane {
                 self.settings.font.clone(),
                 self.settings.theme,
                 self.focus.is_focused(window),
+                marks,
             )
             .into_any_element(),
             State::Failed(message) => self
@@ -904,6 +1296,12 @@ impl Render for TerminalPane {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+            .on_mouse_down(MouseButton::Middle, cx.listener(Self::middle_click))
+            .on_mouse_move(cx.listener(Self::mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
+            .on_scroll(cx.listener(Self::scroll_wheel))
             .child(content);
         div()
             .size_full()
@@ -916,6 +1314,7 @@ impl Render for TerminalPane {
                 }),
             )
             .child(grid)
+            .children(self.render_search(cx))
             .children(self.dialog.clone())
     }
 }

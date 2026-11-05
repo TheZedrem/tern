@@ -6,6 +6,7 @@ use super::colors::{self, rgb};
 use crate::theme::Theme;
 use alacritty_terminal::term::RenderableContent;
 use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::search::Match;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 /// What one frame of a pane draws, in cell coordinates (row 0 is the top
@@ -61,11 +62,26 @@ pub struct Cursor {
     pub color: Rgb,
 }
 
+/// What a frame highlights besides the selection: the search bar's matches
+/// on screen, in reading order, and the one the view is on (spec 0002,
+/// flow 6).
+#[derive(Debug, Default)]
+pub struct Marks {
+    pub matches: Vec<Match>,
+    pub current: Option<Match>,
+}
+
 /// Builds the frame for `content`. `focused` decides between a solid and a
-/// hollow block cursor.
-pub fn build(content: RenderableContent<'_>, theme: &Theme, focused: bool) -> Frame {
+/// hollow block cursor. Highlights go, strongest first: the current match
+/// in the accent color, the selection, the other matches tinted.
+pub fn build(content: RenderableContent<'_>, theme: &Theme, focused: bool, marks: &Marks) -> Frame {
     let default_bg = rgb(theme.background);
     let cursor_color = rgb(theme.cursor);
+    let selection_color = rgb(theme.selection);
+    let current_color = rgb(theme.accent);
+    let match_color = colors::mix(current_color, default_bg, 0.35);
+    let selection = content.selection;
+    let mut next_match = 0;
     let offset = content.display_offset as i32;
     let cursor_point = content.cursor.point;
     let cursor_shape = match content.cursor.shape {
@@ -99,6 +115,30 @@ pub fn build(content: RenderableContent<'_>, theme: &Theme, focused: bool) -> Fr
         }
         if flags.contains(Flags::DIM) {
             fg = colors::dim(fg);
+        }
+        // Cells come in reading order, and so do the matches.
+        while marks
+            .matches
+            .get(next_match)
+            .is_some_and(|found| *found.end() < indexed.point)
+        {
+            next_match += 1;
+        }
+        if marks
+            .current
+            .as_ref()
+            .is_some_and(|current| current.contains(&indexed.point))
+        {
+            bg = current_color;
+            fg = default_bg;
+        } else if selection.is_some_and(|range| range.contains(indexed.point)) {
+            bg = selection_color;
+        } else if marks
+            .matches
+            .get(next_match)
+            .is_some_and(|found| found.contains(&indexed.point))
+        {
+            bg = match_color;
         }
 
         if indexed.point == cursor_point {
@@ -201,7 +241,7 @@ mod tests {
     /// The frame of a pane that has printed `bytes`.
     fn frame(bytes: &[u8], focused: bool) -> Frame {
         let term = term_with(COLS, ROWS, bytes);
-        build(term.renderable_content(), &DARK, focused)
+        build(term.renderable_content(), &DARK, focused, &Marks::default())
     }
 
     /// The run that draws cell (`row`, `col`).
@@ -358,7 +398,7 @@ mod tests {
     fn row_0_is_the_top_visible_row_when_scrolled_back() {
         let mut term = term_with(COLS, ROWS, b"1\r\n2\r\n3\r\n4\r\n5");
         term.scroll_display(Scroll::Delta(1));
-        let frame = build(term.renderable_content(), &DARK, false);
+        let frame = build(term.renderable_content(), &DARK, false, &Marks::default());
         let rows: Vec<_> = (0..usize::from(ROWS))
             .map(|row| row_text(&frame, row))
             .collect();

@@ -43,6 +43,36 @@ pub struct Config {
     /// Relaunch with the tabs of the last run; `false` deletes the saved
     /// session on the next quit (spec 0003).
     pub restore_session: bool,
+    /// Copy a selection to the clipboard as soon as it's made (spec 0002,
+    /// flow 4).
+    pub copy_on_select: bool,
+    pub cursor: Cursor,
+}
+
+/// The cursor a pane starts with; a program may change it, as vim does in
+/// insert mode (spec 0002).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct Cursor {
+    pub style: CursorStyle,
+    pub blink: bool,
+}
+
+impl Default for Cursor {
+    fn default() -> Self {
+        Self {
+            style: CursorStyle::Block,
+            blink: true,
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorStyle {
+    Block,
+    Beam,
+    Underline,
 }
 
 /// One `keybindings:` entry as written (spec 0004).
@@ -142,6 +172,8 @@ impl Default for Config {
             theme: ThemeSettings::default(),
             keybindings: Vec::new(),
             restore_session: true,
+            copy_on_select: false,
+            cursor: Cursor::default(),
         }
     }
 }
@@ -909,9 +941,15 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.restore_session = restore;
                     }
                 }
-                // Read by the task that builds them: T-002.
-                "cursor" | "copy_on_select" => {
-                    map.next_value::<IgnoredAny>()?;
+                "copy_on_select" => {
+                    if let Some(copy) = map.next_value()? {
+                        config.copy_on_select = copy;
+                    }
+                }
+                "cursor" => {
+                    if let Some(cursor) = map.next_value()? {
+                        config.cursor = cursor;
+                    }
                 }
                 unknown => {
                     map.next_value::<IgnoredAny>()?;

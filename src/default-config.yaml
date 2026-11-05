@@ -27,6 +27,12 @@ font:
 
 scrollback: 10000   # lines each pane keeps
 close_on_exit: clean  # always | clean (exit code 0) | never
+copy_on_select: false # copy a selection as soon as it's made
+restore_session: true # reopen the last run's tabs and splits
+
+cursor:
+  style: block      # block | beam | underline; programs may change it
+  blink: true
 
 # Your own keys for commands, by ID: the command palette (Ctrl+Shift+P)
 # shows the ID of the command you highlight. A command you bind here loses

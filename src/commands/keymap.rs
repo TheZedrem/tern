@@ -128,6 +128,9 @@ pub fn defaults() -> Vec<(String, &'static str)> {
         (format!("{app}-d"), "pane.splitRight"),
         (format!("{app}-e"), "pane.splitDown"),
         (format!("{app}-z"), "pane.zoom"),
+        (format!("{app}-c"), "pane.copy"),
+        (format!("{app}-v"), "pane.paste"),
+        (format!("{app}-f"), "pane.search"),
         ("ctrl-tab".into(), "tab.next"),
         ("ctrl-shift-tab".into(), "tab.previous"),
         ("alt-left".into(), "pane.focusLeft"),
@@ -410,8 +413,7 @@ mod tests {
         }
     }
 
-    /// The default keys of spec 0004 §Model on Linux and Windows. Copy,
-    /// paste and search arrive with T-002.
+    /// The default keys of spec 0004 §Model on Linux and Windows.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn the_defaults_are_the_spec_table() {
@@ -438,6 +440,9 @@ mod tests {
             ("alt-right", "pane.focusRight"),
             ("alt-down", "pane.focusDown"),
             ("ctrl-shift-z", "pane.zoom"),
+            ("ctrl-shift-c", "pane.copy"),
+            ("ctrl-shift-v", "pane.paste"),
+            ("ctrl-shift-f", "pane.search"),
             ("ctrl-=", "font.increase"),
             ("ctrl-+", "font.increase"),
             ("ctrl--", "font.decrease"),

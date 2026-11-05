@@ -25,6 +25,17 @@ pub fn dim(color: Rgb) -> Rgb {
     }
 }
 
+/// `share` (0 to 1) of `color` over `base`: a tint for highlights that keeps
+/// the text under them readable.
+pub fn mix(color: Rgb, base: Rgb, share: f32) -> Rgb {
+    let mix = |a: u8, b: u8| (f32::from(a) * share + f32::from(b) * (1.0 - share)).round() as u8;
+    Rgb {
+        r: mix(color.r, base.r),
+        g: mix(color.g, base.g),
+        b: mix(color.b, base.b),
+    }
+}
+
 /// The default color of xterm's 256-color palette entry `index`: the
 /// theme's 16 ANSI colors, then the 6×6×6 color cube, then 24 grays.
 pub fn indexed(index: u8, theme: &Theme) -> Rgb {

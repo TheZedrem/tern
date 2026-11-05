@@ -9,10 +9,10 @@ pub mod tree;
 
 use crate::commands::palette::{Entry, Palette, PaletteEvent};
 use crate::commands::{
-    self, ClosePane, CloseTab, ConnectToHost, DecreaseFontSize, FocusDown, FocusLeft, FocusRight,
-    FocusUp, ForgetPassword, GoToTab, IncreaseFontSize, NewTab, NextTab, OpenConfig, OpenPalette,
-    PreviousTab, RenameTab, ResetFontSize, SelectTheme, SplitDown, SplitDownWithProfile,
-    SplitRight, SplitRightWithProfile, ZoomPane,
+    self, ClosePane, CloseTab, ConnectToHost, CopySelection, DecreaseFontSize, FocusDown,
+    FocusLeft, FocusRight, FocusUp, ForgetPassword, GoToTab, IncreaseFontSize, NewTab, NextTab,
+    OpenConfig, OpenPalette, Paste, PreviousTab, RenameTab, ResetFontSize, Search, SelectTheme,
+    SplitDown, SplitDownWithProfile, SplitRight, SplitRightWithProfile, ZoomPane,
 };
 use crate::config::{self, Config, Profile, ProfileKind};
 use crate::secrets;
@@ -579,6 +579,7 @@ impl Workspace {
             theme,
             close_on_exit: self.config.close_on_exit,
             scrollback: self.config.scrollback as usize,
+            copy_on_select: self.config.copy_on_select,
         }
     }
 
@@ -840,7 +841,7 @@ impl Workspace {
             Some(Entry::Command {
                 command,
                 title: command.title?,
-                enabled: self.can_run(command.id, window),
+                enabled: self.can_run(command.id, window, cx),
             })
         });
         let profiles = self.profiles().into_iter().map(|profile| Entry::Profile {
@@ -1087,7 +1088,7 @@ impl Workspace {
 
     /// Whether command `id` would do anything now; the palette dims those
     /// that wouldn't (spec 0004, flow 3).
-    fn can_run(&self, id: &str, window: &Window) -> bool {
+    fn can_run(&self, id: &str, window: &Window, cx: &App) -> bool {
         let tab = self.tabs.active();
         let tabs = self.tabs.tabs().len();
         let neighbor =
@@ -1100,6 +1101,10 @@ impl Workspace {
             "pane.focusRight" => neighbor(Direction::Right),
             "pane.focusUp" => neighbor(Direction::Up),
             "pane.focusDown" => neighbor(Direction::Down),
+            "pane.copy" => self
+                .panes
+                .get(&tab.focused)
+                .is_some_and(|pane| pane.read(cx).has_selection()),
             "pane.splitRight" | "pane.splitRightWithProfile" => self.has_room(Axis::Row, window),
             "pane.splitDown" | "pane.splitDownWithProfile" => self.has_room(Axis::Column, window),
             "font.increase" => size < *FONT_SIZES.end(),
@@ -1151,6 +1156,11 @@ impl Workspace {
             });
         })
         .detach();
+    }
+
+    /// The shown tab's focused pane, which copy, paste and search act on.
+    fn focused_pane(&self) -> Option<Entity<TerminalPane>> {
+        self.panes.get(&self.tabs.active().focused).cloned()
     }
 
     /// Moves keyboard focus to the active tab's focused pane.
@@ -2064,6 +2074,21 @@ impl Render for Workspace {
                 this.tabs.toggle_zoom();
                 this.save_soon(window, cx);
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &CopySelection, _, cx| {
+                if let Some(pane) = this.focused_pane() {
+                    pane.update(cx, |pane, cx| pane.copy(cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Paste, _, cx| {
+                if let Some(pane) = this.focused_pane() {
+                    pane.update(cx, |pane, cx| pane.paste(cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Search, window, cx| {
+                if let Some(pane) = this.focused_pane() {
+                    pane.update(cx, |pane, cx| pane.open_search(window, cx));
+                }
             }))
             .on_action(cx.listener(Self::open_palette))
             .on_action(cx.listener(Self::select_theme))
