@@ -54,6 +54,13 @@ interface that explains itself.
 - [ ] CI for Linux and Windows ([T-007](tasks/T-007-ci-pipeline.md))
 - [ ] Verified on Windows 11 ([T-011](tasks/T-011-verify-t010-on-windows.md))
 
+**Later** (on the [roadmap](spec/architecture.md#roadmap), not yet planned in detail)
+
+- [ ] Suggestions from command history as you type, like Windows Terminal and Warp
+- [ ] Theme editor in the app, with a live preview
+- [ ] SSH port forwarding (local, remote and dynamic) on a profile
+- [ ] Plugin system (considered, not committed to)
+
 - What we're building and why: [`spec/architecture.md`](spec/architecture.md)
 - Backlog: [`tasks/`](tasks/)
 - Dev setup: [`docs/development.md`](docs/development.md)
