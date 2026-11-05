@@ -20,6 +20,7 @@ local, single-user app: no accounts, no backend, no telemetry.
 | 1 — Core terminal | Local shell and local profiles, tabs + splits, shortcuts, clipboard, scrollback, search, command palette, YAML config + themes, session restore | 0001–0005, 0007, 0009 |
 | 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, SFTP panel, secrets in the OS keychain; opt-in update check | 0006, 0008, 0010, 0011 |
 | 3 — Command history | Detect the commands the user runs and suggest past ones inline as they type, like Windows Terminal and Warp | — |
+| 4 — Theme editor | Edit themes in the app with a live preview, saved as `themes/*.yaml` files (spec 0005) | — |
 
 Only phases that have started get specs and tasks; later phases stay one
 row here. Phase 2 started before Phase 1 finished (owner's call,
