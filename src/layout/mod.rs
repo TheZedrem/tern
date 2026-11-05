@@ -1354,11 +1354,16 @@ impl Workspace {
             }
             Pick::DefaultProfile => {
                 let current = self.config.default_profile().id;
+                let builtin_shell = !self.config.configures(config::SHELL);
                 let entries = self
                     .profiles()
                     .into_iter()
                     .map(|profile| Entry::Setting {
-                        title: profile.display_name().to_owned(),
+                        title: if builtin_shell && profile.id == config::SHELL {
+                            format!("{} (built-in)", profile.display_name())
+                        } else {
+                            profile.display_name().to_owned()
+                        },
                         current: profile.id == current,
                         change: Change::Set {
                             path: vec!["default_profile"],

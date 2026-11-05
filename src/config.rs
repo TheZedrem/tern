@@ -275,7 +275,9 @@ impl Config {
             .or_else(|| id.strip_prefix(ALIAS_PREFIX).and_then(Profile::ssh_alias))
     }
 
-    fn configures(&self, id: &str) -> bool {
+    /// Whether the file has a profile with this ID. `shell` is built-in
+    /// exactly when it doesn't.
+    pub fn configures(&self, id: &str) -> bool {
         self.profiles.iter().any(|profile| profile.id == id)
     }
 
