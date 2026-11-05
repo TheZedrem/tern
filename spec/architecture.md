@@ -18,7 +18,7 @@ local, single-user app: no accounts, no backend, no telemetry.
 | Phase | Scope | Specs |
 |---|---|---|
 | 1 — Core terminal | Local shell and local profiles, tabs + splits, shortcuts, clipboard, scrollback, search, command palette, YAML config + themes, session restore | 0001–0005, 0007, 0009 |
-| 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, SFTP panel, secrets in the OS keychain | 0006, 0008, 0010 |
+| 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, SFTP panel, secrets in the OS keychain; opt-in update check | 0006, 0008, 0010, 0011 |
 
 Only phases that have started get specs and tasks; later phases stay one
 row here. Phase 2 started before Phase 1 finished (owner's call,
@@ -60,6 +60,7 @@ machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
 | SFTP edit copies (Phase 2) | `<data_local_dir>/tern/edit/` | Remote files the user opened for editing | Until their panel closes; a crashed run's on the next launch (spec 0008) |
 | Secrets (Phase 2) | OS keychain via `keyring` 4: Secret Service over pure-Rust D-Bus on Linux, Credential Manager on Windows | Never in plain files |
 | Askpass channel (Phase 2) | `interprocess` local socket (Unix socket or named pipe) with a per-connection token from `getrandom` | No TCP port, one API on both platforms |
+| Update check | `ureq` 3 with `rustls` and the OS certificate store (`platform-verifier`), blocking, on its own thread (spec 0011) | Small, pure Rust, no async runtime; honors `HTTPS_PROXY` (OQ-022) |
 | Package manager | cargo | |
 | Linux packages | `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE) and AppImage, all from one release binary built on `ubuntu-24.04` (glibc 2.39) | Owner's choice (2026-11-05): native packages for the two big families, AppImage for every other distro. No Flatpak for now: its sandbox changes how shells and `ssh` are spawned (OQ-020) |
 | Hosting / CI | GitHub + GitHub Actions | Hosted Linux and Windows runners. TTFP isn't gated in CI (shared runners are too noisy); the bench runs locally |
@@ -75,6 +76,7 @@ frame needs. Everything else is a module under `src/`:
 - `ssh/` — hosts, the ssh command, askpass (spec 0006)
 - `config.rs`, `theme.rs`, `session.rs` — files on disk
 - `secrets.rs` — the OS keychain
+- `update.rs` — the opt-in release check (spec 0011)
 - `timing.rs`, `bench.rs` — TTFP marks and the `--bench-startup` runner
 
 Modules are plain Rust that is testable without a window; GPUI views are a
@@ -141,6 +143,7 @@ All local, all plain files the user can read — nothing leaves the machine.
 | Config | `<config_dir>/tern/config.yaml` | Settings, profiles, keybindings, inline themes | Until the user edits/deletes it |
 | User themes | `<config_dir>/tern/themes/*.yaml` | Color schemes | Same |
 | Session state | `<data_local_dir>/tern/session.json` | Window size, tab/split layout, each pane's profile, cwd and title | Overwritten on every save; never scrollback |
+| Update check | `<data_local_dir>/tern/update.json` | Time of the last check | Overwritten on each check (spec 0011) |
 | Secrets (Phase 2) | OS keychain | SSH passwords / key passphrases the user chose to remember | Until the user forgets or replaces it (spec 0006) |
 
 `<config_dir>`/`<data_local_dir>` come from the `dirs` crate (XDG on
@@ -175,7 +178,8 @@ disk — it can contain secrets the user typed or printed.
 1. **No network at startup.** No update checks, fonts, analytics, or
    anything else over the network before the first prompt; deferred work
    waits until after the first frame. The only outbound traffic is what the
-   user explicitly starts (SSH, SFTP).
+   user explicitly starts (SSH, SFTP), plus the daily update check the
+   user agrees to once (spec 0011).
 2. **No telemetry.** Nothing about the user's sessions, hosts, or commands
    is collected or sent anywhere.
 3. **Secrets live in the OS keychain only** — never in `config.yaml`,
