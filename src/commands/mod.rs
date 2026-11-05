@@ -37,6 +37,8 @@ actions!(
         /// Opens `config.yaml` in the OS's editor, creating it first if it's
         /// missing (spec 0005).
         OpenConfig,
+        /// Shows `config.yaml` in the OS's file manager (spec 0009).
+        OpenConfigFolder,
         /// Opens the host picker (spec 0006).
         ConnectToHost,
         /// Opens the host picker to forget what's saved for a host (spec
@@ -138,6 +140,9 @@ pub const COMMANDS: &[AppCommand] = &[
     }),
     command("config.open", Some("Open config file"), || {
         Box::new(OpenConfig)
+    }),
+    command("config.openFolder", Some("Open config folder"), || {
+        Box::new(OpenConfigFolder)
     }),
     command("tab.goTo1", Some("Go to tab 1"), || Box::new(GoToTab(0))),
     command("tab.goTo2", Some("Go to tab 2"), || Box::new(GoToTab(1))),

@@ -9,7 +9,7 @@
 pub mod change;
 pub mod yaml;
 
-use crate::commands::{self, AppCommand, keymap};
+use crate::commands::{self, AppCommand, OpenConfigFolder, keymap};
 use crate::config::{
     CloseOnExit, Config, CursorStyle, NewTab, OpenLinks, Profile, ProfileKind, TabBarSide,
 };
@@ -1207,6 +1207,15 @@ impl Render for SettingsView {
                         div()
                             .w(px(280.))
                             .child(Input::new(&self.search).small().cleanable(true)),
+                    )
+                    .child(
+                        Button::new("settings-open-folder")
+                            .label("Open config folder")
+                            .small()
+                            .ghost()
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(OpenConfigFolder), cx)
+                            }),
                     )
                     .child(
                         Button::new("settings-close")

@@ -71,7 +71,9 @@ can be changed from the screen, the change applies within a second, and
    loaded, and follows reloads while open. Like Tabby's, it has tabs down
    its left side (General, Appearance, Terminal, Keyboard, Profiles), each
    grouping its settings under headings; the panes below take no clicks
-   while it's open.
+   while it's open. Its header's "Open config folder" button (also the
+   palette's `config.openFolder`) shows `config.yaml` in the OS's file
+   manager, creating it first like "Open config file" does.
 2. **Change a value:** a field's change is written when it's committed
    (Enter, leaving the field, picking from a list), then applies live.
    An invalid value can't be committed: the field says why.

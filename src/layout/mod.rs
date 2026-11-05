@@ -11,9 +11,9 @@ use crate::commands::palette::{Entry, Palette, PaletteEvent};
 use crate::commands::{
     self, ClosePane, CloseTab, ConnectToHost, CopySelection, DecreaseFontSize, FocusDown,
     FocusLeft, FocusRight, FocusUp, ForgetPassword, GoToTab, IncreaseFontSize, NewTab,
-    NewTabWithProfile, NextTab, OpenConfig, OpenPalette, OpenSettings, Paste, PreviousTab,
-    RenameTab, ResetFontSize, Search, SelectTheme, SplitDown, SplitDownWithProfile, SplitRight,
-    SplitRightWithProfile, ZoomPane,
+    NewTabWithProfile, NextTab, OpenConfig, OpenConfigFolder, OpenPalette, OpenSettings, Paste,
+    PreviousTab, RenameTab, ResetFontSize, Search, SelectTheme, SplitDown, SplitDownWithProfile,
+    SplitRight, SplitRightWithProfile, ZoomPane,
 };
 use crate::config::{self, Config, Profile, ProfileKind, TabBarSide};
 use crate::secrets;
@@ -1187,6 +1187,28 @@ impl Workspace {
     /// Opens `config.yaml` with the OS's default handler, first writing the
     /// commented defaults if there is no config yet (spec 0005).
     fn open_config(&mut self, _: &OpenConfig, window: &mut Window, cx: &mut Context<Self>) {
+        self.with_config_file(App::open_with_system, window, cx);
+    }
+
+    /// Shows `config.yaml` in the OS's file manager, creating it first like
+    /// "Open config file" does (spec 0009).
+    fn open_config_folder(
+        &mut self,
+        _: &OpenConfigFolder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.with_config_file(App::reveal_path, window, cx);
+    }
+
+    /// Makes sure `config.yaml` exists, off the UI thread, then hands its
+    /// path to `open`.
+    fn with_config_file(
+        &mut self,
+        open: fn(&App, &std::path::Path),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(path) = config::default_path() else {
             show_notice("This system has no config directory.".into(), window, cx);
             return;
@@ -1202,7 +1224,7 @@ impl Workspace {
                     if let Some(watcher) = &mut this.watcher {
                         watcher.arm();
                     }
-                    cx.open_with_system(&path);
+                    open(cx, &path);
                 }
                 Err(error) => show_notice(
                     format!("config.yaml could not be created: {error}"),
@@ -2415,6 +2437,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::new_tab_with_profile))
             .on_action(cx.listener(Self::close_focused_pane))
             .on_action(cx.listener(Self::open_config))
+            .on_action(cx.listener(Self::open_config_folder))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.switch_tab(Tabs::next_tab, window, cx);
             }))
