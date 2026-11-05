@@ -1,7 +1,8 @@
 //! The command palette (spec 0004): gpui-component's command list over the
 //! app commands and profiles, over the themes as the theme picker, or over
-//! the hosts, grouped, as the host picker (spec 0006). Ranked by [`fuzzy`]
-//! instead of the list's own substring filter.
+//! the hosts, grouped, as the host picker (spec 0006), which connects to a
+//! host or forgets its saved password. Ranked by [`fuzzy`] instead of the
+//! list's own substring filter.
 
 use super::{AppCommand, fuzzy};
 use crate::ssh::Host;
@@ -27,6 +28,8 @@ pub enum Entry {
     Theme { name: String, current: bool },
     /// Connects to the host in a new tab (spec 0006).
     Host(Host),
+    /// Forgets what the keychain holds for the host (spec 0006, flow 7).
+    ForgetHost(Host),
 }
 
 impl Entry {
@@ -35,26 +38,28 @@ impl Entry {
             Entry::Command { title, .. } => title,
             Entry::Profile { title, .. } => title,
             Entry::Theme { name, .. } => name,
-            Entry::Host(host) => &host.label,
+            Entry::Host(host) | Entry::ForgetHost(host) => &host.label,
+        }
+    }
+
+    fn host(&self) -> Option<&Host> {
+        match self {
+            Entry::Host(host) | Entry::ForgetHost(host) => Some(host),
+            _ => None,
         }
     }
 
     /// What a query is matched against: a host by its label, where it
     /// connects and its group (spec 0006, flow 1).
     fn haystack(&self) -> Cow<'_, str> {
-        match self {
-            Entry::Host(host) => {
-                format!("{} {} {}", host.label, host.destination, host.group).into()
-            }
-            entry => entry.title().into(),
+        match self.host() {
+            Some(host) => format!("{} {} {}", host.label, host.destination, host.group).into(),
+            None => self.title().into(),
         }
     }
 
     fn group(&self) -> Option<&str> {
-        match self {
-            Entry::Host(host) => Some(&host.group),
-            _ => None,
-        }
+        self.host().map(|host| host.group.as_str())
     }
 
     fn item(&self) -> CommandItem {
@@ -73,7 +78,9 @@ impl Entry {
             Entry::Theme { name, current } => {
                 CommandItem::new().label(name.clone()).checked(*current)
             }
-            Entry::Host(host) => CommandItem::new().label(host.label.clone()),
+            Entry::Host(host) | Entry::ForgetHost(host) => {
+                CommandItem::new().label(host.label.clone())
+            }
         }
     }
 }
@@ -81,6 +88,8 @@ impl Entry {
 /// What the palette asks the workspace to do.
 pub enum PaletteEvent {
     OpenProfile(String),
+    /// Forget what's saved for the host with this ID.
+    ForgetHost(String),
     /// Show theme `name` without saving it.
     PreviewTheme(String),
     /// Save theme `name` as `theme.default`.
@@ -192,6 +201,7 @@ impl Palette {
         match self.entry_ix(index).and_then(|ix| self.entries.get(ix)) {
             Some(Entry::Profile { id, .. }) => cx.emit(PaletteEvent::OpenProfile(id.clone())),
             Some(Entry::Host(host)) => cx.emit(PaletteEvent::OpenProfile(host.id.clone())),
+            Some(Entry::ForgetHost(host)) => cx.emit(PaletteEvent::ForgetHost(host.id.clone())),
             Some(Entry::Theme { name, .. }) => cx.emit(PaletteEvent::ChooseTheme(name.clone())),
             // A command has run through its action already.
             Some(Entry::Command { .. }) | None => {}
@@ -216,7 +226,7 @@ impl Render for Palette {
         // config.yaml binds keys to, or where a host connects.
         let footer: SharedString = match self.highlighted.and_then(|ix| self.entries.get(ix)) {
             Some(Entry::Command { command, .. }) => command.id.into(),
-            Some(Entry::Host(host)) => host.destination.clone().into(),
+            Some(Entry::Host(host) | Entry::ForgetHost(host)) => host.destination.clone().into(),
             _ => SharedString::default(),
         };
         let muted = cx.theme().muted_foreground;
@@ -277,5 +287,35 @@ impl Render for Palette {
                     .text_color(muted)
                     .child(footer.clone())
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Spec 0006, flows 1 and 7: forgetting picks the host in the same
+    /// picker as connecting: listed by its label, found by its label, where
+    /// it connects or its group, and shown in its group.
+    #[test]
+    fn the_forget_picker_lists_finds_and_groups_hosts_like_the_connect_picker() {
+        let host = Host {
+            id: "db".into(),
+            label: "Postgres".into(),
+            group: "Databases".into(),
+            destination: "admin@db.example.com:2222".into(),
+        };
+        for entry in [Entry::Host(host.clone()), Entry::ForgetHost(host.clone())] {
+            assert_eq!(entry.title(), "Postgres");
+            assert_eq!(entry.group(), Some("Databases"));
+            for query in ["postg", "db.example", "datab"] {
+                let haystack = entry.haystack();
+                assert_eq!(
+                    fuzzy::rank(query, [&*haystack]),
+                    [0],
+                    "`{query}` in {haystack}"
+                );
+            }
+        }
     }
 }

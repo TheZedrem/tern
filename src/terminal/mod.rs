@@ -5,10 +5,13 @@ mod colors;
 mod element;
 pub mod grid;
 pub mod input;
+mod prompt;
 pub mod pty;
 
 use crate::config::{self, CloseOnExit, Profile, ProfileKind};
-use crate::ssh;
+use crate::secrets::{self, Key};
+use crate::ssh::askpass::{self, Prompt, PromptKind};
+use crate::ssh::{self, target::Target};
 use crate::theme::{self, Theme};
 use crate::timing::Timing;
 use alacritty_terminal::event::{Event, Notify, OnResize};
@@ -18,18 +21,34 @@ use alacritty_terminal::term::color::COUNT as COLOR_SLOTS;
 use alacritty_terminal::term::{Config as TermConfig, TermMode};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use futures::StreamExt;
+use futures::channel::mpsc::UnboundedReceiver;
+use futures::channel::oneshot;
+use futures::future::{Either, select};
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement, KeyBinding,
-    KeyDownEvent, MouseButton, NoAction, ParentElement, Pixels, Render, SharedString, Size, Styled,
-    Window, div, font, px, size,
+    App, AppContext, BackgroundExecutor, Context, Entity, EventEmitter, FocusHandle,
+    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, MouseButton, NoAction,
+    ParentElement, Pixels, Render, SharedString, Size, Styled, Task, Window, div, font, px, size,
 };
+use prompt::{Answer, PromptDialog, Remember};
 use pty::{EventProxy, GridSize, Terminal};
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::pin::pin;
 use std::sync::Arc;
+use std::time::Duration;
+use zeroize::Zeroizing;
 
 /// Longest tab title taken from a program (spec 0003).
 const MAX_TITLE_CHARS: usize = 200;
+/// The most of a prompt a dialog shows (TM-askpass-08).
+const MAX_PROMPT_BYTES: usize = 4096;
+/// How long a keychain call may take, an unlock prompt included, before it
+/// counts as nothing saved (TM-askpass-17).
+const KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long `ssh -G` may take before prompts are answered without it, so
+/// nothing is filled in.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The embedded default font (spec 0005).
 pub const DEFAULT_FONT_FAMILY: &str = "Lilex";
@@ -56,6 +75,7 @@ pub fn init(cx: &mut App) -> Result<(), String> {
         KeyBinding::new("shift-tab", NoAction, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-c", NoAction, Some(KEY_CONTEXT)),
     ]);
+    prompt::init(cx);
     cx.text_system()
         .add_fonts(LILEX.iter().map(|face| Cow::Borrowed(*face)).collect())
         .map_err(|e| format!("{e:#}"))
@@ -177,9 +197,9 @@ pub struct PaneProfile {
     pub name: String,
     /// The pane's theme; `None` follows `theme.default`.
     pub theme: Option<String>,
-    /// An SSH connection that drops waits for Enter to reconnect (spec
-    /// 0006, flow 5).
-    pub reconnects: bool,
+    /// An SSH connection (spec 0006): its prompts are answered in the app,
+    /// and when it drops it waits for Enter to reconnect.
+    pub ssh: bool,
 }
 
 impl From<&Profile> for PaneProfile {
@@ -188,7 +208,7 @@ impl From<&Profile> for PaneProfile {
             id: profile.id.clone(),
             name: profile.display_name().to_owned(),
             theme: profile.theme.clone(),
-            reconnects: matches!(profile.kind, ProfileKind::Ssh(_)),
+            ssh: matches!(profile.kind, ProfileKind::Ssh(_)),
         }
     }
 }
@@ -203,8 +223,11 @@ pub struct Launch {
 
 /// How a pane begins.
 pub enum Start {
-    /// With its program started, or the reason it couldn't start.
+    /// With its program started before the window existed, or the reason it
+    /// couldn't start: the boot pane (spec 0001).
     Started(Result<pty::Session, String>),
+    /// Starting its program now, in a grid of this size.
+    Now(GridSize),
     /// Showing this until Enter starts the program: an SSH tab opened at
     /// boot or restored never connects by itself (spec 0006, flow 6).
     OnEnter(String),
@@ -238,6 +261,12 @@ pub enum PaneEvent {
     TitleChanged,
     /// The program exited and `close_on_exit` says the pane closes.
     Exited,
+    /// A prompt dialog opened or closed, which moves the keyboard focus.
+    DialogChanged,
+    /// Something for a notice, like a password filled in from the keychain.
+    Notice(String),
+    /// There is no keychain; the workspace says so once (spec 0006, flow 8).
+    NoKeychain,
 }
 
 /// A program's title as a tab shows it: control characters dropped, runs
@@ -251,6 +280,26 @@ pub fn clean_title(title: &str) -> String {
         .chars()
         .take(MAX_TITLE_CHARS)
         .collect()
+}
+
+/// ssh's prompt as a dialog shows it (spec 0006, flow 4): the title rules,
+/// but with line breaks kept and tabs as spaces, capped at 4 KiB.
+/// Host-key questions span several lines.
+pub fn clean_prompt(prompt: &str) -> String {
+    let mut cleaned = String::new();
+    for c in prompt.chars() {
+        let c = match c {
+            '\n' => '\n',
+            '\t' => ' ',
+            c if c.is_control() || is_invisible_format(c) => continue,
+            c => c,
+        };
+        if cleaned.len() + c.len_utf8() > MAX_PROMPT_BYTES {
+            break;
+        }
+        cleaned.push(c);
+    }
+    cleaned
 }
 
 /// Invisible characters that could hide text or reorder what a tab shows:
@@ -346,6 +395,11 @@ pub struct TerminalPane {
     first_frame_scheduled: bool,
     /// The title the program set (OSC 0/2), already cleaned.
     title: Option<String>,
+    /// Answers the running SSH connection's prompts (spec 0006, flow 4).
+    /// Dropping it ends them, and their helpers exit 1.
+    askpass: Option<Task<()>>,
+    /// The dialog over the pane while ssh waits on a prompt.
+    dialog: Option<Entity<PromptDialog>>,
 }
 
 impl EventEmitter<PaneEvent> for TerminalPane {}
@@ -359,6 +413,7 @@ impl TerminalPane {
         profile: PaneProfile,
         settings: PaneSettings,
         bench: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut pane = Self {
@@ -373,9 +428,12 @@ impl TerminalPane {
             has_output: false,
             first_frame_scheduled: false,
             title: None,
+            askpass: None,
+            dialog: None,
         };
         match start {
             Start::Started(session) => pane.attach(session, cx),
+            Start::Now(grid) => pane.spawn(grid, window, cx),
             Start::OnEnter(prompt) => pane.state = State::Waiting(prompt),
         }
         pane
@@ -388,6 +446,7 @@ impl TerminalPane {
             Ok(session) => session,
             Err(error) => {
                 self.state = State::Failed(failure(&self.launch.command, &error));
+                self.end_prompts(cx);
                 return;
             }
         };
@@ -420,21 +479,169 @@ impl TerminalPane {
 
     /// Starts the program of a waiting pane, sized to the window until the
     /// next frame measures the pane.
-    fn start(&mut self, window: &Window, cx: &mut Context<Self>) {
+    fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let viewport = window.viewport_size();
         let grid = GridSize::fit(
             (f32::from(viewport.width), f32::from(viewport.height)),
             self.settings.font.estimated_cell(),
         );
+        self.spawn(grid, window, cx);
+        cx.notify();
+    }
+
+    /// Starts the program in a new PTY of `grid`.
+    fn spawn(&mut self, grid: GridSize, window: &mut Window, cx: &mut Context<Self>) {
+        let command = self.connection_command(window, cx);
         let session = pty::spawn(
-            &self.launch.command,
+            &command,
             grid,
             self.launch.cwd.as_deref(),
             self.settings.scrollback,
             Arc::clone(&self.launch.timing),
         );
         self.attach(session, cx);
+    }
+
+    /// The command to start now. An SSH connection's gets the askpass
+    /// environment of a new token, and the pane answers its prompts until
+    /// the next start (spec 0006, flow 2). Without an askpass server, ssh
+    /// asks in the terminal.
+    fn connection_command(&mut self, window: &mut Window, cx: &mut Context<Self>) -> pty::Command {
+        let mut command = self.launch.command.clone();
+        self.end_prompts(cx);
+        if self.profile.ssh
+            && let Some(connection) = askpass::connect(cx)
+        {
+            command.env.extend(connection.env);
+            let args = command.args.clone();
+            self.askpass = Some(self.answer_prompts(connection.prompts, args, window, cx));
+        }
+        command
+    }
+
+    /// Answers the prompts of the connection whose ssh runs with `args`, one
+    /// at a time (spec 0006, flow 4). The connection's own password and
+    /// passphrase prompts are filled in from the keychain once each, with a
+    /// notice; everything else gets a dialog.
+    fn answer_prompts(
+        &self,
+        mut prompts: UnboundedReceiver<Prompt>,
+        args: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        let executor = cx.background_executor().clone();
+        let target = secrets::off_thread(move || Target::resolve(&args));
+        cx.spawn_in(window, async move |this, cx| {
+            let target = within(target, RESOLVE_TIMEOUT, &executor)
+                .await
+                .and_then(Result::ok)
+                .flatten();
+            let mut offers = Offers::default();
+            while let Some(mut prompt) = prompts.next().await {
+                let key = target
+                    .as_ref()
+                    .filter(|_| prompt.kind == PromptKind::Secret)
+                    .and_then(|target| target.secret_for(&prompt.text));
+                if let Some(key) = key.as_ref().filter(|key| offers.ask(key)) {
+                    match lookup(key, &executor).await {
+                        Lookup::Found(secret) => {
+                            prompt.answer(&secret);
+                            offers.filled.insert(key.clone());
+                            let notice = filled_notice(key);
+                            let _ = this.update(cx, |_, cx| cx.emit(PaneEvent::Notice(notice)));
+                            continue;
+                        }
+                        Lookup::Nothing => {}
+                        Lookup::NoKeychain => {
+                            offers.no_keychain = true;
+                            let _ = this.update(cx, |_, cx| cx.emit(PaneEvent::NoKeychain));
+                        }
+                    }
+                }
+                let remember = offers.remember(key.clone());
+                let Ok(answered) = this.update_in(cx, |pane, window, cx| {
+                    pane.open_dialog(&prompt, remember, window, cx)
+                }) else {
+                    break;
+                };
+                let answer = match select(answered, pin!(prompt.ended())).await {
+                    Either::Left((Ok(answer), _)) => Some(answer),
+                    _ => None,
+                };
+                let _ = this.update(cx, |pane, cx| pane.close_dialog(cx));
+                match answer {
+                    Some(Answer::Typed { text, save }) => {
+                        prompt.answer(&text);
+                        if let Some(key) = key.filter(|_| save) {
+                            let _ = this.update(cx, |pane, cx| pane.save(key, text, cx));
+                        }
+                    }
+                    Some(Answer::Yes) => prompt.answer("yes"),
+                    // Declined, or ssh is done with it: dropping it ends the
+                    // helper.
+                    None => {}
+                }
+            }
+        })
+    }
+
+    /// Opens the dialog for `prompt` over the pane. The receiver gets the
+    /// answer, or fails when the dialog is left without one.
+    fn open_dialog(
+        &mut self,
+        prompt: &Prompt,
+        remember: Option<Remember>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> oneshot::Receiver<Answer> {
+        let (answer, answered) = oneshot::channel();
+        let connection = SharedString::from(self.profile.name.clone());
+        self.dialog = Some(cx.new(|cx| {
+            PromptDialog::new(
+                connection,
+                &prompt.text,
+                prompt.kind,
+                remember,
+                answer,
+                window,
+                cx,
+            )
+        }));
+        cx.emit(PaneEvent::DialogChanged);
         cx.notify();
+        answered
+    }
+
+    fn close_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.dialog.take().is_some() {
+            cx.emit(PaneEvent::DialogChanged);
+            cx.notify();
+        }
+    }
+
+    /// Ends the connection's prompts; helpers still waiting exit 1.
+    fn end_prompts(&mut self, cx: &mut Context<Self>) {
+        self.askpass = None;
+        self.close_dialog(cx);
+    }
+
+    /// Saves what was typed under `key`, off the UI thread. Only a failure
+    /// makes a notice.
+    fn save(&self, key: Key, secret: Zeroizing<String>, cx: &mut Context<Self>) {
+        let executor = cx.background_executor().clone();
+        let described = key.describe();
+        let saving = secrets::off_thread(move || secrets::set(&key, &secret));
+        cx.spawn(async move |this, cx| {
+            let error = match within(saving, KEYCHAIN_TIMEOUT, &executor).await {
+                Some(Ok(Ok(()))) => return,
+                Some(Ok(Err(error))) => error,
+                _ => "the keychain didn't answer".to_owned(),
+            };
+            let notice = format!("Couldn't save {described}: {error}");
+            let _ = this.update(cx, |_, cx| cx.emit(PaneEvent::Notice(notice)));
+        })
+        .detach();
     }
 
     /// Text where the grid would be, in the pane's font: a waiting pane's
@@ -449,36 +656,51 @@ impl TerminalPane {
     }
 
     /// Starts the program again in the same terminal, after its SSH
-    /// connection dropped: the old session stays in the scrollback.
-    fn rerun(&mut self, cx: &mut Context<Self>) {
+    /// connection dropped: the old session stays in the scrollback. The new
+    /// connection gets a token of its own.
+    fn rerun(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.state, State::Running(_)) {
+            return;
+        }
+        let command = self.connection_command(window, cx);
         let State::Running(running) = &mut self.state else {
             return;
         };
         let started = pty::rerun(
-            &self.launch.command,
+            &command,
             running.size,
             self.launch.cwd.as_deref(),
             &running.term,
             &running.proxy,
         );
-        match started {
+        let failed = match started {
             Ok((notifier, child_pid)) => {
                 running.notifier = notifier;
                 running.child_pid = child_pid;
                 self.exited = false;
                 self.reconnect = false;
+                false
             }
             Err(error) => {
-                let notice = format!("\r\n{}", failure(&self.launch.command, &error));
+                let notice = format!("\r\n{}", failure(&command, &error));
                 let mut parser = Processor::<StdSyncHandler>::new();
                 parser.advance(&mut *running.term.lock(), notice.as_bytes());
+                true
             }
+        };
+        if failed {
+            self.end_prompts(cx);
         }
         cx.notify();
     }
 
-    pub fn focus_handle(&self) -> &FocusHandle {
-        &self.focus
+    /// What takes the keyboard when the pane is focused: its prompt dialog
+    /// while one is open, else the grid.
+    pub fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match &self.dialog {
+            Some(dialog) => dialog.read(cx).focus_target(cx),
+            None => self.focus.clone(),
+        }
     }
 
     pub fn title(&self) -> Option<&str> {
@@ -567,7 +789,9 @@ impl TerminalPane {
 
     fn child_exited(&mut self, code: Option<i32>, cx: &mut Context<Self>) {
         self.exited = true;
-        let after = after_exit(self.profile.reconnects, self.settings.close_on_exit, code);
+        // The connection's token dies with its ssh (TM-askpass-03).
+        self.end_prompts(cx);
+        let after = after_exit(self.profile.ssh, self.settings.close_on_exit, code);
         self.reconnect = after == AfterExit::Reconnect;
         let notice = if self.reconnect {
             RECONNECT_NOTICE.to_owned()
@@ -585,6 +809,11 @@ impl TerminalPane {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // While ssh waits on a dialog the grid takes no keys: a password
+        // typed into the PTY would reach the remote shell after login.
+        if self.dialog.is_some() {
+            return;
+        }
         let enter = event.keystroke.key == "enter" && !event.keystroke.modifiers.modified();
         let running = match &self.state {
             State::Waiting(_) => {
@@ -599,7 +828,7 @@ impl TerminalPane {
         };
         if self.exited {
             if enter && self.reconnect {
-                self.rerun(cx);
+                self.rerun(window, cx);
                 cx.stop_propagation();
             }
             return;
@@ -662,19 +891,98 @@ impl Render for TerminalPane {
                 .into_any_element(),
         };
 
-        div()
+        // The dialog sits beside the grid, not in it, so keys typed into the
+        // dialog never pass the grid's key handler.
+        let grid = div()
             .size_full()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            .child(content);
+        div()
+            .size_full()
+            .relative()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|pane, _, window, cx| {
-                    window.focus(&pane.focus, cx);
+                    window.focus(&pane.focus_handle(cx), cx);
                     cx.emit(PaneEvent::Focused);
                 }),
             )
-            .child(content)
+            .child(grid)
+            .children(self.dialog.clone())
+    }
+}
+
+/// What a connection's prompts got from the keychain so far (spec 0006,
+/// flow 4).
+#[derive(Default)]
+struct Offers {
+    /// Asked for once each: a second prompt for one gets a dialog, never
+    /// another fill, so a wrong saved password can't loop (AC5).
+    asked: HashSet<Key>,
+    /// Filled in from the keychain. A second prompt for one means the saved
+    /// secret failed.
+    filled: HashSet<Key>,
+    /// There is no keychain: nothing is asked or offered to remember.
+    no_keychain: bool,
+}
+
+impl Offers {
+    /// Whether to ask the keychain for `key` now: once per connection, and
+    /// only with a keychain.
+    fn ask(&mut self, key: &Key) -> bool {
+        !self.no_keychain && self.asked.insert(key.clone())
+    }
+
+    /// The keychain option of the dialog for a prompt answered by `key`, if
+    /// any: after the saved secret failed, it offers to replace it.
+    fn remember(&self, key: Option<Key>) -> Option<Remember> {
+        let key = key.filter(|_| !self.no_keychain)?;
+        Some(Remember {
+            replace: self.filled.contains(&key),
+            key,
+        })
+    }
+}
+
+/// What the keychain holds for a prompt.
+enum Lookup {
+    Found(Zeroizing<String>),
+    Nothing,
+    NoKeychain,
+}
+
+/// Asks the keychain for `key` on a thread of its own. No answer within
+/// [`KEYCHAIN_TIMEOUT`] counts as nothing saved (TM-askpass-17).
+async fn lookup(key: &Key, executor: &BackgroundExecutor) -> Lookup {
+    let key = key.clone();
+    let found = secrets::off_thread(move || secrets::get(&key));
+    match within(found, KEYCHAIN_TIMEOUT, executor).await {
+        Some(Ok(Ok(Some(secret)))) => Lookup::Found(secret),
+        Some(Ok(Err(secrets::Unavailable))) => Lookup::NoKeychain,
+        _ => Lookup::Nothing,
+    }
+}
+
+/// `future`'s output, unless it takes longer than `limit`.
+async fn within<T>(
+    future: impl Future<Output = T>,
+    limit: Duration,
+    executor: &BackgroundExecutor,
+) -> Option<T> {
+    match select(pin!(future), executor.timer(limit)).await {
+        Either::Left((output, _)) => Some(output),
+        Either::Right(_) => None,
+    }
+}
+
+/// The notice when the keychain answered a prompt: it names what it used,
+/// never the secret (TM-askpass-10).
+fn filled_notice(key: &Key) -> String {
+    match key {
+        Key::Password(target) => format!("Logged in with the password saved for {target}"),
+        Key::Passphrase(file) => format!("Unlocked {file} with the passphrase saved for it"),
     }
 }
 
@@ -814,8 +1122,8 @@ mod tests {
             kind: ProfileKind::Ssh(ssh_to("prod.example.com")),
             ..Profile::shell()
         };
-        assert!(PaneProfile::from(&ssh).reconnects);
-        assert!(!PaneProfile::from(&Profile::shell()).reconnects);
+        assert!(PaneProfile::from(&ssh).ssh);
+        assert!(!PaneProfile::from(&Profile::shell()).ssh);
     }
 
     /// Spec 0006, flow 6: a restored SSH tab names the host it waits for.
@@ -975,6 +1283,26 @@ mod tests {
         }
     }
 
+    /// The characters that hide or reorder text: Arabic letter mark,
+    /// zero-width space, direction marks, embeddings, overrides and
+    /// isolates, invisible operators, byte-order mark, and the first tag
+    /// character, tag "A" and the closing cancel tag.
+    fn invisible_characters() -> impl Iterator<Item = char> {
+        ['\u{061C}', '\u{200B}', '\u{200E}', '\u{200F}', '\u{FEFF}']
+            .into_iter()
+            .chain('\u{202A}'..='\u{202E}')
+            .chain('\u{2060}'..='\u{2064}')
+            .chain('\u{2066}'..='\u{2069}')
+            .chain(['\u{E0000}', '\u{E0041}', '\u{E007F}'])
+    }
+
+    /// 👨‍💻 (man, zero-width joiner, laptop), and Persian "mikhaham" (I
+    /// want), with a zero-width non-joiner after "mi".
+    const JOINED: [&str; 2] = [
+        "\u{1F468}\u{200D}\u{1F4BB}",
+        "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}",
+    ];
+
     /// A title can't reorder or hide text: a right-to-left override would
     /// show `invoice\u{202E}fdp.exe` as "invoiceexe.pdf", zero-width
     /// characters make different text look the same, and tag characters
@@ -985,14 +1313,7 @@ mod tests {
         assert_title("ad\u{200B}min\u{FEFF}", &["ad", "min"]);
         // "rm" spelled in tag characters.
         assert_title("build\u{E0072}\u{E006D}", &["build"]);
-        let invisible = ['\u{061C}', '\u{200B}', '\u{200E}', '\u{200F}', '\u{FEFF}']
-            .into_iter()
-            .chain('\u{202A}'..='\u{202E}')
-            .chain('\u{2060}'..='\u{2064}')
-            .chain('\u{2066}'..='\u{2069}')
-            // The first tag character, tag "A", and the closing cancel tag.
-            .chain(['\u{E0000}', '\u{E0041}', '\u{E007F}']);
-        for c in invisible {
+        for c in invisible_characters() {
             assert_title(&format!("before{c}after"), &["before", "after"]);
         }
     }
@@ -1001,13 +1322,233 @@ mod tests {
     /// sequences and scripts like Persian need them.
     #[test]
     fn titles_keep_the_joiners_emoji_and_scripts_need() {
-        // 👨‍💻: man, zero-width joiner, laptop.
-        let technologist = "\u{1F468}\u{200D}\u{1F4BB}";
-        // Persian "mikhaham" (I want), a zero-width non-joiner after "mi".
-        let persian = "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}";
+        let [technologist, persian] = JOINED;
         let both = format!("{technologist} {persian}");
         for title in [technologist, persian, both.as_str()] {
             assert_eq!(clean_title(title), title);
+        }
+    }
+
+    /// Spec 0006, flow 4: ssh's host-key question spans several lines, and
+    /// its dialog shows them as lines. A tab is a space.
+    #[test]
+    fn prompts_keep_their_line_breaks_and_tabs_become_spaces() {
+        let question = "The authenticity of host 'prod (192.0.2.10)' can't be established.\n\
+                        ED25519 key fingerprint is: SHA256:ufr9ck+x5zXLjNm4HvDvXiRs6L/6qjQoTXCJCukwfy8\n\
+                        This key is not known by any other names.\n\
+                        Are you sure you want to continue connecting (yes/no/[fingerprint])? ";
+        assert_eq!(clean_prompt(question), question);
+        assert_eq!(clean_prompt("first\r\nsecond"), "first\nsecond");
+        assert_eq!(clean_prompt("Verification\tcode: "), "Verification code: ");
+    }
+
+    /// TM-askpass-08: a server's prompt text can't steer its dialog: the
+    /// control characters are dropped, line breaks aside.
+    #[test]
+    fn prompts_lose_their_control_characters() {
+        let cases = [
+            ("bell\x07here", "bellhere"),
+            ("esc\x1b[31mred", "esc[31mred"),
+            ("back\x08space", "backspace"),
+            // NUL, DEL and the C1 control CSI.
+            ("nul\0del\x7fcsi\u{9b}end", "nuldelcsiend"),
+        ];
+        for (raw, cleaned) in cases {
+            assert_eq!(clean_prompt(raw), cleaned, "{raw:?}");
+        }
+    }
+
+    /// TM-askpass-08, by the title rules of spec 0003: a prompt can't hide
+    /// or reorder what it says, say to make its dialog name another host
+    /// than the one asking. The joiners emoji and scripts need stay.
+    #[test]
+    fn prompts_lose_the_characters_that_hide_or_reorder_text() {
+        for c in invisible_characters() {
+            let prompt = format!("alice@prod{c}'s password: ");
+            assert_eq!(
+                clean_prompt(&prompt),
+                "alice@prod's password: ",
+                "{prompt:?}"
+            );
+        }
+        for text in JOINED {
+            assert_eq!(clean_prompt(text), text);
+        }
+    }
+
+    /// TM-askpass-08: a dialog shows 4 KiB of a prompt at most, cut between
+    /// two characters, never through one. What's dropped doesn't count.
+    #[test]
+    fn a_prompt_is_capped_at_4_kib_between_characters() {
+        assert_eq!(clean_prompt(&"x".repeat(5000)), "x".repeat(4096));
+        // 4 KiB are 1 024 four-byte crabs.
+        assert_eq!(clean_prompt(&"🦀".repeat(2000)), "🦀".repeat(1024));
+        // One byte ahead, the crab that would cross 4 KiB is left out whole.
+        assert_eq!(
+            clean_prompt(&format!("x{}", "🦀".repeat(2000))),
+            format!("x{}", "🦀".repeat(1023))
+        );
+        assert_eq!(
+            clean_prompt(&format!("{}ok", "\u{200B}".repeat(5000))),
+            "ok"
+        );
+    }
+
+    /// TM-askpass-10: each fill from the keychain says what it used, in the
+    /// words of spec 0006 for a password. It names, and has, no secret.
+    #[test]
+    fn a_fill_notice_names_the_target_or_key_file_it_used() {
+        assert_eq!(
+            filled_notice(&Key::Password("alice@prod.example.com:22".into())),
+            "Logged in with the password saved for alice@prod.example.com:22"
+        );
+        let file = "/home/alice/.ssh/id_ed25519";
+        let notice = filled_notice(&Key::Passphrase(file.into()));
+        assert!(
+            notice.contains(file) && notice.contains("passphrase"),
+            "{notice}"
+        );
+    }
+
+    /// The connection's password and its key's passphrase, as
+    /// `Target::secret_for` names them.
+    fn password() -> Key {
+        Key::Password("alice@prod.example.com:22".into())
+    }
+
+    fn passphrase() -> Key {
+        Key::Passphrase("/home/alice/.ssh/id_ed25519".into())
+    }
+
+    /// What the keychain of an `Offers` test holds for any key it's asked.
+    #[derive(Clone, Copy)]
+    enum Keychain {
+        Saved,
+        Empty,
+        /// There is none: no Secret Service is running.
+        Missing,
+    }
+
+    /// What became of a prompt.
+    #[derive(Debug, PartialEq)]
+    enum Outcome {
+        /// Filled in from the keychain, with no dialog.
+        Filled,
+        /// A dialog. `asked`: whether the keychain was asked first.
+        /// `remember`: its keychain option, as the key and whether it
+        /// replaces what's saved.
+        Dialog {
+            asked: bool,
+            remember: Option<(Key, bool)>,
+        },
+    }
+
+    /// A prompt for `key` (`None`: no secret of the connection's own) taken
+    /// through `offers` as `answer_prompts` takes it: the keychain is asked
+    /// only when `offers` says so, what it has fills the prompt, and every
+    /// prompt not filled gets a dialog.
+    fn take(offers: &mut Offers, key: Option<&Key>, keychain: Keychain) -> Outcome {
+        let asked = key.filter(|key| offers.ask(key));
+        match (asked, keychain) {
+            (Some(key), Keychain::Saved) => {
+                offers.filled.insert(key.clone());
+                return Outcome::Filled;
+            }
+            (Some(_), Keychain::Missing) => offers.no_keychain = true,
+            _ => {}
+        }
+        let remember = offers.remember(key.cloned());
+        Outcome::Dialog {
+            asked: asked.is_some(),
+            remember: remember.map(|remember| (remember.key, remember.replace)),
+        }
+    }
+
+    /// AC5 (spec 0006, flow 4): the saved password is filled in once. When
+    /// it was wrong, ssh asks again, and that prompt gets a dialog instead
+    /// of the keychain, so there is no retry loop, and the dialog offers to
+    /// replace what's saved. The key's passphrase is a secret of its own,
+    /// still asked for once.
+    #[test]
+    fn a_wrong_saved_password_is_filled_once_then_its_dialog_offers_to_replace_it() {
+        let mut offers = Offers::default();
+        let filled = take(&mut offers, Some(&password()), Keychain::Saved);
+        assert_eq!(filled, Outcome::Filled);
+        let replace = Outcome::Dialog {
+            asked: false,
+            remember: Some((password(), true)),
+        };
+        // ssh asks up to `NumberOfPasswordPrompts` (3) times.
+        for attempt in 2..=3 {
+            let again = take(&mut offers, Some(&password()), Keychain::Saved);
+            assert_eq!(again, replace, "attempt {attempt}");
+        }
+        let unlocked = take(&mut offers, Some(&passphrase()), Keychain::Saved);
+        assert_eq!(unlocked, Outcome::Filled);
+    }
+
+    /// Spec 0006, flow 4: with nothing saved, the connection's own password
+    /// prompt gets a dialog offering "Remember in keychain", a first save
+    /// rather than a replacement, and so does ssh's next prompt for it,
+    /// without asking the keychain again.
+    #[test]
+    fn with_nothing_saved_the_dialog_offers_to_remember_the_password() {
+        let mut offers = Offers::default();
+        let first = take(&mut offers, Some(&password()), Keychain::Empty);
+        let remember = Some((password(), false));
+        assert_eq!(
+            first,
+            Outcome::Dialog {
+                asked: true,
+                remember: remember.clone()
+            }
+        );
+        let again = take(&mut offers, Some(&password()), Keychain::Empty);
+        assert_eq!(
+            again,
+            Outcome::Dialog {
+                asked: false,
+                remember
+            }
+        );
+    }
+
+    /// Spec 0006, flow 4: a prompt that asks for no secret of the
+    /// connection's own, like a one-time code or a jump host's password,
+    /// gets a dialog without the keychain being asked, and nothing is
+    /// offered to remember.
+    #[test]
+    fn a_prompt_for_no_secret_of_the_connections_own_gets_a_dialog_with_nothing_to_remember() {
+        let mut offers = Offers::default();
+        let outcome = take(&mut offers, None, Keychain::Saved);
+        let bare = Outcome::Dialog {
+            asked: false,
+            remember: None,
+        };
+        assert_eq!(outcome, bare);
+    }
+
+    /// Spec 0006, flow 8: once a lookup finds no keychain, nothing more is
+    /// asked of it, and no dialog offers to remember: there's nowhere to
+    /// save. Connecting still works, through the dialogs.
+    #[test]
+    fn without_a_keychain_nothing_more_is_asked_and_nothing_is_offered_to_remember() {
+        let mut offers = Offers::default();
+        let first = take(&mut offers, Some(&password()), Keychain::Missing);
+        assert_eq!(
+            first,
+            Outcome::Dialog {
+                asked: true,
+                remember: None
+            }
+        );
+        let bare = Outcome::Dialog {
+            asked: false,
+            remember: None,
+        };
+        for key in [passphrase(), password()] {
+            let outcome = take(&mut offers, Some(&key), Keychain::Missing);
+            assert_eq!(outcome, bare, "{key:?}");
         }
     }
 }

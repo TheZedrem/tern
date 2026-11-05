@@ -6,6 +6,7 @@ mod bench;
 mod commands;
 mod config;
 mod layout;
+mod secrets;
 mod ssh;
 mod terminal;
 mod theme;
@@ -27,7 +28,12 @@ use timing::{Mark, Timing};
 const WINDOW_SIZE: (f32, f32) = (1000.0, 640.0);
 
 fn main() {
-    // Taken first: TTFP is measured from here.
+    // ssh runs zed-term as its askpass helper (spec 0006, flow 3), which
+    // asks the running app and exits before any of the app's own code runs.
+    if let Some(code) = ssh::askpass::helper() {
+        std::process::exit(code);
+    }
+    // TTFP is measured from here: the check above reads two variables.
     let start = Instant::now();
 
     let mode = Mode::parse(std::env::args().skip(1)).unwrap_or_else(|error| {

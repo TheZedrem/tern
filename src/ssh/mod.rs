@@ -1,13 +1,17 @@
-//! SSH through the system `ssh` (spec 0006): the hosts the picker lists
-//! and what connects to them. Answering ssh's prompts in the app comes with
-//! T-014; until then ssh asks in the terminal as usual.
+//! SSH through the system `ssh` (spec 0006): the hosts the picker lists,
+//! what connects to them, and ssh's prompts answered in the app
+//! ([`askpass`]) from what [`target`] resolves a connection to.
 
+pub mod askpass;
 pub mod config;
+pub mod target;
 
 use crate::config::{Profile, ProfileKind, SshProfile};
+use crate::secrets::{self, Key};
 use crate::terminal::pty::{self, Command};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use target::Target;
 
 /// The program zed-term connects with: the OpenSSH client on `PATH`.
 pub const PROGRAM: &str = "ssh";
@@ -107,6 +111,20 @@ pub fn command(profile: &SshProfile) -> Command {
         args,
         env: BTreeMap::new(),
     }
+}
+
+/// Forgets what the keychain holds for the connection with `args` (spec
+/// 0006, flow 7): its target's password and its keys' passphrases. Returns
+/// what was forgotten. Runs `ssh -G` and keychain calls, so it blocks.
+pub fn forget(args: &[String]) -> Result<Vec<Key>, String> {
+    let target = Target::resolve(args).ok_or("ssh couldn't say where it connects")?;
+    let mut forgotten = Vec::new();
+    for key in target.secrets() {
+        if secrets::delete(&key)? {
+            forgotten.push(key);
+        }
+    }
+    Ok(forgotten)
 }
 
 /// Whether the OpenSSH client is installed: `ssh` is on `PATH`.

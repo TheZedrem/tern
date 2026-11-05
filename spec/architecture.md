@@ -73,7 +73,9 @@ frame needs. Everything else is a module under `src/`:
 - `terminal/` — the pane: PTY lifecycle, terminal element, input mapping, search
 - `layout/` — tabs, title bar, split tree, session restore
 - `commands/` — actions, keymap, palette
+- `ssh/` — hosts, the ssh command, askpass (spec 0006)
 - `config.rs`, `theme.rs`, `session.rs` — files on disk
+- `secrets.rs` — the OS keychain
 - `timing.rs`, `bench.rs` — TTFP marks and the `--bench-startup` runner
 
 Modules are plain Rust that is testable without a window; GPUI views are a

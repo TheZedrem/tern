@@ -57,19 +57,21 @@ arguments, the environment or a log.
 - **Command [load-bearing]:** a config alias connects as `ssh <alias>`; a
   profile as `ssh [-l user] [-p port] [-i identity_file] <host>`, with only
   the options the profile sets, so `~/.ssh/config` still applies to it.
-- **Target:** user, host and port as ssh resolves them (`ssh -G`, run at
-  connect time, never when listing hosts: `Match exec` lines run commands,
-  TM-askpass-20). The host is `hostkeyalias` if set, else `hostname`, the
-  name ssh writes into its prompts. Passwords are keyed by target
-  (`user@host:port`) and passphrases by key path, so a profile and an
-  alias for the same server share one entry.
+- **Target:** user, host and port as ssh resolves them (`ssh -G`, run only
+  when the user connects to a host or forgets its password, never when
+  listing hosts: `Match exec` lines run commands, TM-askpass-20). The host
+  is `hostkeyalias` if set, else `hostname`, the name ssh writes into its
+  prompts. Passwords are keyed by target (`user@host:port`) and
+  passphrases by key path, so a profile and an alias for the same server
+  share one entry.
 
 ### Module surface
 
-- `ssh::hosts(config, ssh_config_path) -> Vec<Host>`, `ssh::command(&Host) -> pty::Command`
+- `ssh::hosts(config, ssh_config_path) -> Vec<Host>`, `ssh::command(&Host) -> pty::Command`, `ssh::forget(args)`
 - `ssh::askpass`: the per-app-run server, and the helper entry point that `main` runs when ssh starts zed-term as `SSH_ASKPASS`
+- `ssh::target::Target`: `resolve` (`ssh -G`) and `secret_for(prompt)`, the auto-fill patterns
 - `secrets::{get, set, delete}(key)` over `keyring`
-- New crates: `keyring` 4 (already planned), `interprocess` (Unix socket or named pipe), `getrandom` (connection tokens), `zeroize` (overwriting secrets after use; OQ-016)
+- New crates: `keyring` 4 (already planned), `interprocess` (Unix socket or named pipe), `getrandom` (connection tokens), `zeroize` (overwriting secrets after use; OQ-016), and on Windows `widestring`, the type interprocess takes the pipe's security descriptor in
 
 ### Flows
 
@@ -134,9 +136,10 @@ arguments, the environment or a log.
    - Esc cancels: the helper exits 1 and ssh counts a failed attempt.
    - A secret is held only between the keychain or the dialog and the
      socket write, in a buffer that `zeroize` overwrites when it's dropped,
-     in the app and in the helper; keychain calls run on the background
-     executor with a timeout that counts as nothing stored (TM-askpass-13,
-     -17).
+     in the app and in the helper; keychain calls run on a thread of their
+     own with a timeout that counts as nothing stored (TM-askpass-13,
+     -17). The dialog's text field is the widget library's and isn't
+     overwritten; it's cleared as soon as the answer is taken from it.
 5. **Drop:** when ssh exits with 255 (connection failed or lost), the pane
    stays open with `[connection closed: press Enter to reconnect]`, and
    Enter reruns the same command. Other exits follow `close_on_exit`
@@ -145,8 +148,12 @@ arguments, the environment or a log.
    it shows `Press Enter to connect to <label>`. Connecting at boot would
    be network at startup (architecture §Ground rules). The same holds for
    the first tab when `default_profile` is an SSH profile.
-7. **Forget:** the picker offers "Forget saved password" on a host that
-   has one.
+7. **Forget:** "Forget saved password…" (`host.forget`) opens the host
+   picker; picking a host resolves its target and forgets the password and
+   key passphrases saved for it, with a notice naming what was forgotten,
+   or saying nothing was saved. Knowing beforehand which hosts have one
+   would take `ssh -G` while browsing (TM-askpass-20) or listing the
+   keychain.
 8. **Failures:** no `ssh` on `PATH` shows that in the pane, with how to
    install the OpenSSH client on this OS. No keychain provider (no Secret
    Service running) hides "Remember" and shows a notice once; connecting

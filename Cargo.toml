@@ -20,6 +20,16 @@ serde-saphyr = "2"
 dirs = "7"
 # Config hot reload (spec 0005). gpui-component already depends on it.
 notify = "8.2"
+# ssh's prompts answered in the app, and the passwords it remembers (spec
+# 0006, threat model 0001).
+keyring = "4.2"
+interprocess = "2.4"
+getrandom = "0.4"
+zeroize = "1"
+
+[target.'cfg(windows)'.dependencies]
+# What interprocess takes the askpass pipe's security descriptor as.
+widestring = "1"
 
 [profile.release]
 codegen-units = 1

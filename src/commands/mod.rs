@@ -34,6 +34,9 @@ actions!(
         OpenConfig,
         /// Opens the host picker (spec 0006).
         ConnectToHost,
+        /// Opens the host picker to forget what's saved for a host (spec
+        /// 0006, flow 7).
+        ForgetPassword,
     ]
 );
 
@@ -90,6 +93,9 @@ pub const COMMANDS: &[AppCommand] = &[
     }),
     command("host.connect", Some("Connect to host…"), || {
         Box::new(ConnectToHost)
+    }),
+    command("host.forget", Some("Forget saved password…"), || {
+        Box::new(ForgetPassword)
     }),
     command("theme.select", Some("Select theme"), || {
         Box::new(SelectTheme)
@@ -205,6 +211,20 @@ mod tests {
         let action = (command.action)();
         assert!(
             action.as_any().downcast_ref::<ConnectToHost>().is_some(),
+            "runs {}",
+            action.name()
+        );
+    }
+
+    /// Spec 0006, flow 7: "Forget saved password…" is in the palette,
+    /// bindable as `host.forget`, and opens the host picker to forget with.
+    #[test]
+    fn forgetting_a_saved_password_is_in_the_palette_and_bindable_as_host_forget() {
+        let command = by_id("host.forget").expect("no command has the ID `host.forget`");
+        assert_eq!(command.title, Some("Forget saved password…"));
+        let action = (command.action)();
+        assert!(
+            action.as_any().downcast_ref::<ForgetPassword>().is_some(),
             "runs {}",
             action.name()
         );

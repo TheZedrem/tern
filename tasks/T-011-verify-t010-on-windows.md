@@ -24,7 +24,16 @@ SSH profile connects through the built-in `ssh.exe`, a dropped connection
 (exit 255) offers Enter to reconnect, and with the OpenSSH Client feature
 turned off the pane says how to turn it on. For T-013: the host picker
 lists the hosts of `%USERPROFILE%\.ssh\config`, including ones from an
-`Include` with backslashes in its path. Fix what fails. Area: src.
+`Include` with backslashes in its path. For T-014 (threat model 0001,
+TM-askpass-01 and -02): `ssh.exe` asks through the app (the host-key
+dialog appears, with No focused); the pipe's DACL (`D:P(A;;GA;;;OW)`)
+lets only the user open it; starting a second zed-term opens its own pipe;
+a squatted pipe name fails the start (`FILE_FLAG_FIRST_PIPE_INSTANCE`)
+and a helper pointed at a pipe of another process exits 1; the server's
+nonblocking pipe reads notice a helper that ssh ended; a remembered
+password logs in through Credential Manager (AC10); and a key passphrase
+is filled in, which depends on how `ssh.exe` writes `~` and `\` into its
+prompt. Fix what fails. Area: src.
 
 Spec: ../spec/0001-startup-performance.md (AC8)
 Spec: ../spec/0002-terminal-pane.md (spawn, input, resize, exit on Windows)

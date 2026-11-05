@@ -9,10 +9,11 @@ pub mod tree;
 use crate::commands::palette::{Entry, Palette, PaletteEvent};
 use crate::commands::{
     self, ClosePane, CloseTab, ConnectToHost, DecreaseFontSize, FocusDown, FocusLeft, FocusRight,
-    FocusUp, GoToTab, IncreaseFontSize, NewTab, NextTab, OpenConfig, OpenPalette, PreviousTab,
-    RenameTab, ResetFontSize, SelectTheme, SplitDown, SplitRight, ZoomPane,
+    FocusUp, ForgetPassword, GoToTab, IncreaseFontSize, NewTab, NextTab, OpenConfig, OpenPalette,
+    PreviousTab, RenameTab, ResetFontSize, SelectTheme, SplitDown, SplitRight, ZoomPane,
 };
-use crate::config::{self, Config, Profile};
+use crate::config::{self, Config, Profile, ProfileKind};
+use crate::secrets;
 use crate::ssh;
 use crate::terminal::pty::{self, Command, GridSize};
 use crate::terminal::{
@@ -167,6 +168,8 @@ pub struct Workspace {
     notices: Vec<String>,
     /// TTFP for the dev badge, once the first frame was drawn.
     ttfp: Option<f64>,
+    /// "There is no keychain" was said; it's said once (spec 0006, flow 8).
+    keychain_missing: bool,
     rename: Option<Rename>,
     rename_subscription: Option<Subscription>,
     /// A mouse press on the title bar's empty area that may become a move.
@@ -214,6 +217,7 @@ impl Workspace {
             bench,
             notices,
             ttfp: None,
+            keychain_missing: false,
             rename: None,
             rename_subscription: None,
             title_bar_pressed: false,
@@ -251,7 +255,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let (settings, bench) = (self.pane_settings(theme), self.bench);
-        let pane = cx.new(|cx| TerminalPane::new(start, launch, profile, settings, bench, cx));
+        let pane =
+            cx.new(|cx| TerminalPane::new(start, launch, profile, settings, bench, window, cx));
         let subscription = cx.subscribe_in(&pane, window, move |this, _, event, window, cx| {
             this.pane_event(leaf, event, window, cx);
         });
@@ -290,16 +295,8 @@ impl Workspace {
             (f32::from(viewport.width), f32::from(viewport.height)),
             self.font.estimated_cell(),
         );
-        let session = pty::spawn(
-            &launch.command,
-            grid,
-            launch.cwd.as_deref(),
-            self.config.scrollback as usize,
-            Arc::clone(&self.timing),
-        );
         let profile = PaneProfile::from(&profile);
-        let start = Start::Started(session);
-        self.add_pane(leaf, start, launch, profile, theme, window, cx);
+        self.add_pane(leaf, Start::Now(grid), launch, profile, theme, window, cx);
     }
 
     /// The palette of a pane whose profile names theme `name` (`None`:
@@ -345,6 +342,23 @@ impl Workspace {
             }
             PaneEvent::TitleChanged => cx.notify(),
             PaneEvent::Exited => self.close_pane(leaf, window, cx),
+            // The keyboard follows a prompt dialog of the focused pane in and
+            // out, unless the palette or a rename has it.
+            PaneEvent::DialogChanged => {
+                if leaf == self.tabs.active().focused
+                    && self.palette.is_none()
+                    && self.rename.is_none()
+                {
+                    self.focus_active(window, cx);
+                }
+                cx.notify();
+            }
+            PaneEvent::Notice(notice) => show_notice(notice.clone(), window, cx),
+            PaneEvent::NoKeychain => {
+                if !std::mem::replace(&mut self.keychain_missing, true) {
+                    show_notice(secrets::UNAVAILABLE.into(), window, cx);
+                }
+            }
         }
     }
 
@@ -517,10 +531,32 @@ impl Workspace {
         });
     }
 
+    /// Opens the host picker to connect to a host (spec 0006, flow 1).
+    fn connect_to_host(&mut self, _: &ConnectToHost, window: &mut Window, cx: &mut Context<Self>) {
+        self.pick_host(Entry::Host, "Connect to a host", window, cx);
+    }
+
+    /// Opens the host picker to forget what's saved for a host (spec 0006,
+    /// flow 7).
+    fn forget_password(&mut self, _: &ForgetPassword, window: &mut Window, cx: &mut Context<Self>) {
+        self.pick_host(
+            Entry::ForgetHost,
+            "Forget the password saved for a host",
+            window,
+            cx,
+        );
+    }
+
     /// Opens the host picker over the SSH profiles and the hosts of
     /// `~/.ssh/config`, which is read each time, off the UI thread, so its
-    /// edits show (spec 0006, flow 1).
-    fn connect_to_host(&mut self, _: &ConnectToHost, window: &mut Window, cx: &mut Context<Self>) {
+    /// edits show. `entry` says what picking a host does.
+    fn pick_host(
+        &mut self,
+        entry: fn(ssh::Host) -> Entry,
+        placeholder: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let profiles = self.config.profiles.clone();
         let found = cx.background_spawn(async move {
             let path = ssh::config_path().unwrap_or_default();
@@ -532,14 +568,43 @@ impl Workspace {
                 for notice in notices {
                     show_notice(notice, window, cx);
                 }
-                let entries = hosts.into_iter().map(Entry::Host).collect();
+                let entries = hosts.into_iter().map(entry).collect();
                 this.show_palette(None, window, cx, |window, cx| {
-                    Palette::new(entries, "Connect to a host", None, window, cx).with_empty(
+                    Palette::new(entries, placeholder, None, window, cx).with_empty(
                         "No hosts yet: add `type: ssh` profiles to config.yaml, \
                          or hosts to ~/.ssh/config",
                     )
                 });
             });
+        })
+        .detach();
+    }
+
+    /// Forgets the password and key passphrases saved for host `id`, with
+    /// a notice saying what was forgotten. Only this asks ssh where the host
+    /// connects, besides connecting (TM-askpass-20), and it runs off the UI
+    /// thread.
+    fn forget_host(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(profile) = self.config.profile(id) else {
+            return;
+        };
+        let ProfileKind::Ssh(remote) = &profile.kind else {
+            return;
+        };
+        let args = ssh::command(remote).args;
+        let label = profile.display_name().to_owned();
+        let forgotten = secrets::off_thread(move || ssh::forget(&args));
+        cx.spawn_in(window, async move |this, cx| {
+            let notice = match forgotten.await {
+                Ok(Ok(keys)) if keys.is_empty() => format!("Nothing was saved for {label}."),
+                Ok(Ok(keys)) => {
+                    let described: Vec<String> = keys.iter().map(secrets::Key::describe).collect();
+                    format!("Forgot {}.", described.join(", "))
+                }
+                Ok(Err(error)) => format!("Nothing was forgotten for {label}: {error}"),
+                Err(_) => format!("Nothing was forgotten for {label}."),
+            };
+            let _ = this.update_in(cx, |_, window, cx| show_notice(notice, window, cx));
         })
         .detach();
     }
@@ -614,6 +679,7 @@ impl Workspace {
                 let leaf = self.tabs.new_tab();
                 self.spawn_pane(leaf, profile, None, window, cx);
             }
+            PaletteEvent::ForgetHost(id) => self.forget_host(id, window, cx),
             PaletteEvent::PreviewTheme(name) => {
                 self.theme = self.theme_for(Some(name), window, cx);
                 self.apply_settings(cx);
@@ -742,7 +808,7 @@ impl Workspace {
     /// Moves keyboard focus to the active tab's focused pane.
     fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(pane) = self.panes.get(&self.tabs.active().focused) {
-            let handle = pane.read(cx).focus_handle().clone();
+            let handle = pane.read(cx).focus_handle(cx);
             window.focus(&handle, cx);
         }
     }
@@ -1393,6 +1459,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_palette))
             .on_action(cx.listener(Self::select_theme))
             .on_action(cx.listener(Self::connect_to_host))
+            .on_action(cx.listener(Self::forget_password))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.close_tab(this.tabs.active_index(), window, cx);
             }))
