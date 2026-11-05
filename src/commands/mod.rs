@@ -48,6 +48,8 @@ actions!(
         Paste,
         /// Opens the focused pane's search bar (spec 0002, flow 6).
         Search,
+        /// Opens the settings screen (spec 0009).
+        OpenSettings,
     ]
 );
 
@@ -123,6 +125,9 @@ pub const COMMANDS: &[AppCommand] = &[
     }),
     command("theme.select", Some("Select theme"), || {
         Box::new(SelectTheme)
+    }),
+    command("settings.open", Some("Open settings"), || {
+        Box::new(OpenSettings)
     }),
     command("config.open", Some("Open config file"), || {
         Box::new(OpenConfig)

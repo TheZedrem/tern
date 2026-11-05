@@ -166,6 +166,9 @@ Each spec's **Security & privacy** section says which of them it touches.
 - Tests written and passing; `cargo fmt`, `clippy` and `cargo test` green.
 - TTFP reported if the boot path was touched.
 - Docs and specs updated where reality diverged, and the backlog updated.
+- A new or changed setting (config key, keybinding-able command, profile
+  field) is on the settings screen in the same change, with its template
+  line in `src/default-config.yaml` (spec 0009; the owner's standing rule).
 
 ## Skills
 

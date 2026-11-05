@@ -42,7 +42,9 @@ paste, the search bar finds text in the scrollback, a click on an
 the wheel scrolls the scrollback and `less`, an IME (Japanese or Chinese)
 composes at the cursor, and closing the window leaves no `pwsh` or
 `conhost` behind. For T-006: a relaunch restores the tabs, splits and the
-window size. Fix what fails. Area: src.
+window size. For T-017: the settings screen changes the font size in
+`%APPDATA%\zed-term\config.yaml` in place (CRLF kept), and recording a
+key works with the Windows key mapper. Fix what fails. Area: src.
 
 Spec: ../spec/0001-startup-performance.md (AC8)
 Spec: ../spec/0002-terminal-pane.md (spawn, input, resize, exit on Windows)

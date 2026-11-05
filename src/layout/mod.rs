@@ -11,12 +11,13 @@ use crate::commands::palette::{Entry, Palette, PaletteEvent};
 use crate::commands::{
     self, ClosePane, CloseTab, ConnectToHost, CopySelection, DecreaseFontSize, FocusDown,
     FocusLeft, FocusRight, FocusUp, ForgetPassword, GoToTab, IncreaseFontSize, NewTab, NextTab,
-    OpenConfig, OpenPalette, Paste, PreviousTab, RenameTab, ResetFontSize, Search, SelectTheme,
-    SplitDown, SplitDownWithProfile, SplitRight, SplitRightWithProfile, ZoomPane,
+    OpenConfig, OpenPalette, OpenSettings, Paste, PreviousTab, RenameTab, ResetFontSize, Search,
+    SelectTheme, SplitDown, SplitDownWithProfile, SplitRight, SplitRightWithProfile, ZoomPane,
 };
 use crate::config::{self, Config, Profile, ProfileKind};
 use crate::secrets;
 use crate::session::{self, SavedLeaf, SavedNode, SavedTab, Session, WindowSize};
+use crate::settings::{self, Pick, SettingsEvent, SettingsView, change::Change};
 use crate::ssh;
 use crate::terminal::pty::{self, Command, GridSize};
 use crate::terminal::{
@@ -30,9 +31,10 @@ use futures::channel::mpsc::unbounded;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, AnyElement, App, AppContext, Bounds, ClickEvent, Context, Decorations, Div,
-    DragMoveEvent, ElementId, Entity, InteractiveElement, IntoElement, KeyBinding, MouseButton,
-    ParentElement, Pixels, Point, Render, SharedString, Size, Stateful, StatefulInteractiveElement,
-    Styled, Subscription, Task, Window, WindowAppearance, actions, canvas, div, px,
+    DragMoveEvent, ElementId, Entity, Focusable, InteractiveElement, IntoElement, KeyBinding,
+    MouseButton, ParentElement, Pixels, Point, Render, SharedString, Size, Stateful,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, WindowAppearance, actions,
+    canvas, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -257,6 +259,12 @@ pub fn restored_profile(config: &Config, id: &str, notices: &mut Vec<String>) ->
     })
 }
 
+/// The settings screen while it's open (spec 0009).
+struct SettingsScreen {
+    view: Entity<SettingsView>,
+    _events: Subscription,
+}
+
 /// The palette while it's open.
 struct OpenPaletteView {
     view: Entity<Palette>,
@@ -280,6 +288,8 @@ pub struct Workspace {
     /// `theme.default`, resolved.
     theme: Theme,
     palette: Option<OpenPaletteView>,
+    /// The settings screen while it's open (spec 0009).
+    settings: Option<SettingsScreen>,
     /// The themes profiles name, resolved so far, by the name as written.
     themes: HashMap<String, Theme>,
     /// The OS is in light mode, which `system` follows. Dark until the
@@ -358,6 +368,7 @@ impl Workspace {
             font,
             theme,
             palette: None,
+            settings: None,
             themes,
             light: false,
             watcher: None,
@@ -666,6 +677,7 @@ impl Workspace {
                 if leaf == self.tabs.active().focused
                     && self.palette.is_none()
                     && self.rename.is_none()
+                    && self.settings.is_none()
                 {
                     self.focus_active(window, cx);
                 }
@@ -816,6 +828,12 @@ impl Workspace {
             None => self.theme = theme,
         }
         self.apply_settings(cx);
+        if let Some(screen) = &self.settings {
+            let config = self.config.clone();
+            screen
+                .view
+                .update(cx, |view, cx| view.set_config(config, window, cx));
+        }
         for notice in notices {
             show_notice(notice, window, cx);
         }
@@ -1046,6 +1064,7 @@ impl Workspace {
                 self.theme = self.theme_for(Some(name), window, cx);
                 self.apply_settings(cx);
             }
+            PaletteEvent::Change(change) => self.write_change(change.clone(), window, cx),
             PaletteEvent::ChooseTheme(name) => {
                 if let Some(open) = &mut self.palette {
                     open.saved_theme = None;
@@ -1164,13 +1183,150 @@ impl Workspace {
         .detach();
     }
 
+    /// Opens the settings screen over the window (spec 0009, flow 1).
+    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_none() {
+            let config = self.config.clone();
+            let view = cx.new(|cx| SettingsView::new(config, window, cx));
+            let events = cx.subscribe_in(&view, window, Self::settings_event);
+            self.settings = Some(SettingsScreen {
+                view,
+                _events: events,
+            });
+        }
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    fn settings_event(
+        &mut self,
+        _: &Entity<SettingsView>,
+        event: &SettingsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            SettingsEvent::Change(change) => self.write_change(change.clone(), window, cx),
+            SettingsEvent::Pick(pick) => self.pick_setting(*pick, window, cx),
+            SettingsEvent::Close => {
+                self.settings = None;
+                self.focus_active(window, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Writes `change` into `config.yaml` off the UI thread; the watcher's
+    /// reload applies it (spec 0009, flow 2). A failure says why.
+    fn write_change(&mut self, change: Change, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = config::default_path() else {
+            show_notice("This system has no config directory.".into(), window, cx);
+            return;
+        };
+        let saved = cx
+            .background_spawn(async move { config::save_edit(&path, |text| change.edited(text)) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = saved.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                // Saving may have created the config directory.
+                if let Some(watcher) = &mut this.watcher {
+                    watcher.arm();
+                }
+                if let Err(error) = result {
+                    show_notice(error, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Opens the palette as a picker for a setting the screen lists
+    /// (spec 0009): fonts and default profiles here, themes as the theme
+    /// picker does.
+    fn pick_setting(&mut self, pick: Pick, window: &mut Window, cx: &mut Context<Self>) {
+        let (entries, placeholder): (Vec<Entry>, &str) = match pick {
+            Pick::Theme => return self.select_theme(&SelectTheme, window, cx),
+            Pick::Font => {
+                let current = self.config.font.family.clone();
+                let mut names = cx.text_system().all_font_names();
+                names.sort();
+                names.dedup();
+                let bundled = Entry::Setting {
+                    title: format!("{} (bundled)", crate::terminal::DEFAULT_FONT_FAMILY),
+                    current: current.is_none(),
+                    change: font_family(None),
+                };
+                let installed = names.into_iter().map(|name| Entry::Setting {
+                    current: current.as_deref() == Some(name.as_str()),
+                    change: font_family(Some(&name)),
+                    title: name,
+                });
+                (
+                    std::iter::once(bundled).chain(installed).collect(),
+                    "Pick a font",
+                )
+            }
+            Pick::DefaultProfile => {
+                let current = self.config.default_profile().id;
+                let entries = self
+                    .profiles()
+                    .into_iter()
+                    .map(|profile| Entry::Setting {
+                        title: profile.display_name().to_owned(),
+                        current: profile.id == current,
+                        change: Change::Set {
+                            path: vec!["default_profile"],
+                            value: settings::yaml::scalar(&profile.id),
+                            reads: |config| settings::yaml::scalar(&config.default_profile().id),
+                        },
+                    })
+                    .collect();
+                (entries, "Pick the profile new tabs open")
+            }
+        };
+        self.show_palette(None, window, cx, |window, cx| {
+            Palette::new(entries, placeholder, None, window, cx)
+        });
+    }
+
+    /// The settings screen, centered over the tab content.
+    fn render_settings(&self) -> Option<impl IntoElement> {
+        let screen = self.settings.as_ref()?;
+        Some(
+            div()
+                .id("settings-backdrop")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::black().opacity(0.3))
+                // The panes below get no clicks, which would take the
+                // keyboard from the screen's fields.
+                .occlude()
+                .child(
+                    div()
+                        .w(gpui::relative(0.9))
+                        .max_w(px(760.))
+                        .h(gpui::relative(0.9))
+                        .child(screen.view.clone()),
+                ),
+        )
+    }
+
     /// The shown tab's focused pane, which copy, paste and search act on.
     fn focused_pane(&self) -> Option<Entity<TerminalPane>> {
         self.panes.get(&self.tabs.active().focused).cloned()
     }
 
     /// Moves keyboard focus to the active tab's focused pane.
+    /// While the settings screen is open, the keyboard is its.
     fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(screen) = &self.settings {
+            let handle = screen.view.focus_handle(cx);
+            window.focus(&handle, cx);
+            return;
+        }
         if let Some(pane) = self.panes.get(&self.tabs.active().focused) {
             let handle = pane.read(cx).focus_handle(cx);
             window.focus(&handle, cx);
@@ -1989,6 +2145,21 @@ impl Workspace {
     }
 }
 
+/// The change that sets `font.family`; `None` is the bundled font.
+fn font_family(name: Option<&str>) -> Change {
+    Change::Set {
+        path: vec!["font", "family"],
+        value: name.map_or_else(|| "null".to_owned(), settings::yaml::scalar),
+        reads: |config| {
+            config
+                .font
+                .family
+                .as_deref()
+                .map_or_else(|| "null".to_owned(), settings::yaml::scalar)
+        },
+    }
+}
+
 /// The window's size in logical pixels, as the session keeps it.
 fn window_size(window: &Window) -> WindowSize {
     let size = window.window_bounds().get_bounds().size;
@@ -2097,6 +2268,7 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(Self::open_palette))
+            .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::select_theme))
             .on_action(cx.listener(Self::connect_to_host))
             .on_action(cx.listener(Self::forget_password))
@@ -2123,6 +2295,7 @@ impl Render for Workspace {
                     .relative()
                     .child(content)
                     .child(measure_size(Rc::clone(&self.content_size)))
+                    .children(self.render_settings())
                     .children(self.render_palette(cx)),
             )
             .children(badge);

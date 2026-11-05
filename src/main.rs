@@ -9,6 +9,7 @@ mod config;
 mod layout;
 mod secrets;
 mod session;
+mod settings;
 mod ssh;
 mod terminal;
 mod theme;
@@ -169,6 +170,7 @@ fn main() {
         let (font, font_notice) = FontSettings::checked(&config.font, cx);
         boot_notices.extend(font_notice);
         layout::init(cx);
+        settings::init(cx);
         gpui_component::init(cx);
         // Everything bound so far stays when a reload rebinds the commands.
         commands::keymap::keep_library(cx);

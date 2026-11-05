@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 1
 tasks: [T-017, T-011]
 related: [spec 0004, spec 0005, spec 0006, OQ-010 ✅]
@@ -58,12 +58,20 @@ can be changed from the screen, the change applies within a second, and
   flow 5).
 - **No secrets [load-bearing]:** the profile form has no password field.
   Passwords stay in the keychain, offered at connect time (spec 0006).
+- **Always complete [load-bearing]:** every setting a user can set in
+  `config.yaml` has its field here. A task that adds or changes one adds
+  its field in the same change (AGENTS.md, Definition of Done; the owner's
+  standing rule). Commands come from the command list and profiles from
+  the config, so new ones appear by themselves.
 
 ### Flows
 
 1. **Open:** the palette command shows the screen as a panel over the
    window; Esc or its close button leaves it. It shows the config as
-   loaded, and follows reloads while open.
+   loaded, and follows reloads while open. Like Tabby's, it has tabs down
+   its left side (General, Appearance, Terminal, Keyboard, Profiles), each
+   grouping its settings under headings; the panes below take no clicks
+   while it's open.
 2. **Change a value:** a field's change is written when it's committed
    (Enter, leaving the field, picking from a list), then applies live.
    An invalid value can't be committed: the field says why.
@@ -76,6 +84,11 @@ can be changed from the screen, the change applies within a second, and
    deleting it asks first and removes its block only.
 5. **Failure:** a write that fails or is refused shows a notice and leaves
    the field showing what the file holds.
+6. **Search:** the screen opens with the keyboard in its search field.
+   A query shows every setting, keybinding and profile across all tabs
+   whose label, group, tab or keywords (like "zoom" for the font size or
+   "url" for links) have words starting with each of its words, under
+   "Tab · Group" headings; an empty query shows the tab again.
 
 ### Startup impact
 

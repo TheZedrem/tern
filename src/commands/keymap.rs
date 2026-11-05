@@ -13,7 +13,7 @@ use std::rc::Rc;
 pub const CONTEXT: &str = "Workspace";
 
 /// The OS whose key names keystrokes are read with.
-const OS: OperatingSystem = if cfg!(target_os = "macos") {
+pub const OS: OperatingSystem = if cfg!(target_os = "macos") {
     OperatingSystem::Mac
 } else if cfg!(windows) {
     OperatingSystem::Windows

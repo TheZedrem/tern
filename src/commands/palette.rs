@@ -7,6 +7,7 @@
 
 use super::{AppCommand, fuzzy};
 use crate::layout::tree::Axis;
+use crate::settings::change::Change;
 use crate::ssh::Host;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render,
@@ -35,6 +36,13 @@ pub enum Entry {
     /// Splits the focused pane along `axis` with the host or local profile
     /// (spec 0007, flow 6).
     SplitWith { host: Host, axis: Axis },
+    /// A value for a setting the settings screen picks from a list (spec
+    /// 0009); `current` is the one the file has.
+    Setting {
+        title: String,
+        current: bool,
+        change: Change,
+    },
 }
 
 impl Entry {
@@ -42,6 +50,7 @@ impl Entry {
         match self {
             Entry::Command { title, .. } => title,
             Entry::Profile { title, .. } => title,
+            Entry::Setting { title, .. } => title,
             Entry::Theme { name, .. } => name,
             Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. } => {
                 &host.label
@@ -87,6 +96,9 @@ impl Entry {
             Entry::Theme { name, current } => {
                 CommandItem::new().label(name.clone()).checked(*current)
             }
+            Entry::Setting { title, current, .. } => {
+                CommandItem::new().label(title.clone()).checked(*current)
+            }
             Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. } => {
                 CommandItem::new().label(host.label.clone())
             }
@@ -108,6 +120,8 @@ pub enum PaletteEvent {
     PreviewTheme(String),
     /// Save theme `name` as `theme.default`.
     ChooseTheme(String),
+    /// Write a setting picked from a list (spec 0009).
+    Change(Change),
     /// Done: after running an entry, or `cancelled` by Esc.
     Closed {
         cancelled: bool,
@@ -221,6 +235,7 @@ impl Palette {
                 axis: *axis,
             }),
             Some(Entry::Theme { name, .. }) => cx.emit(PaletteEvent::ChooseTheme(name.clone())),
+            Some(Entry::Setting { change, .. }) => cx.emit(PaletteEvent::Change(change.clone())),
             // A command has run through its action already.
             Some(Entry::Command { .. }) | None => {}
         }

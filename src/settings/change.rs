@@ -1,0 +1,537 @@
+//! What the settings screen changes in `config.yaml` (spec 0009): in-place
+//! edits that are written only if the file then reads back as asked, with
+//! no new config notice.
+
+use super::yaml;
+use crate::config::{self, Config, Profile, ProfileKind};
+use std::path::Path;
+
+#[derive(Clone, Debug)]
+pub enum Change {
+    /// The scalar at `path`, like `font.size`, set to `value`, already
+    /// YAML. `reads` is how the loaded config says that setting, in the
+    /// same YAML, so the edit can be checked.
+    Set {
+        path: Vec<&'static str>,
+        value: String,
+        reads: fn(&Config) -> String,
+    },
+    /// `keys`, in config's spelling like `ctrl+shift+k`, run `command`, and
+    /// no other key the user set does; `None` gives it its default keys
+    /// back (spec 0004).
+    Bind {
+        command: &'static str,
+        keys: Option<String>,
+    },
+    /// Profile `id` written as `profile`, added or rewritten; `None`
+    /// deletes it.
+    Profile {
+        id: String,
+        profile: Option<Box<ProfileForm>>,
+    },
+}
+
+impl Change {
+    /// What a notice calls it.
+    pub fn describe(&self) -> String {
+        match self {
+            Change::Set { path, .. } => path.join("."),
+            Change::Bind { command, .. } => format!("keybindings (for {command})"),
+            Change::Profile { id, .. } => format!("profiles.{id}"),
+        }
+    }
+
+    /// `text` with the change, or `None` if it can't be made in place.
+    pub fn apply(&self, text: &str) -> Option<String> {
+        match self {
+            Change::Set { path, value, .. } => yaml::set_scalar(text, path, value),
+            Change::Bind { command, keys } => {
+                let text = yaml::remove_where(text, "keybindings", |_, bound| bound == *command)?;
+                match keys {
+                    Some(keys) => yaml::upsert(
+                        &text,
+                        &["keybindings", keys],
+                        &[format!("{}: {command}", yaml::key_text(keys))],
+                    ),
+                    None => Some(text),
+                }
+            }
+            Change::Profile { id, profile } => match profile {
+                Some(form) => yaml::upsert(text, &["profiles", id], &form.lines(id)),
+                None => yaml::remove(text, &["profiles", id]),
+            },
+        }
+    }
+
+    /// Whether `after` is `before` with this change, and nothing broke:
+    /// no notice the file didn't have.
+    pub fn holds(&self, before: &config::Loaded, after: &config::Loaded) -> bool {
+        if after.notices.len() > before.notices.len() {
+            return false;
+        }
+        let config = &after.config;
+        match self {
+            Change::Set { value, reads, .. } => reads(config) == *value,
+            Change::Bind { command, keys } => {
+                let bound: Vec<&str> = config
+                    .keybindings
+                    .iter()
+                    .filter(|binding| binding.command == *command)
+                    .map(|binding| binding.keys.as_str())
+                    .collect();
+                match keys {
+                    Some(keys) => bound == [keys.as_str()],
+                    None => bound.is_empty(),
+                }
+            }
+            Change::Profile { id, profile } => {
+                config.profiles.iter().any(|found| found.id == *id) == profile.is_some()
+            }
+        }
+    }
+
+    /// `text` with the change, checked to read back as asked.
+    pub fn edited(&self, text: &str) -> Result<String, String> {
+        let refused = || {
+            format!(
+                "config.yaml writes {} in a way the settings can't change safely; \
+                 change it there yourself",
+                self.describe()
+            )
+        };
+        let edited = self.apply(text).ok_or_else(refused)?;
+        if self.holds(&config::parse(text), &config::parse(&edited)) {
+            Ok(edited)
+        } else {
+            Err(refused())
+        }
+    }
+}
+
+/// A profile as the form edits it: every field as typed (spec 0005, 0006).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProfileForm {
+    pub name: String,
+    pub ssh: bool,
+    /// Program and arguments, separated by spaces; empty: the login shell.
+    pub command: String,
+    pub cwd: String,
+    pub host: String,
+    pub user: String,
+    pub port: String,
+    pub identity_file: String,
+    pub group: String,
+    pub theme: String,
+    /// Kept from the profile being edited; the form doesn't show it.
+    pub env: Vec<(String, String)>,
+}
+
+impl ProfileForm {
+    /// The form for `profile`, paths under the home folder written with `~`.
+    pub fn of(profile: &Profile, home: Option<&Path>) -> Self {
+        let path = |path: &Path| match home.and_then(|home| path.strip_prefix(home).ok()) {
+            Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+            Some(rest) => format!("~/{}", rest.display()),
+            None => path.display().to_string(),
+        };
+        let mut form = Self {
+            name: profile.name.clone().unwrap_or_default(),
+            theme: profile.theme.clone().unwrap_or_default(),
+            ..Self::default()
+        };
+        match &profile.kind {
+            ProfileKind::Local(local) => {
+                form.command = local
+                    .command
+                    .as_ref()
+                    .map(|c| c.join(" "))
+                    .unwrap_or_default();
+                form.cwd = local.cwd.as_deref().map(path).unwrap_or_default();
+                form.env = local.env.clone().into_iter().collect();
+            }
+            ProfileKind::Ssh(ssh) => {
+                form.ssh = true;
+                form.host = ssh.host.clone();
+                form.user = ssh.user.clone().unwrap_or_default();
+                form.port = ssh.port.map(|port| port.to_string()).unwrap_or_default();
+                form.identity_file = ssh.identity_file.as_deref().map(path).unwrap_or_default();
+                form.group = ssh.group.clone().unwrap_or_default();
+            }
+        }
+        form
+    }
+
+    /// Why the form can't be saved yet, if anything stops it.
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.ssh && self.host.trim().is_empty() {
+            return Some("An SSH profile needs a host.");
+        }
+        let port = self.port.trim();
+        if self.ssh && !port.is_empty() && port.parse::<u16>().map_or(true, |port| port == 0) {
+            return Some("The port is a number from 1 to 65535.");
+        }
+        None
+    }
+
+    /// The profile's entry under `profiles:`, block style.
+    pub fn lines(&self, id: &str) -> Vec<String> {
+        let mut lines = vec![format!("{}:", yaml::key_text(id))];
+        let field = |key: &str, value: &str, text: fn(&str) -> String| {
+            let value = value.trim();
+            (!value.is_empty()).then(|| format!("  {key}: {}", text(value)))
+        };
+        lines.extend(field("name", &self.name, yaml::scalar));
+        lines.extend(field(
+            "type",
+            if self.ssh { "ssh" } else { "local" },
+            str::to_owned,
+        ));
+        if self.ssh {
+            lines.extend(field("host", &self.host, yaml::scalar));
+            lines.extend(field("user", &self.user, yaml::scalar));
+            lines.extend(field("port", &self.port, str::to_owned));
+            lines.extend(field("identity_file", &self.identity_file, yaml::scalar));
+            lines.extend(field("group", &self.group, yaml::scalar));
+        } else {
+            let words: Vec<String> = self.command.split_whitespace().map(yaml::scalar).collect();
+            if !words.is_empty() {
+                lines.push(format!("  command: [{}]", words.join(", ")));
+            }
+            lines.extend(field("cwd", &self.cwd, yaml::scalar));
+            if !self.env.is_empty() {
+                let pairs: Vec<String> = self
+                    .env
+                    .iter()
+                    .map(|(key, value)| format!("{}: {}", yaml::scalar(key), yaml::scalar(value)))
+                    .collect();
+                lines.push(format!("  env: {{ {} }}", pairs.join(", ")));
+            }
+        }
+        lines.extend(field("theme", &self.theme, yaml::scalar));
+        lines
+    }
+}
+
+/// An ID for a new profile named `name`, unlike any in `taken`: lowercase,
+/// words joined with `-`.
+pub fn new_id(name: &str, taken: &[String]) -> String {
+    let words: Vec<String> = name
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let base = if words.is_empty() {
+        "profile".to_owned()
+    } else {
+        words.join("-")
+    };
+    let mut id = base.clone();
+    let mut n = 2;
+    while taken.contains(&id) {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{LocalProfile, SshProfile, TEMPLATE, parse};
+    use std::path::PathBuf;
+
+    /// A config with two profiles, each with a comment, and keys around them.
+    const TWO_PROFILES: &str = "\
+# my hosts
+profiles:
+  htop:
+    name: Htop   # top
+    type: local
+    command: [htop]
+  shell:
+    type: local
+    env: { EDITOR: nvim }
+font:
+  size: 13 # pt
+";
+
+    /// The lines `before` and `after` don't share at their start and end:
+    /// what was taken out, and what was put in.
+    fn changed(before: &str, after: &str) -> (Vec<String>, Vec<String>) {
+        let (old, new): (Vec<&str>, Vec<&str>) =
+            (before.lines().collect(), after.lines().collect());
+        let head = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+        let tail = old[head..]
+            .iter()
+            .rev()
+            .zip(new[head..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let own = |lines: &[&str]| lines.iter().map(|l| (*l).to_owned()).collect();
+        (
+            own(&old[head..old.len() - tail]),
+            own(&new[head..new.len() - tail]),
+        )
+    }
+
+    fn profile(text: &str, id: &str) -> Profile {
+        let loaded = parse(text);
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        loaded
+            .config
+            .profiles
+            .into_iter()
+            .find(|p| p.id == id)
+            .unwrap()
+    }
+
+    fn ssh_form() -> ProfileForm {
+        ProfileForm {
+            name: "Web".into(),
+            ssh: true,
+            host: "web.example.com".into(),
+            user: "deploy".into(),
+            port: "2222".into(),
+            group: "Production".into(),
+            ..ProfileForm::default()
+        }
+    }
+
+    fn bind(keys: Option<&str>) -> Change {
+        Change::Bind {
+            command: "pane.splitRight",
+            keys: keys.map(str::to_owned),
+        }
+    }
+
+    /// Spec 0009, AC 1: a font size set on the template reads back as set.
+    #[test]
+    fn setting_font_size_on_the_template_reads_back() {
+        let change = Change::Set {
+            path: vec!["font", "size"],
+            value: "14".into(),
+            reads: |config| config.font.size.to_string(),
+        };
+        let edited = change.edited(TEMPLATE).unwrap();
+        assert_eq!(parse(&edited).config.font.size, 14.0);
+    }
+
+    /// Spec 0009, in-place edits and AC 6: a key in flow style isn't
+    /// written, and the notice names the key to edit by hand.
+    #[test]
+    fn a_flow_style_font_size_is_refused_with_a_notice_naming_it() {
+        let change = Change::Set {
+            path: vec!["font", "size"],
+            value: "14".into(),
+            reads: |config| config.font.size.to_string(),
+        };
+        let notice = change.edited("font: { size: 13 }\n").unwrap_err();
+        assert!(notice.contains("font.size"), "{notice}");
+    }
+
+    /// Spec 0009, in-place edits: flow-style keybindings aren't rewritten,
+    /// and the notice names `keybindings`, the key to edit by hand.
+    #[test]
+    fn flow_style_keybindings_are_refused_with_a_notice_naming_the_key() {
+        let text = "keybindings: { \"ctrl+shift+j\": pane.splitRight }\n";
+        let notice = bind(Some("ctrl+shift+k")).edited(text).unwrap_err();
+        assert!(notice.contains("keybindings"), "{notice}");
+    }
+
+    /// Spec 0009, flow 3 and AC 3: recording a key replaces the command's
+    /// old binding in an existing `keybindings:` block, and leaves the
+    /// others.
+    #[test]
+    fn recording_a_key_replaces_the_commands_old_binding() {
+        let text = "keybindings:\n  \"ctrl+shift+j\": pane.splitRight\n  ctrl+shift+n: tab.new\n";
+        let edited = bind(Some("ctrl+shift+k")).edited(text).unwrap();
+        let bound: Vec<(String, String)> = parse(&edited)
+            .config
+            .keybindings
+            .into_iter()
+            .map(|b| (b.keys, b.command))
+            .collect();
+        assert_eq!(bound.len(), 2, "{bound:?}");
+        assert!(bound.contains(&("ctrl+shift+k".into(), "pane.splitRight".into())));
+        assert!(bound.contains(&("ctrl+shift+n".into(), "tab.new".into())));
+    }
+
+    /// Spec 0009, flow 3: on the template, whose `keybindings` is only a
+    /// comment, recording a key adds a block and keeps the comment.
+    #[test]
+    fn recording_a_key_on_the_template_adds_a_keybindings_block() {
+        let edited = bind(Some("ctrl+shift+k")).edited(TEMPLATE).unwrap();
+        let (gone, added) = changed(TEMPLATE, &edited);
+        assert!(gone.is_empty(), "{gone:?}");
+        assert!(added.iter().any(|line| line == "keybindings:"), "{added:?}");
+        let bindings = parse(&edited).config.keybindings;
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(
+            (bindings[0].keys.as_str(), bindings[0].command.as_str()),
+            ("ctrl+shift+k", "pane.splitRight")
+        );
+    }
+
+    /// Spec 0009, flow 3: "Reset" removes the command's entry, and only it.
+    #[test]
+    fn resetting_a_key_removes_its_entry() {
+        let text =
+            "keybindings:\n  ctrl+shift+k: pane.splitRight # mine\n  ctrl+shift+n: tab.new\n";
+        let edited = bind(None).edited(text).unwrap();
+        assert_eq!(edited, "keybindings:\n  ctrl+shift+n: tab.new\n");
+    }
+
+    /// Spec 0009, flow 4 and AC 4: an added SSH profile goes in as a block
+    /// under `profiles:`, and deleting it gives back the file as it was.
+    #[test]
+    fn an_added_profile_deleted_again_leaves_the_file_as_it_was() {
+        let add = Change::Profile {
+            id: "web".into(),
+            profile: Some(Box::new(ssh_form())),
+        };
+        let added = add.edited(TWO_PROFILES).unwrap();
+        let (gone, new) = changed(TWO_PROFILES, &added);
+        assert!(gone.is_empty(), "{gone:?}");
+        assert!(new.iter().all(|line| line.starts_with("  ")), "{new:?}");
+        let ProfileKind::Ssh(ssh) = profile(&added, "web").kind else {
+            panic!("not an SSH profile");
+        };
+        assert_eq!(ssh.host, "web.example.com");
+
+        let delete = Change::Profile {
+            id: "web".into(),
+            profile: None,
+        };
+        assert_eq!(delete.edited(&added).unwrap(), TWO_PROFILES);
+    }
+
+    /// Spec 0009, flow 4: editing a profile rewrites its block only.
+    #[test]
+    fn editing_a_profile_changes_only_its_lines() {
+        let mut form = ProfileForm::of(&profile(TWO_PROFILES, "htop"), None);
+        form.name = "Top".into();
+        let edit = Change::Profile {
+            id: "htop".into(),
+            profile: Some(Box::new(form)),
+        };
+        let edited = edit.edited(TWO_PROFILES).unwrap();
+        let (gone, _) = changed(TWO_PROFILES, &edited);
+        assert_eq!(gone, ["    name: Htop   # top"]);
+        assert_eq!(profile(&edited, "htop").name.as_deref(), Some("Top"));
+        assert!(edited.contains("    env: { EDITOR: nvim }\nfont:\n  size: 13 # pt\n"));
+    }
+
+    /// Spec 0009, flow 4: a local profile's `env`, which the form doesn't
+    /// show, survives an edit.
+    #[test]
+    fn a_local_profiles_env_survives_an_edit() {
+        let mut form = ProfileForm::of(&profile(TWO_PROFILES, "shell"), None);
+        form.cwd = "~/projects".into();
+        let edit = Change::Profile {
+            id: "shell".into(),
+            profile: Some(Box::new(form)),
+        };
+        let edited = edit.edited(TWO_PROFILES).unwrap();
+        let ProfileKind::Local(local) = profile(&edited, "shell").kind else {
+            panic!("not a local profile");
+        };
+        assert_eq!(local.env.get("EDITOR").map(String::as_str), Some("nvim"));
+    }
+
+    /// Spec 0009, no secrets and AC 7: an SSH profile's block holds host,
+    /// user, port and group, and never a password.
+    #[test]
+    fn an_ssh_profiles_lines_hold_its_fields_and_no_password() {
+        let lines = ssh_form().lines("web");
+        for field in [
+            "  host: web.example.com",
+            "  user: deploy",
+            "  port: 2222",
+            "  group: Production",
+        ] {
+            assert!(
+                lines.iter().any(|line| line == field),
+                "{field} in {lines:?}"
+            );
+        }
+        assert!(
+            !lines.iter().any(|line| line.contains("password")),
+            "{lines:?}"
+        );
+    }
+
+    /// Spec 0009, flow 2: an SSH profile without a host or with a port
+    /// outside 1–65535 can't be saved, and the form says why.
+    #[test]
+    fn a_profile_without_a_host_or_with_a_bad_port_has_a_problem() {
+        let no_host = ProfileForm {
+            host: "  ".into(),
+            ..ssh_form()
+        };
+        assert!(no_host.problem().is_some());
+        for port in ["0", "70000", "abc", "-1"] {
+            let form = ProfileForm {
+                port: port.into(),
+                ..ssh_form()
+            };
+            assert!(form.problem().is_some(), "port {port}");
+        }
+        for port in ["", "1", "65535"] {
+            let form = ProfileForm {
+                port: port.into(),
+                ..ssh_form()
+            };
+            assert_eq!(form.problem(), None, "port {port}");
+        }
+        assert_eq!(ProfileForm::default().problem(), None);
+    }
+
+    /// Spec 0009, flow 4: a new profile gets a lowercase, dashed ID unlike
+    /// any taken one.
+    #[test]
+    fn new_ids_are_lowercase_dashed_and_unique() {
+        assert_eq!(new_id("My Prod Server", &[]), "my-prod-server");
+        let taken = ["web".to_owned(), "web-2".to_owned()];
+        assert_eq!(new_id("Web", &taken), "web-3");
+        assert!(!new_id("", &[]).is_empty());
+    }
+
+    /// Spec 0009, platform notes: paths are written as typed, so a path
+    /// under the home folder shows with `~`, and one outside it in full.
+    #[test]
+    fn the_form_writes_paths_under_home_with_a_tilde() {
+        let home = PathBuf::from("/home/someone");
+        let local = Profile {
+            id: "work".into(),
+            name: None,
+            theme: None,
+            kind: ProfileKind::Local(LocalProfile {
+                cwd: Some(home.join("projects")),
+                ..LocalProfile::default()
+            }),
+        };
+        assert_eq!(ProfileForm::of(&local, Some(&home)).cwd, "~/projects");
+        let ssh = Profile {
+            kind: ProfileKind::Ssh(SshProfile {
+                host: "web".into(),
+                user: None,
+                port: None,
+                identity_file: Some(home.join(".ssh/id_ed25519")),
+                group: None,
+            }),
+            ..local
+        };
+        assert_eq!(
+            ProfileForm::of(&ssh, Some(&home)).identity_file,
+            "~/.ssh/id_ed25519"
+        );
+        let elsewhere = Profile {
+            kind: ProfileKind::Local(LocalProfile {
+                cwd: Some(PathBuf::from("/srv/www")),
+                ..LocalProfile::default()
+            }),
+            ..ssh
+        };
+        assert_eq!(ProfileForm::of(&elsewhere, Some(&home)).cwd, "/srv/www");
+    }
+}

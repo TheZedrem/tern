@@ -461,6 +461,20 @@ pub fn ensure_exists(path: &Path) -> Result<(), String> {
 /// (spec 0005, flow 4). A file that changes while it's being edited is
 /// read again once; if it changes again, nothing is written (flow 5).
 pub fn save_theme_default(path: &Path, name: &str) -> Result<(), String> {
+    save_edit(path, |text| {
+        with_theme_default(text, name).ok_or_else(|| {
+            "config.yaml writes `theme` in a way this can't change safely; \
+             set `theme.default` there yourself"
+                .to_owned()
+        })
+    })
+}
+
+/// Rewrites the config at `path` with `edit`, creating it from
+/// [`TEMPLATE`] first if there is none (spec 0005, flow 4; spec 0009). A
+/// file that changes while it's being edited is read again once; if it
+/// changes again, nothing is written (spec 0005, flow 5).
+pub fn save_edit(path: &Path, edit: impl Fn(&str) -> Result<String, String>) -> Result<(), String> {
     ensure_exists(path)?;
     // A linked config is edited where it points, so the link stays.
     let path = std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -468,15 +482,12 @@ pub fn save_theme_default(path: &Path, name: &str) -> Result<(), String> {
         |path: &Path| std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
     for _ in 0..2 {
         let text = read(&path)?;
-        let edited = with_theme_default(&text, name).ok_or(
-            "config.yaml writes `theme` in a way this can't change safely; \
-             set `theme.default` there yourself",
-        )?;
+        let edited = edit(&text)?;
         if read(&path)? == text {
             return write_replacing(&path, &edited);
         }
     }
-    Err("config.yaml kept changing while the theme was saved, so it was left alone".into())
+    Err("config.yaml kept changing while the setting was saved, so it was left alone".into())
 }
 
 /// Writes `text` over `path` through a temporary file, so a reader never
