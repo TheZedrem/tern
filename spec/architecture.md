@@ -161,8 +161,9 @@ disk — it can contain secrets the user typed or printed.
   initialized on first use or after the first frame — never before it.
   "It's only a few ms" is how boot paths rot.
 - **Errors.** Fallible operations return `Result<T, String>` with a
-  human-readable message; the UI shows it in the affected pane, never a
-  modal at boot.
+  human-readable message. Every error the user can hit is shown as a
+  notice, never swallowed (the owner's rule); one that leaves a pane
+  without its program also shows in that pane. Never a modal at boot.
 - **Notices.** Non-fatal problems (broken config, skipped profile, bad
   keybinding, failed write) become notices: plain-text toasts stacked in
   the window's bottom-right corner, dismissed by click or after 5 s (the

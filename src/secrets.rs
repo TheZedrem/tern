@@ -48,10 +48,22 @@ pub struct Unavailable;
 /// What a notice says when there is no keychain.
 pub const UNAVAILABLE: &str = "There is no keychain to save passwords in (no Secret Service is running). Connecting still works.";
 
-/// The secret saved under `key`. A keychain that can't answer, say a
-/// locked one whose unlock was dismissed, counts as nothing saved.
-pub fn get(key: &Key) -> Result<Option<Zeroizing<String>>, Unavailable> {
-    Ok(entry(key)?.get_password().ok().map(Zeroizing::new))
+/// Why the keychain gave no secret, besides having none saved.
+#[derive(Debug, PartialEq, Eq)]
+pub enum GetError {
+    Unavailable,
+    /// It couldn't answer, say a locked one whose unlock was dismissed.
+    Failed(String),
+}
+
+/// The secret saved under `key`, `None` if there is none.
+pub fn get(key: &Key) -> Result<Option<Zeroizing<String>>, GetError> {
+    let entry = entry(key).map_err(|Unavailable| GetError::Unavailable)?;
+    match entry.get_password() {
+        Ok(secret) => Ok(Some(Zeroizing::new(secret))),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(GetError::Failed(error.to_string())),
+    }
 }
 
 /// Saves `secret` under `key`, replacing what was there.

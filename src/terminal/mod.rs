@@ -549,7 +549,9 @@ impl TerminalPane {
         let session = match session {
             Ok(session) => session,
             Err(error) => {
-                self.state = State::Failed(failure(&self.launch.command, &error));
+                let message = failure(&self.launch.command, &error);
+                self.notice(message.clone(), cx);
+                self.state = State::Failed(message);
                 self.end_prompts(cx);
                 return;
             }
@@ -611,18 +613,30 @@ impl TerminalPane {
     /// The command to start now. An SSH connection's gets the askpass
     /// environment of a new token, and the pane answers its prompts until
     /// the next start (spec 0006, flow 2). Without an askpass server, ssh
-    /// asks in the terminal.
+    /// asks in the terminal, with a notice saying why.
     fn connection_command(&mut self, window: &mut Window, cx: &mut Context<Self>) -> pty::Command {
         let mut command = self.launch.command.clone();
         self.end_prompts(cx);
-        if self.profile.ssh
-            && let Some(connection) = askpass::connect(cx)
-        {
-            command.env.extend(connection.env);
-            let args = command.args.clone();
-            self.askpass = Some(self.answer_prompts(connection.prompts, args, window, cx));
+        if self.profile.ssh {
+            match askpass::connect(cx) {
+                Ok(connection) => {
+                    command.env.extend(connection.env);
+                    let args = command.args.clone();
+                    self.askpass = Some(self.answer_prompts(connection.prompts, args, window, cx));
+                }
+                Err(error) => self.notice(format!("ssh asks in the terminal: {error}"), cx),
+            }
         }
         command
+    }
+
+    /// Shows `notice` as a toast. Deferred, so one raised while the pane is
+    /// being created reaches the workspace's subscription.
+    fn notice(&self, notice: String, cx: &mut Context<Self>) {
+        let pane = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = pane.update(cx, |_, cx| cx.emit(PaneEvent::Notice(notice)));
+        });
     }
 
     /// Answers the prompts of the connection whose ssh runs with `args`, one
@@ -659,6 +673,10 @@ impl TerminalPane {
                             continue;
                         }
                         Lookup::Nothing => {}
+                        Lookup::Failed(error) => {
+                            let notice = format!("Couldn't read the keychain: {error}");
+                            let _ = this.update(cx, |_, cx| cx.emit(PaneEvent::Notice(notice)));
+                        }
                         Lookup::NoKeychain => {
                             offers.no_keychain = true;
                             let _ = this.update(cx, |_, cx| cx.emit(PaneEvent::NoKeychain));
@@ -1684,17 +1702,23 @@ enum Lookup {
     Found(Zeroizing<String>),
     Nothing,
     NoKeychain,
+    /// It couldn't answer: asked like nothing saved, with this notice.
+    Failed(String),
 }
 
 /// Asks the keychain for `key` on a thread of its own. No answer within
-/// [`KEYCHAIN_TIMEOUT`] counts as nothing saved (TM-askpass-17).
+/// [`KEYCHAIN_TIMEOUT`] counts as nothing saved (TM-askpass-17), with a
+/// notice saying so.
 async fn lookup(key: &Key, executor: &BackgroundExecutor) -> Lookup {
     let key = key.clone();
     let found = secrets::off_thread(move || secrets::get(&key));
     match within(found, KEYCHAIN_TIMEOUT, executor).await {
         Some(Ok(Ok(Some(secret)))) => Lookup::Found(secret),
-        Some(Ok(Err(secrets::Unavailable))) => Lookup::NoKeychain,
-        _ => Lookup::Nothing,
+        Some(Ok(Ok(None))) => Lookup::Nothing,
+        Some(Ok(Err(secrets::GetError::Unavailable))) => Lookup::NoKeychain,
+        Some(Ok(Err(secrets::GetError::Failed(error)))) => Lookup::Failed(error),
+        Some(Err(_)) => Lookup::Failed("the keychain lookup couldn't start".into()),
+        None => Lookup::Failed("the keychain didn't answer".into()),
     }
 }
 

@@ -274,10 +274,22 @@ impl<'a> Library<'a> {
 
 /// Every theme name the theme picker offers: the built-ins and `system`,
 /// then the inline themes in file order, then the theme files in `dir`,
-/// each name once (spec 0005, flow 4).
-pub fn list(custom: &[(String, ThemeSource)], dir: Option<&Path>) -> Vec<String> {
-    let mut files: Vec<String> = dir
-        .and_then(|dir| std::fs::read_dir(dir).ok())
+/// each name once (spec 0005, flow 4). A `dir` that exists but can't be
+/// read adds a notice.
+pub fn list(
+    custom: &[(String, ThemeSource)],
+    dir: Option<&Path>,
+    notices: &mut Vec<String>,
+) -> Vec<String> {
+    let read = dir.and_then(|dir| match std::fs::read_dir(dir) {
+        Ok(entries) => Some(entries),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            notices.push(format!("{} could not be read: {error}", dir.display()));
+            None
+        }
+    });
+    let mut files: Vec<String> = read
         .into_iter()
         .flatten()
         .flatten()
@@ -704,7 +716,10 @@ mod tests {
             "nord",
             "solarized",
         ];
-        assert_eq!(list(&custom, Some(themes.path())), expected);
+        assert_eq!(
+            list(&custom, Some(themes.path()), &mut Vec::new()),
+            expected
+        );
     }
 
     /// An inline `dark` adjusting the built-in, or a file and an inline
@@ -720,7 +735,10 @@ mod tests {
             with_background("dark", None, 0x000002),
         ];
         let expected = ["dark", "light", "system", "midnight"];
-        assert_eq!(list(&custom, Some(themes.path())), expected);
+        assert_eq!(
+            list(&custom, Some(themes.path()), &mut Vec::new()),
+            expected
+        );
     }
 
     /// Only files the lookup can load are offered.
@@ -733,7 +751,7 @@ mod tests {
             write_theme(themes.path(), file);
         }
         let expected = ["dark", "light", "system", "nord"];
-        assert_eq!(list(&[], Some(themes.path())), expected);
+        assert_eq!(list(&[], Some(themes.path()), &mut Vec::new()), expected);
     }
 
     /// On a fresh system there is no themes directory.
@@ -742,7 +760,36 @@ mod tests {
         let root = TempDir::new("theme-list-no-dir");
         let custom = [with_background("midnight", None, 0x000001)];
         let expected = ["dark", "light", "system", "midnight"];
-        assert_eq!(list(&custom, Some(&root.path().join("themes"))), expected);
-        assert_eq!(list(&custom, None), expected);
+        let mut notices = Vec::new();
+        let missing = root.path().join("themes");
+        assert_eq!(list(&custom, Some(&missing), &mut notices), expected);
+        assert_eq!(list(&custom, None, &mut notices), expected);
+        assert_eq!(notices, Vec::<String>::new());
+    }
+
+    /// Architecture §Cross-cutting rules, "Errors": a themes dir that exists
+    /// but can't be read is an error the user can hit, so it's a notice.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_themes_dir_adds_a_notice_naming_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = TempDir::new("theme-list-unreadable");
+        let themes = root.path().join("themes");
+        fs::create_dir(&themes).expect("create the themes dir");
+        write_theme(&themes, "nord.yaml");
+        fs::set_permissions(&themes, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+        // Root reads it anyway, so there is nothing to test.
+        let readable = fs::read_dir(&themes).is_ok();
+        let mut notices = Vec::new();
+        let names = list(&[], Some(&themes), &mut notices);
+        // Restored before any assert, so the temp dir can be removed.
+        fs::set_permissions(&themes, fs::Permissions::from_mode(0o755)).expect("chmod 755");
+        if readable {
+            return;
+        }
+        assert_eq!(names, ["dark", "light", "system"]);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        let dir = themes.display().to_string();
+        assert!(notices[0].contains(&dir), "{}", notices[0]);
     }
 }

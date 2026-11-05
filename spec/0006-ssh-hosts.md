@@ -88,7 +88,9 @@ arguments, the environment or a log.
    - Unix: a socket in a per-run directory, mode 0700, under
      `$XDG_RUNTIME_DIR`; the server drops any peer whose `SO_PEERCRED` uid
      isn't the app's. Without `$XDG_RUNTIME_DIR` there is no askpass, and
-     ssh asks in the terminal.
+     ssh asks in the terminal, with a notice saying why (as for any
+     endpoint that fails to open). A keychain lookup that fails or times
+     out asks like nothing saved, with a notice.
    - Windows: a named pipe with 128 random bits in its name, created with
      `FILE_FLAG_FIRST_PIPE_INSTANCE` and a DACL for the current user only.
    - Either way the token is 128 bits from `getrandom`, compared in

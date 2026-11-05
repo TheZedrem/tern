@@ -198,17 +198,18 @@ impl Server {
     }
 }
 
-/// The app's running server, started by the first SSH connection.
-struct Running(Option<Server>);
+/// The app's running server, started by the first SSH connection, or why
+/// it couldn't start.
+struct Running(Result<Server, String>);
 
 impl Global for Running {}
 
 /// A new askpass connection on the app's server, which starts now if this is
-/// the first. `None` when there is no server: ssh then asks in the terminal.
-pub fn connect(cx: &mut App) -> Option<Connection> {
+/// the first. Without one, ssh asks in the terminal, and the error says why.
+pub fn connect(cx: &mut App) -> Result<Connection, String> {
     if !cx.has_global::<Running>() {
-        let server = Server::start().ok();
-        if server.is_some() {
+        let server = Server::start();
+        if server.is_ok() {
             // Dropping the server takes its socket away with the app.
             cx.on_app_quit(|cx| {
                 cx.remove_global::<Running>();
@@ -218,7 +219,11 @@ pub fn connect(cx: &mut App) -> Option<Connection> {
         }
         cx.set_global(Running(server));
     }
-    cx.global::<Running>().0.as_ref()?.connect().ok()
+    cx.global::<Running>()
+        .0
+        .as_ref()
+        .map_err(Clone::clone)?
+        .connect()
 }
 
 /// Serves one helper on its own thread: reads its request, hands the prompt

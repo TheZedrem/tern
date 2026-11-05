@@ -13,6 +13,7 @@ use crate::commands::{self, AppCommand, OpenConfigFolder, keymap};
 use crate::config::{
     CloseOnExit, Config, CursorStyle, NewTab, OpenLinks, Profile, ProfileKind, TabBarSide,
 };
+use crate::layout::show_notice;
 use change::{Change, ProfileForm};
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -354,7 +355,8 @@ impl SettingsView {
     }
 
     /// Asks the OS's folder picker for the profile form's directory and
-    /// writes the pick into its field; cancelling leaves the field alone.
+    /// writes the pick into its field; cancelling leaves the field alone,
+    /// and a picker that can't open says why.
     fn pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -363,8 +365,19 @@ impl SettingsView {
             prompt: Some("Choose".into()),
         });
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(paths))) = picked.await else {
-                return;
+            let failed = match picked.await {
+                Ok(Ok(Some(paths))) => Ok(paths),
+                Ok(Ok(None)) => return,
+                Ok(Err(error)) => Err(format!("{error:#}")),
+                Err(_) => Err("it closed without an answer".to_owned()),
+            };
+            let paths = match failed {
+                Ok(paths) => paths,
+                Err(error) => {
+                    let notice = format!("The folder picker didn't open: {error}");
+                    let _ = cx.update(|window, cx| show_notice(notice, window, cx));
+                    return;
+                }
             };
             let Some(path) = paths.into_iter().next() else {
                 return;

@@ -1052,7 +1052,11 @@ impl Workspace {
     /// saves one as `theme.default`, Esc goes back (spec 0005, flow 4).
     fn select_theme(&mut self, _: &SelectTheme, window: &mut Window, cx: &mut Context<Self>) {
         let dir = config::themes_dir();
-        let names = theme::list(&self.config.theme.custom, dir.as_deref());
+        let mut notices = Vec::new();
+        let names = theme::list(&self.config.theme.custom, dir.as_deref(), &mut notices);
+        for notice in notices {
+            show_notice(notice, window, cx);
+        }
         let current = self.config.theme.default.clone();
         let highlight = names.iter().position(|name| *name == current);
         let entries = names
@@ -2325,7 +2329,7 @@ fn grab_handle(leaf: LeafId, group: &SharedString, theme: Theme) -> Stateful<Div
 
 /// Shows `notice` as a toast in the window's bottom-right corner
 /// (architecture §Cross-cutting rules).
-fn show_notice(notice: String, window: &mut Window, cx: &mut App) {
+pub fn show_notice(notice: String, window: &mut Window, cx: &mut App) {
     let notice = Notification::new()
         .message(notice)
         .placement(Anchor::BottomRight);
