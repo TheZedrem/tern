@@ -35,8 +35,14 @@ password logs in through Credential Manager (AC10); and a key passphrase
 is filled in, which depends on how `ssh.exe` writes `~` and `\` into its
 prompt. For T-020: a tab dropped on a side of a pane and a pane dragged by
 its handle back to the tab bar both move, the handle shows on hover, and a
-moved pane repaints cleanly after ConPTY's resize redraw. Fix what fails.
-Area: src.
+moved pane repaints cleanly after ConPTY's resize redraw. For T-002:
+`Ctrl+Shift+C`/`V` copy and paste, a bracketed paste reaches pwsh as one
+paste, the search bar finds text in the scrollback, a click on an
+`https` link opens the browser (Ctrl+click with `open_links: ctrl_click`),
+the wheel scrolls the scrollback and `less`, an IME (Japanese or Chinese)
+composes at the cursor, and closing the window leaves no `pwsh` or
+`conhost` behind. For T-006: a relaunch restores the tabs, splits and the
+window size. Fix what fails. Area: src.
 
 Spec: ../spec/0001-startup-performance.md (AC8)
 Spec: ../spec/0002-terminal-pane.md (spawn, input, resize, exit on Windows)
