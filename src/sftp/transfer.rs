@@ -5,7 +5,8 @@
 //! place when complete: a cancel or a failure removes the part and never
 //! touches a file the user confirmed replacing.
 
-use super::client::{Download, Event, Upload, describe};
+use super::client::{Download, Event, RemoteStat, Upload, describe};
+use super::copies;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedSender;
 use futures::stream::FuturesOrdered;
@@ -61,9 +62,9 @@ pub(super) async fn download(
     let mut partial = Partial(Some(part.clone()));
     let mut progress = Progress::new(id, &events);
     let event = match fetch(&sftp, &download, &part, &cancel, &mut progress).await {
-        Ok(Sent::Done) => {
+        Ok(Sent::Done(stat)) => {
             partial.0 = None;
-            Event::TransferDone { id }
+            Event::TransferDone { id, stat }
         }
         Ok(Sent::Exists) => {
             partial.0 = None;
@@ -84,6 +85,9 @@ async fn fetch(
     cancel: &AtomicBool,
     progress: &mut Progress<'_>,
 ) -> Result<Sent, Stop> {
+    if download.private {
+        copies::prepare(&download.target)?;
+    }
     if !download.replace && download.target.exists() {
         return Ok(Sent::Exists);
     }
@@ -92,9 +96,9 @@ async fn fetch(
         .open(remote, OpenFlags::READ, FileAttributes::empty())
         .await?
         .handle;
-    let read = read_into(sftp, &handle, part, cancel, progress).await;
+    let read = read_into(sftp, &handle, part, download.private, cancel, progress).await;
     let _ = sftp.close(handle.as_str()).await;
-    read?;
+    let stat = read?;
     let target = &download.target;
     // A file that turned up since the user was asked isn't theirs to lose.
     if !download.replace && target.exists() {
@@ -102,25 +106,28 @@ async fn fetch(
     }
     fs::rename(part, target)?;
     mark_from_internet(target);
-    Ok(Sent::Done)
+    Ok(Sent::Done(Some(stat)))
 }
 
-/// Reads the remote file `handle` into `part`, from its start. A short
+/// Reads the remote file `handle` into `part`, from its start, and says
+/// what size and time the remote file had when it was opened. A short
 /// answer asks again from where it ended; answers already on their way for
-/// later offsets are dropped.
+/// later offsets are dropped. A `private` part is the user's alone.
 async fn read_into(
     sftp: &RawSftpSession,
     handle: &str,
     part: &Path,
+    private: bool,
     cancel: &AtomicBool,
     progress: &mut Progress<'_>,
-) -> Result<(), Stop> {
-    progress.total = sftp
+) -> Result<RemoteStat, Stop> {
+    let stat = sftp
         .fstat(handle)
         .await
-        .ok()
-        .and_then(|attrs| attrs.attrs.size);
-    let mut file = fs::File::create(part)?;
+        .map(|attrs| RemoteStat::of(&attrs.attrs))
+        .unwrap_or_default();
+    progress.total = stat.size;
+    let mut file = create(part, private)?;
     let mut reads = FuturesOrdered::new();
     let (mut next, mut done, mut eof) = (0u64, 0u64, false);
     loop {
@@ -154,7 +161,22 @@ async fn read_into(
     }
     file.sync_all()?;
     progress.finish(done);
-    Ok(())
+    Ok(stat)
+}
+
+/// Creates `path` for writing; a `private` one only the user can read
+/// (TM-sftp-13).
+fn create(path: &Path, private: bool) -> std::io::Result<fs::File> {
+    let mut options = fs::File::options();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+    options.open(path)
 }
 
 /// Runs `upload` and reports how it ended; a done one changed its folder.
@@ -167,8 +189,8 @@ pub(super) async fn upload(
     let id = upload.id;
     let mut progress = Progress::new(id, &events);
     let event = match send(&sftp, &upload, &cancel, &mut progress).await {
-        Ok(Sent::Done) => {
-            let _ = events.unbounded_send(Event::TransferDone { id });
+        Ok(Sent::Done(stat)) => {
+            let _ = events.unbounded_send(Event::TransferDone { id, stat });
             Event::Changed {
                 folder: upload.folder,
             }
@@ -182,7 +204,8 @@ pub(super) async fn upload(
 
 /// How a transfer that didn't fail ended.
 enum Sent {
-    Done,
+    /// With the remote file's size and time once it's in place.
+    Done(Option<RemoteStat>),
     /// The target exists and wasn't to be replaced; nothing was written.
     Exists,
 }
@@ -207,7 +230,13 @@ async fn send(
         .await
         .ok()
         .map(|attrs| attrs.attrs);
-    if existing.is_some() && !upload.replace {
+    let found = existing.as_ref().map(RemoteStat::of);
+    let unexpected = match upload.expect {
+        // An edit: the host's file must be as it was fetched (flow 3).
+        Some(expected) => found != Some(expected),
+        None => found.is_some() && !upload.replace,
+    };
+    if unexpected {
         return Ok(Sent::Exists);
     }
     let part = super::join(&upload.folder, &format!(".{}{PART}", upload.name));
@@ -226,7 +255,9 @@ async fn send(
     if placed.is_err() {
         let _ = sftp.remove(part.as_str()).await;
     }
-    placed.map(|()| Sent::Done)
+    placed?;
+    let stat = sftp.stat(target.as_str()).await.ok();
+    Ok(Sent::Done(stat.map(|attrs| RemoteStat::of(&attrs.attrs))))
 }
 
 /// Renames a complete `part` to `target`. A file it replaces lends it its

@@ -75,8 +75,11 @@ pub enum Event {
         done: u64,
         total: Option<u64>,
     },
+    /// A transfer is complete; `stat` is the remote file's size and time,
+    /// as fetched or as uploaded, when the server said.
     TransferDone {
         id: u64,
+        stat: Option<RemoteStat>,
     },
     /// A transfer failed, and removed what it wrote. A cancelled one
     /// reports nothing.
@@ -84,8 +87,9 @@ pub enum Event {
         id: u64,
         error: String,
     },
-    /// An upload's target exists, and it wasn't to be replaced: nothing
-    /// was written. Asking and uploading again with `replace` is the
+    /// A transfer's target exists and wasn't to be replaced, or an edit's
+    /// remote file changed since it was fetched: nothing was written.
+    /// Asking and starting again with `replace` (or no `expect`) is the
     /// sidebar's.
     Exists {
         id: u64,
@@ -110,6 +114,9 @@ pub struct Download {
     pub target: PathBuf,
     /// `target` may be replaced: the user confirmed it.
     pub replace: bool,
+    /// An edit copy: its folders are made private first, and it's only the
+    /// user's to read (spec 0008, Model).
+    pub private: bool,
 }
 
 /// An upload of local file `local` into remote `folder` as `name` (spec
@@ -122,6 +129,26 @@ pub struct Upload {
     pub name: String,
     /// An existing remote file may be replaced: the user confirmed it.
     pub replace: bool,
+    /// An edit's upload: the remote file must still have this size and
+    /// time, else nothing is written and [`Event::Exists`] says so (flow 3).
+    pub expect: Option<RemoteStat>,
+}
+
+/// A remote file's size and modification time, which tell an edit whether
+/// someone changed the host's copy since it was fetched.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RemoteStat {
+    pub size: Option<u64>,
+    pub mtime: Option<u32>,
+}
+
+impl RemoteStat {
+    pub(super) fn of(attrs: &FileAttributes) -> Self {
+        Self {
+            size: attrs.size,
+            mtime: attrs.mtime,
+        }
+    }
 }
 
 /// The sidebar's end of a running connection.
@@ -797,7 +824,7 @@ mod tests {
         /// The event that ends transfer `id`, with the events before it.
         fn transfer_end(events: &mut UnboundedReceiver<Event>, id: u64) -> Vec<Event> {
             events_until(events, 30, |event| match event {
-                Event::TransferDone { id: done }
+                Event::TransferDone { id: done, .. }
                 | Event::TransferFailed { id: done, .. }
                 | Event::Exists { id: done } => *done == id,
                 _ => false,
@@ -848,10 +875,11 @@ mod tests {
                 remote: format!("{}/big.bin", absolute(&remote)),
                 target: target.clone(),
                 replace: false,
+                private: false,
             });
             let seen = transfer_end(&mut events, 1);
             assert!(
-                matches!(seen.last(), Some(Event::TransferDone { id: 1 })),
+                matches!(seen.last(), Some(Event::TransferDone { id: 1, .. })),
                 "{:?}",
                 seen.last()
             );
@@ -885,6 +913,7 @@ mod tests {
                 remote: format!("{}/a.txt", absolute(&remote)),
                 target: target.clone(),
                 replace: false,
+                private: false,
             });
             let seen = transfer_end(&mut events, 2);
             assert!(
@@ -911,10 +940,11 @@ mod tests {
                 remote: format!("{}/a.txt", absolute(&remote)),
                 target: target.clone(),
                 replace: true,
+                private: false,
             });
             let seen = transfer_end(&mut events, 3);
             assert!(
-                matches!(seen.last(), Some(Event::TransferDone { id: 3 })),
+                matches!(seen.last(), Some(Event::TransferDone { id: 3, .. })),
                 "{seen:?}"
             );
             assert_eq!(fs::read(&target).expect("read local"), b"remote");
@@ -936,6 +966,7 @@ mod tests {
                 remote: format!("{}/folder", absolute(&remote)),
                 target: target.clone(),
                 replace: false,
+                private: false,
             });
             let seen = transfer_end(&mut events, 4);
             match seen.last() {
@@ -969,6 +1000,7 @@ mod tests {
                 remote: format!("{}/huge.bin", absolute(&remote)),
                 target: target.clone(),
                 replace: false,
+                private: false,
             });
             events_until(&mut events, 10, |event| {
                 matches!(event, Event::Progress { id: 5, .. })
@@ -985,7 +1017,7 @@ mod tests {
             assert!(
                 !seen.iter().any(|event| matches!(
                     event,
-                    Event::TransferDone { id: 5 } | Event::TransferFailed { id: 5, .. }
+                    Event::TransferDone { id: 5, .. } | Event::TransferFailed { id: 5, .. }
                 )),
                 "{seen:?}"
             );
@@ -1011,10 +1043,11 @@ mod tests {
                 folder: folder.clone(),
                 name: "up.bin".into(),
                 replace: false,
+                expect: None,
             });
             let seen = transfer_end(&mut events, 6);
             assert!(
-                matches!(seen.last(), Some(Event::TransferDone { id: 6 })),
+                matches!(seen.last(), Some(Event::TransferDone { id: 6, .. })),
                 "{:?}",
                 seen.last()
             );
@@ -1044,6 +1077,7 @@ mod tests {
                 folder: absolute(&remote),
                 name: "a.txt".into(),
                 replace: false,
+                expect: None,
             });
             let seen = transfer_end(&mut events, 7);
             assert!(
@@ -1079,10 +1113,11 @@ mod tests {
                 folder: absolute(&remote),
                 name: "run.sh".into(),
                 replace: true,
+                expect: None,
             });
             let seen = transfer_end(&mut events, 8);
             assert!(
-                matches!(seen.last(), Some(Event::TransferDone { id: 8 })),
+                matches!(seen.last(), Some(Event::TransferDone { id: 8, .. })),
                 "{seen:?}"
             );
             assert_eq!(fs::read(&script).expect("read"), b"#!/bin/sh\necho new\n");
@@ -1109,6 +1144,7 @@ mod tests {
                 folder: absolute(&remote),
                 name: "docs".into(),
                 replace: false,
+                expect: None,
             });
             let seen = transfer_end(&mut events, 9);
             match seen.last() {
@@ -1138,10 +1174,11 @@ mod tests {
                 folder: absolute(&remote),
                 name: "link.txt".into(),
                 replace: false,
+                expect: None,
             });
             let seen = transfer_end(&mut events, 10);
             assert!(
-                matches!(seen.last(), Some(Event::TransferDone { id: 10 })),
+                matches!(seen.last(), Some(Event::TransferDone { id: 10, .. })),
                 "{seen:?}"
             );
             let uploaded = remote.path().join("link.txt");
@@ -1166,6 +1203,7 @@ mod tests {
                 folder: absolute(&remote),
                 name: "huge.bin".into(),
                 replace: false,
+                expect: None,
             });
             events_until(&mut events, 10, |event| {
                 matches!(event, Event::Progress { id: 11, .. })
@@ -1182,7 +1220,7 @@ mod tests {
             assert!(
                 !seen.iter().any(|event| matches!(
                     event,
-                    Event::TransferDone { id: 11 } | Event::TransferFailed { id: 11, .. }
+                    Event::TransferDone { id: 11, .. } | Event::TransferFailed { id: 11, .. }
                 )),
                 "{seen:?}"
             );
@@ -1295,6 +1333,131 @@ mod tests {
             }
             assert!(fs::symlink_metadata(remote.path().join("link")).is_err());
             assert!(remote.path().join("target/kept.txt").exists());
+        }
+
+        /// Fetches `name` from `remote` to `target` as edit `id` does, and
+        /// returns the stat its `TransferDone` carries.
+        fn fetch(
+            client: &Client,
+            events: &mut UnboundedReceiver<Event>,
+            id: u64,
+            remote: &TempDir,
+            target: &Path,
+            private: bool,
+        ) -> RemoteStat {
+            client.download(Download {
+                id,
+                remote: format!("{}/{}", absolute(remote), ".env"),
+                target: target.to_path_buf(),
+                replace: true,
+                private,
+            });
+            match transfer_end(events, id).pop() {
+                Some(Event::TransferDone {
+                    stat: Some(stat), ..
+                }) => stat,
+                other => panic!("expected TransferDone with a stat, got {other:?}"),
+            }
+        }
+
+        /// The edit upload of `local` over `.env` in `remote`, expecting
+        /// `expect`; the event that ends it.
+        fn upload_edit(
+            client: &Client,
+            events: &mut UnboundedReceiver<Event>,
+            id: u64,
+            remote: &TempDir,
+            local: &Path,
+            expect: Option<RemoteStat>,
+        ) -> Event {
+            client.upload(Upload {
+                id,
+                local: local.to_path_buf(),
+                folder: absolute(remote),
+                name: ".env".into(),
+                replace: true,
+                expect,
+            });
+            transfer_end(events, id).pop().expect("an end")
+        }
+
+        /// Spec 0008, Model and TM-sftp-13: an edit's fetch carries the
+        /// remote's size and time, and its copy is the user's alone: the
+        /// file `0600` (no execute bit), the folders it made `0700`.
+        #[test]
+        fn an_edit_fetch_carries_the_remote_stat_and_its_copy_is_private() {
+            use std::os::unix::fs::PermissionsExt;
+            let remote = TempDir::new("sftp-edit-fetch-remote");
+            let local = TempDir::new("sftp-edit-fetch-local");
+            fs::write(remote.path().join(".env"), b"SECRET=hunter2\n").expect("write remote");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let copy = local.path().join("session/7/.env");
+            let stat = fetch(&client, &mut events, 20, &remote, &copy, true);
+            assert_eq!(stat.size, Some(b"SECRET=hunter2\n".len() as u64));
+            assert!(stat.mtime.is_some(), "{stat:?}");
+            assert_eq!(fs::read(&copy).expect("read the copy"), b"SECRET=hunter2\n");
+            let mode = |path: &Path| fs::metadata(path).expect("stat").permissions().mode() & 0o777;
+            assert_eq!(mode(&copy), 0o600);
+            assert_eq!(mode(&local.path().join("session/7")), 0o700);
+            assert_eq!(mode(&local.path().join("session")), 0o700);
+        }
+
+        /// Spec 0008, flow 3: an edit's upload replaces the host's file
+        /// still as fetched, and carries its new stat for the next upload.
+        #[test]
+        fn an_edit_upload_replaces_the_unchanged_remote_and_carries_its_new_stat() {
+            let remote = TempDir::new("sftp-edit-up-remote");
+            let local = TempDir::new("sftp-edit-up-local");
+            fs::write(remote.path().join(".env"), b"A=1\n").expect("write remote");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let copy = local.path().join(".env");
+            let fetched = fetch(&client, &mut events, 21, &remote, &copy, false);
+            fs::write(&copy, b"A=1\nB=22\n").expect("save the copy");
+            match upload_edit(&client, &mut events, 22, &remote, &copy, Some(fetched)) {
+                Event::TransferDone {
+                    stat: Some(stat), ..
+                } => assert_eq!(stat.size, Some(b"A=1\nB=22\n".len() as u64)),
+                other => panic!("expected TransferDone with a stat, got {other:?}"),
+            }
+            assert_eq!(
+                fs::read(remote.path().join(".env")).expect("read remote"),
+                b"A=1\nB=22\n"
+            );
+        }
+
+        /// Spec 0008 AC6 and TM-sftp-09: when the host's file changed since
+        /// the fetch, the edit's upload writes nothing and says so; once
+        /// the user confirms (no `expect`), it overwrites.
+        #[test]
+        fn an_edit_upload_over_a_changed_remote_reports_exists_until_confirmed() {
+            let remote = TempDir::new("sftp-edit-conflict-remote");
+            let local = TempDir::new("sftp-edit-conflict-local");
+            let theirs = remote.path().join(".env");
+            fs::write(&theirs, b"A=1\n").expect("write remote");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let copy = local.path().join(".env");
+            let fetched = fetch(&client, &mut events, 23, &remote, &copy, false);
+            fs::write(&theirs, b"A=1\nTHEIRS=yes\n").expect("change the remote");
+            fs::write(&copy, b"A=1\nMINE=yes\n").expect("save the copy");
+            let ended = upload_edit(&client, &mut events, 24, &remote, &copy, Some(fetched));
+            assert!(matches!(ended, Event::Exists { id: 24 }), "{ended:?}");
+            assert_eq!(
+                fs::read(&theirs).expect("read remote"),
+                b"A=1\nTHEIRS=yes\n"
+            );
+            assert_eq!(parts(remote.path()), Vec::<String>::new());
+            let ended = upload_edit(&client, &mut events, 25, &remote, &copy, None);
+            assert!(
+                matches!(ended, Event::TransferDone { id: 25, .. }),
+                "{ended:?}"
+            );
+            assert_eq!(fs::read(&theirs).expect("read remote"), b"A=1\nMINE=yes\n");
         }
     }
 }

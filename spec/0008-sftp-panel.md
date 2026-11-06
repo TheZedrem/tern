@@ -97,13 +97,16 @@ manager), and the sidebar asks for passwords the way the terminal does.
   editable, and always showing the folder listed. Enter lists what was
   typed; a path that fails says why and keeps the last listing.
 - **Edit copies [load-bearing]:** a file opened for editing is downloaded
-  to `<data_local_dir>/tern/edit/<session>/<n>/<name>` (folders `0700`,
-  files `0600`, never an execute bit; on Windows also marked as from the
-  internet, see Platform notes), where `<name>` follows the download name
-  rule (Security). The session's thread polls each copy's size and mtime
-  every second; a change marks the edit `changed`, and its upload mode
-  decides the rest. A session's copies are deleted when it ends, and
-  leftovers of a crashed run after the first frame of the next launch.
+  to `<data_local_dir>/tern/edit/<run>/<session>/<n>/<name>` (folders
+  `0700`, files `0600`, never an execute bit; on Windows also marked as
+  from the internet, see Platform notes), where `<name>` follows the
+  download name rule (Security). A background task looks at each copy's
+  size and mtime every second; a change that holds still for one look
+  marks the edit `changed`, and its upload mode decides the rest. A
+  session's copies are deleted when it ends. Each running Tern holds a
+  lock on `edit/<run>.lock` **[load-bearing]**; after the first frame, a
+  sweep deletes the copies of every run whose lock is free (a crash, a
+  kill), never those of another Tern that's still open.
 - **Upload mode [load-bearing]:** `manual` (default) uploads only on the
   user's click; `save` uploads each change the poll sees; `focus` uploads
   every `changed` edit when Tern's window gains focus. Each edit starts
@@ -130,11 +133,13 @@ manager), and the sidebar asks for passwords the way the terminal does.
    that fails says why in the sidebar and keeps the last one. On a file,
    Enter or a double click does what `sftp_click` says: `edit` (default) or
    `download`; the context menu always offers Edit, Download and
-   Download to…, plus Rename and Delete (also F2 and Delete). Until edits
-   exist (T-036), a file's Enter or double click downloads it.
+   Download to…, plus Rename and Delete (also F2 and Delete).
 3. **Edit:** the file downloads to its edit copy with progress (cancel
    deletes it), then opens with the OS's default app for its type and is
-   listed in the session's edits with its upload mode. A save marks it
+   listed in the session's edits with its upload mode (a click on it
+   switches to the next mode), Upload, Open again and Close; closing an
+   edit with changes not on the host asks first. Editing a file that's
+   already open opens its copy again. A save marks it
    changed; it uploads when its mode says: the edit's Upload button
    (`manual`, and always available), the save itself (`save`), or the
    window gaining focus (`focus`). Before each upload the remote file's
@@ -144,7 +149,10 @@ manager), and the sidebar asks for passwords the way the terminal does.
    instead of open (Security) is not opened: it is downloaded and the
    sidebar says so. Closing an SSH pane (or its tab, or the window) whose
    session has edits asks first, naming them; edits with changes not yet
-   uploaded are called out, and the dialog offers to upload them first.
+   uploaded are called out, and the dialog offers to upload them first
+   ("Upload and close": it closes once the host has every change, and
+   stays open, saying so, if one fails or its host's file changed). Edits
+   outlive a dropped connection and upload after "Connect again".
 4. **Download:** a click goes to the OS's Downloads folder, Download to…
    picks a folder (the OS's file dialog). Each file streams in 64 KiB
    requests, 16 in flight, with progress, into `<name>.tern-part` beside
@@ -248,8 +256,10 @@ Trust boundaries:
   clicked is opened, only with the OS's default app, and never a type the
   OS runs: Windows' `PATHEXT` plus `.lnk .url .scr .pif .msi .msp .cpl
   .hta .reg .appref-ms .application .settingcontent-ms .library-ms
-  .search-ms .scf .wsh .xll .jar` on Windows, `.desktop .appimage .jar` on
-  Linux; the check is case-insensitive and on the name as written to disk.
+  .search-ms .scf .wsh .xll .jar` on Windows; `.desktop .appimage .jar`
+  on Linux, plus `.exe .com .bat .cmd .msi .scr .lnk`, which Wine runs
+  where it's installed; the check is case-insensitive and on the name as
+  written to disk.
   Scripts like `.sh` stay editable: an edit copy has no execute bit, so
   `xdg-open` hands them to an editor. Downloads are never opened or run by
   the app.

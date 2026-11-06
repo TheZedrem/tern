@@ -20,7 +20,7 @@ use crate::config::{self, Config, Profile, ProfileKind, SftpSide, TabBarSide};
 use crate::secrets;
 use crate::session::{self, SavedLeaf, SavedNode, SavedTab, Session, WindowSize};
 use crate::settings::{self, Pick, SettingsEvent, SettingsView, change::Change};
-use crate::sftp::{self, SftpEvent, SftpView};
+use crate::sftp::{self, SftpEvent, SftpSettings, SftpView};
 use crate::ssh;
 use crate::terminal::pty::{self, Command, GridSize};
 use crate::terminal::{
@@ -81,7 +81,16 @@ const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 const SFTP_WIDTH: f32 = 300.0;
 const SFTP_MIN_WIDTH: f32 = 200.0;
 
-actions!(tern, [CancelRename]);
+actions!(tern, [CancelRename, CloseWindow]);
+
+/// What a close is about to remove, kept while it waits on SFTP uploads
+/// (spec 0008, flow 3).
+#[derive(Clone, Copy, PartialEq)]
+enum Closing {
+    Pane(LeafId),
+    Tab(TabId),
+    Window,
+}
 
 /// Binds the keys of the workspace's own widgets. The commands' keys are
 /// [`commands::keymap`]'s.
@@ -359,6 +368,11 @@ pub struct Workspace {
     sftp: HashMap<LeafId, Sidebar>,
     /// The sidebars' width, one for the window, until Tern quits.
     sftp_width: f32,
+    /// A close the user chose "Upload and close" for, waiting on the
+    /// uploads (spec 0008, flow 3).
+    closing: Option<Closing>,
+    /// The window may close: nothing to ask, or the user answered.
+    window_may_close: bool,
 }
 
 impl Workspace {
@@ -422,7 +436,25 @@ impl Workspace {
             update_asked: false,
             sftp: HashMap::new(),
             sftp_width: SFTP_WIDTH,
+            closing: None,
+            window_may_close: false,
         };
+        // The compositor's close asks first too, if SFTP edits would go.
+        let this = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            this.update(cx, |workspace, cx| {
+                if workspace.window_may_close {
+                    return true;
+                }
+                let edits = workspace.edits_of(Closing::Window, cx);
+                if edits.is_empty() {
+                    return true;
+                }
+                workspace.ask_close(Closing::Window, edits, window, cx);
+                false
+            })
+            .unwrap_or(true)
+        });
         for (leaf, pane) in panes {
             let BootPane {
                 start,
@@ -703,7 +735,7 @@ impl Workspace {
                 self.save_soon(window, cx);
                 cx.notify();
             }
-            PaneEvent::Exited => self.close_pane(leaf, window, cx),
+            PaneEvent::Exited => self.close(Closing::Pane(leaf), window, cx),
             // The keyboard follows a prompt dialog of the focused pane in and
             // out, unless the palette or a rename has it.
             PaneEvent::DialogChanged => {
@@ -758,6 +790,13 @@ impl Workspace {
         self.set_aside_bad_session();
         self.start_reloads(window, cx);
         self.follow_update_check(window, cx);
+        // Edit copies a crashed run left (spec 0008, Model), off the UI
+        // thread and never before the first frame.
+        if !self.bench {
+            cx.background_executor()
+                .spawn(async { sftp::copies::sweep() })
+                .detach();
+        }
         cx.notify();
     }
 
@@ -883,6 +922,10 @@ impl Workspace {
     /// pane.
     fn apply_settings(&mut self, cx: &mut Context<Self>) {
         theme::apply_to_widgets(&self.theme, cx);
+        let sftp = SftpSettings::of(&self.config);
+        for sidebar in self.sftp.values() {
+            sidebar.view.update(cx, |view, _| view.set_settings(sftp));
+        }
         for pane in self.panes.values() {
             let name = pane.read(cx).profile().theme.clone();
             let theme = name
@@ -1454,7 +1497,8 @@ impl Workspace {
             show_notice("SFTP needs an SSH pane".into(), window, cx);
             return;
         }
-        let view = cx.new(|cx| SftpView::new(&pane, window, cx));
+        let settings = SftpSettings::of(&self.config);
+        let view = cx.new(|cx| SftpView::new(&pane, settings, window, cx));
         let events = cx.subscribe_in(
             &view,
             window,
@@ -1467,6 +1511,7 @@ impl Workspace {
                     cx.notify();
                 }
                 SftpEvent::Notice(notice) => show_notice(notice.clone(), window, cx),
+                SftpEvent::Settled => this.finish_closing(window, cx),
             },
         );
         self.sftp.insert(
@@ -1478,6 +1523,179 @@ impl Workspace {
             },
         );
         cx.notify();
+    }
+
+    /// The panes `closing` would close.
+    fn closing_leaves(&self, closing: Closing) -> Vec<LeafId> {
+        match closing {
+            Closing::Pane(leaf) => vec![leaf],
+            Closing::Tab(id) => self
+                .tabs
+                .tabs()
+                .iter()
+                .find(|tab| tab.id == id)
+                .map(|tab| tab.root.leaves())
+                .unwrap_or_default(),
+            Closing::Window => self
+                .tabs
+                .tabs()
+                .iter()
+                .flat_map(|tab| tab.root.leaves())
+                .collect(),
+        }
+    }
+
+    /// The SFTP edits `closing` would delete: each one's name, and whether
+    /// its changes aren't on the host.
+    fn edits_of(&self, closing: Closing, cx: &App) -> Vec<(SharedString, bool)> {
+        self.closing_leaves(closing)
+            .iter()
+            .filter_map(|leaf| self.sftp.get(leaf))
+            .flat_map(|sidebar| sidebar.view.read(cx).open_edits())
+            .collect()
+    }
+
+    /// Closes a pane, a tab or the window, asking first when that would
+    /// delete SFTP edits (spec 0008, flow 3).
+    fn close(&mut self, closing: Closing, window: &mut Window, cx: &mut Context<Self>) {
+        let edits = self.edits_of(closing, cx);
+        if edits.is_empty() {
+            self.close_now(closing, window, cx);
+        } else {
+            self.ask_close(closing, edits, window, cx);
+        }
+    }
+
+    fn close_now(&mut self, closing: Closing, window: &mut Window, cx: &mut Context<Self>) {
+        match closing {
+            Closing::Pane(leaf) => self.close_pane(leaf, window, cx),
+            Closing::Tab(id) => {
+                if let Some(ix) = self.tabs.tabs().iter().position(|tab| tab.id == id) {
+                    self.close_tab(ix, window, cx);
+                }
+            }
+            Closing::Window => {
+                self.window_may_close = true;
+                window.remove_window();
+            }
+        }
+    }
+
+    /// The question before a close deletes SFTP edits: it names them, calls
+    /// out the ones whose changes aren't on the host, and offers to upload
+    /// those first.
+    fn ask_close(
+        &mut self,
+        closing: Closing,
+        edits: Vec<(SharedString, bool)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = cx.entity().downgrade();
+        let unsent = edits.iter().any(|(_, unsent)| *unsent);
+        let what = match closing {
+            Closing::Pane(_) => "this pane",
+            Closing::Tab(_) => "this tab",
+            Closing::Window => "this window",
+        };
+        let lines: Vec<SharedString> = edits
+            .iter()
+            .map(|(name, unsent)| match unsent {
+                true => format!("{name}: changed, not uploaded").into(),
+                false => name.clone(),
+            })
+            .collect();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let answer = |id: &'static str, label: &'static str, upload: Option<bool>| {
+                let workspace = workspace.clone();
+                Button::new(id)
+                    .label(label)
+                    .small()
+                    .on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        let _ = workspace.update(cx, |workspace, cx| {
+                            workspace.answer_close(closing, upload, window, cx);
+                        });
+                    })
+            };
+            dialog
+                .title(format!("Close {what}?"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .text_sm()
+                        .child("Its SFTP edit copies are deleted when it closes:")
+                        .children(
+                            lines
+                                .iter()
+                                .map(|line| div().pl(px(8.)).child(line.clone())),
+                        ),
+                )
+                .footer(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(6.))
+                        .child(answer("close-cancel", "Cancel", None))
+                        .child(answer("close-anyway", "Close", Some(false)).danger())
+                        .when(unsent, |footer| {
+                            footer.child(
+                                answer("close-upload", "Upload and close", Some(true)).primary(),
+                            )
+                        }),
+                )
+        });
+    }
+
+    /// The answer to [`Self::ask_close`]: `None` cancels, `Some(true)`
+    /// uploads the unsent edits and closes once they're on the host.
+    fn answer_close(
+        &mut self,
+        closing: Closing,
+        upload: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match upload {
+            None => {}
+            Some(false) => self.close_now(closing, window, cx),
+            Some(true) => {
+                self.closing = Some(closing);
+                for leaf in self.closing_leaves(closing) {
+                    if let Some(sidebar) = self.sftp.get(&leaf) {
+                        sidebar.view.update(cx, |view, cx| view.upload_unsent(cx));
+                    }
+                }
+                self.finish_closing(window, cx);
+            }
+        }
+    }
+
+    /// Goes on with a close that waited on uploads once none is running:
+    /// it closes if the host has every change, else it stays open and says
+    /// so, and the sidebar says why.
+    fn finish_closing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(closing) = self.closing else {
+            return;
+        };
+        let mut sent = true;
+        for leaf in self.closing_leaves(closing) {
+            if let Some(sidebar) = self.sftp.get(&leaf) {
+                match sidebar.view.read(cx).settled() {
+                    None => return,
+                    Some(all) => sent &= all,
+                }
+            }
+        }
+        self.closing = None;
+        if sent {
+            self.close_now(closing, window, cx);
+        } else {
+            let notice = "Not closed: an SFTP edit didn't upload; its sidebar says why";
+            show_notice(notice.into(), window, cx);
+        }
     }
 
     /// The active pane's SFTP sidebar if it's open, with the inner edge it
@@ -1641,7 +1859,14 @@ impl Workspace {
 
     fn close_focused_pane(&mut self, _: &ClosePane, window: &mut Window, cx: &mut Context<Self>) {
         let leaf = self.tabs.active().focused;
-        self.close_pane(leaf, window, cx);
+        self.close(Closing::Pane(leaf), window, cx);
+    }
+
+    /// Closes the tab at `ix`, asking first if SFTP edits would go.
+    fn ask_close_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.tabs.tabs().get(ix).map(|tab| tab.id) {
+            self.close(Closing::Tab(id), window, cx);
+        }
     }
 
     /// Splits the focused pane, unless that would leave either half below
@@ -2063,7 +2288,7 @@ impl Workspace {
                 .xsmall()
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
-                    this.close_tab(ix, window, cx);
+                    this.ask_close_tab(ix, window, cx);
                 }));
             Tab::new()
                 .child(label)
@@ -2177,7 +2402,7 @@ impl Workspace {
                 .xsmall()
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
-                    this.close_tab(ix, window, cx);
+                    this.ask_close_tab(ix, window, cx);
                 }));
             div()
                 .id(("side-tab", tab.id))
@@ -2376,7 +2601,9 @@ impl Workspace {
                     .icon(IconName::WindowClose)
                     .ghost()
                     .small()
-                    .on_click(|_, window, _| window.remove_window()),
+                    // Through the workspace, which asks first if SFTP edits
+                    // would go (spec 0008, flow 3).
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(CloseWindow), cx)),
             )
     }
 }
@@ -2693,8 +2920,11 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::connect_to_host))
             .on_action(cx.listener(Self::forget_password))
             .on_action(cx.listener(Self::toggle_sftp))
+            .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
+                this.close(Closing::Window, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                this.close_tab(this.tabs.active_index(), window, cx);
+                this.ask_close_tab(this.tabs.active_index(), window, cx);
             }))
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| {
                 this.start_rename(this.tabs.active_index(), window, cx);

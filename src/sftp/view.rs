@@ -1,11 +1,15 @@
 //! The sidebar of one SSH pane (spec 0008): its host in the header, the
 //! path field, the flat listing, the questions it asks before anything is
-//! replaced or deleted, and its transfers. It draws what its [`Client`]
-//! reports and never waits on the network or the disk itself.
+//! replaced or deleted, its [`edits`] and its transfers. It draws what its
+//! [`Client`] reports and never waits on the network or the disk itself.
+
+mod edits;
 
 use super::client::{Client, Download, Event, Upload};
 use super::{Entry, Listing, MAX_ENTRIES};
+use crate::config::{Config, SftpClick, UploadMode};
 use crate::terminal::{TerminalPane, clean_title};
+use edits::Edit;
 use futures::StreamExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -67,6 +71,25 @@ pub enum SftpEvent {
     Close,
     /// Something to say as a toast.
     Notice(String),
+    /// An edit's upload ended and none is running, so a close waiting on
+    /// them can go on, or give up (spec 0008, flow 3).
+    Settled,
+}
+
+/// The settings the sidebar follows; the workspace passes them on reload.
+#[derive(Clone, Copy)]
+pub struct SftpSettings {
+    pub click: SftpClick,
+    pub upload: UploadMode,
+}
+
+impl SftpSettings {
+    pub fn of(config: &Config) -> Self {
+        Self {
+            click: config.sftp_click,
+            upload: config.sftp_upload,
+        }
+    }
 }
 
 /// Where the connection is.
@@ -113,6 +136,11 @@ enum Ask {
     Replace(Job),
     /// Remove the file or link at `path`; a `folder` must be empty.
     Delete { path: String, folder: bool },
+    /// The host's copy of an edit changed since it was fetched: upload
+    /// over it anyway?
+    Overwrite(u64),
+    /// Close an edit whose changes aren't on the host.
+    Discard(u64),
 }
 
 /// The field a new name is typed into, and what it names.
@@ -149,17 +177,39 @@ pub struct SftpView {
     scroll: UniformListScrollHandle,
     _path_events: Subscription,
     transfers: Vec<Transfer>,
+    /// Transfers and edits share these IDs, so an event finds its owner.
     next_transfer: u64,
     asks: VecDeque<Ask>,
     naming: Option<Naming>,
+    settings: SftpSettings,
+    /// Where this session's edit copies go; made on its first edit.
+    copies: Option<PathBuf>,
+    edits: Vec<Edit>,
+    /// Looks at the edit copies every second while there are any.
+    poll: Option<Task<()>>,
+    _activation: Subscription,
 }
 
 impl EventEmitter<SftpEvent> for SftpView {}
 
+impl Drop for SftpView {
+    /// The session is over: its edit copies go (spec 0008, Model).
+    fn drop(&mut self) {
+        if let Some(copies) = self.copies.take() {
+            super::copies::remove_dir(copies);
+        }
+    }
+}
+
 impl SftpView {
     /// The sidebar of `pane`, which starts connecting right away (spec
     /// 0008, flow 1).
-    pub fn new(pane: &Entity<TerminalPane>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        pane: &Entity<TerminalPane>,
+        settings: SftpSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let path = cx.new(|cx| InputState::new(window, cx).placeholder("Path"));
         let path_events = cx.subscribe_in(&path, window, |this, input, event, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
@@ -168,6 +218,12 @@ impl SftpView {
             }
         });
         let target = pane.read(cx).ssh_target().unwrap_or_default();
+        // Tern's window gaining focus uploads `focus` edits (flow 3).
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.window_focused(cx);
+            }
+        });
         let mut view = Self {
             focus: cx.focus_handle(),
             pane: pane.downgrade(),
@@ -186,19 +242,38 @@ impl SftpView {
             next_transfer: 0,
             asks: VecDeque::new(),
             naming: None,
+            settings,
+            copies: super::copies::session_dir(),
+            edits: Vec::new(),
+            poll: None,
+            _activation: activation,
         };
         view.connect(window, cx);
         view
     }
 
+    /// Follows a reload's settings; edits keep the modes they have.
+    pub fn set_settings(&mut self, settings: SftpSettings) {
+        self.settings = settings;
+    }
+
+    /// The next ID for a transfer or an edit.
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_transfer;
+        self.next_transfer += 1;
+        id
+    }
+
     /// Starts a connection with a new askpass token from the pane; the
-    /// last one, if any, ends, and its transfers with it.
+    /// last one, if any, ends, and its transfers with it. Edits stay, and
+    /// upload over the new one (flow 7).
     fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.client = None;
         self.loading = None;
         self.error = None;
         self.transfers.clear();
-        self.asks.clear();
+        self.asks
+            .retain(|ask| matches!(ask, Ask::Overwrite(_) | Ask::Discard(_)));
         let command = self
             .pane
             .update(cx, |pane, cx| pane.sftp_command(window, cx))
@@ -252,12 +327,22 @@ impl SftpView {
                 self.error = Some(format!("Couldn't open {}: {error}", clean_title(&path)).into());
             }
             Event::Progress { id, done, total } => {
-                if let Some(transfer) = self.transfer(id) {
+                if let Some(edit) = self.edit_mut(id) {
+                    edit.done = done;
+                    edit.total = total;
+                } else if let Some(transfer) = self.transfer(id) {
                     transfer.done = done;
                     transfer.total = total;
                 }
             }
-            Event::TransferDone { id } => {
+            Event::TransferDone { id, stat } if self.edit_mut(id).is_some() => {
+                self.edit_done(id, stat, cx);
+            }
+            Event::TransferFailed { id, error } if self.edit_mut(id).is_some() => {
+                self.edit_failed(id, error, cx);
+            }
+            Event::Exists { id } if self.edit_mut(id).is_some() => self.edit_conflict(id, cx),
+            Event::TransferDone { id, .. } => {
                 if let Some(ix) = self.transfers.iter().position(|transfer| transfer.id == id) {
                     let transfer = self.transfers.remove(ix);
                     if let Job::Download { target, .. } = &transfer.job {
@@ -288,6 +373,7 @@ impl SftpView {
                 self.loading = None;
                 self.transfers.retain(|transfer| transfer.error.is_some());
                 self.connection = Connection::Ended(reason.into());
+                self.edits_disconnected(cx);
             }
         }
         cx.notify();
@@ -322,9 +408,8 @@ impl SftpView {
         Some((entry, super::join(&listing.path, &entry.name)))
     }
 
-    /// Enters the folder at `ix`; a file downloads to the Downloads folder.
-    /// Until edits exist (T-036), downloading is what a file's double click
-    /// does.
+    /// Enters the folder at `ix`; a file is edited or downloaded to the
+    /// Downloads folder, as `sftp_click` says (flow 2).
     fn open(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some((entry, path)) = self.entry(ix) else {
             return;
@@ -332,7 +417,10 @@ impl SftpView {
         if entry.is_folder() {
             self.list(path);
         } else {
-            self.download(ix, None, cx);
+            match self.settings.click {
+                SftpClick::Edit => self.edit(ix, cx),
+                SftpClick::Download => self.download(ix, None, cx),
+            }
         }
         cx.notify();
     }
@@ -477,11 +565,13 @@ impl SftpView {
     /// Starts `job`; with `replace`, the user confirmed writing over what's
     /// there.
     fn start(&mut self, job: Job, replace: bool, cx: &mut Context<Self>) {
+        if self.client.is_none() {
+            return;
+        }
+        let id = self.next_id();
         let Some(client) = &self.client else {
             return;
         };
-        let id = self.next_transfer;
-        self.next_transfer += 1;
         let name = match &job {
             Job::Download { remote, .. } => remote.rsplit('/').next().unwrap_or(remote),
             Job::Upload { name, .. } => name,
@@ -493,6 +583,7 @@ impl SftpView {
                 remote,
                 target,
                 replace,
+                private: false,
             }),
             Job::Upload {
                 local,
@@ -504,6 +595,7 @@ impl SftpView {
                 folder,
                 name,
                 replace,
+                expect: None,
             }),
         }
         self.transfers.push(Transfer {
@@ -549,6 +641,11 @@ impl SftpView {
                     client.delete(path, folder);
                 }
             }
+            (Ask::Overwrite(id), true) => self.upload_edit(id, true, cx),
+            (Ask::Discard(id), true) => self.remove_edit(id, cx),
+            // A declined overwrite leaves the edit changed; a close that
+            // waits on it gives up.
+            (Ask::Overwrite(_), false) => cx.emit(SftpEvent::Settled),
             (_, false) => {}
         }
         cx.notify();
@@ -651,6 +748,7 @@ impl SftpView {
         if folder {
             items.push(item("Open", |this, ix, _, cx| this.open(ix, cx)));
         } else {
+            items.push(item("Edit", |this, ix, _, cx| this.edit(ix, cx)));
             items.push(item("Download", |this, ix, _, cx| {
                 this.download(ix, None, cx)
             }));
@@ -821,6 +919,22 @@ impl SftpView {
                     format!("Delete {what} on {}?", self.target)
                 };
                 (question, "Delete")
+            }
+            Ask::Overwrite(id) => {
+                let name = self.edit_label(*id);
+                let question = format!(
+                    "{name} changed on {} since you opened it. Upload your copy over it?",
+                    self.target
+                );
+                (question, "Upload anyway")
+            }
+            Ask::Discard(id) => {
+                let name = self.edit_label(*id);
+                let question = format!(
+                    "Close {name}? Your changes aren't on {} and will be lost.",
+                    self.target
+                );
+                (question, "Discard")
             }
         };
         Some(
@@ -1122,6 +1236,7 @@ impl Render for SftpView {
             .children(self.render_naming(cx))
             .child(list)
             .children(truncated)
+            .children(self.render_edits(cx))
             .children(self.render_transfers(cx))
     }
 }

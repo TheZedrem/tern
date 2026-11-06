@@ -169,6 +169,7 @@ All local, all plain files the user can read — nothing leaves the machine.
 | User themes | `<config_dir>/tern/themes/*.yaml` | Color schemes | Same |
 | Session state | `<data_local_dir>/tern/session.json` | Window size, tab/split layout, each pane's profile, cwd and title | Overwritten on every save; never scrollback |
 | Update check | `<data_local_dir>/tern/update.json` | Time of the last check | Overwritten on each check (spec 0011) |
+| SFTP edit copies | `<data_local_dir>/tern/edit/<run>/…`, `<run>.lock` | Remote files the user opened for editing (`0600`), and each running Tern's lock | Until their SFTP session ends; a crashed run's after the next launch's first frame (spec 0008) |
 | Secrets (Phase 2) | OS keychain | SSH passwords / key passphrases the user chose to remember | Until the user forgets or replaces it (spec 0006) |
 
 `<config_dir>`/`<data_local_dir>` come from the `dirs` crate (XDG on

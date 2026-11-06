@@ -54,6 +54,10 @@ pub struct Config {
     /// Which side of the window an SSH pane's SFTP sidebar is on (spec
     /// 0008).
     pub sftp_sidebar: SftpSide,
+    /// What Enter or a double click does to a file in the SFTP sidebar.
+    pub sftp_click: SftpClick,
+    /// When an SFTP edit uploads, until the edit says otherwise.
+    pub sftp_upload: UploadMode,
     /// What `Ctrl+Shift+T` opens; `Ctrl+Alt+Shift+T` opens the other
     /// (spec 0004).
     pub new_tab: NewTab,
@@ -104,6 +108,26 @@ impl TabBarSide {
 pub enum SftpSide {
     Left,
     Right,
+}
+
+/// What Enter or a double click does to a file in the SFTP sidebar (spec
+/// 0008, flow 2).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SftpClick {
+    Edit,
+    Download,
+}
+
+/// When an SFTP edit's saves go back to the host (spec 0008, Model):
+/// only on the user's click, on each save, or when Tern's window gains
+/// focus.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadMode {
+    Manual,
+    Save,
+    Focus,
 }
 
 /// What opens a link: Ctrl+click, the owner's default, or a plain click
@@ -242,6 +266,8 @@ impl Default for Config {
             open_links: OpenLinks::CtrlClick,
             tab_bar: TabBarSide::Top,
             sftp_sidebar: SftpSide::Right,
+            sftp_click: SftpClick::Edit,
+            sftp_upload: UploadMode::Manual,
             new_tab: NewTab::Ask,
             update_check: None,
         }
@@ -1047,6 +1073,16 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.sftp_sidebar = side;
                     }
                 }
+                "sftp_click" => {
+                    if let Some(click) = map.next_value()? {
+                        config.sftp_click = click;
+                    }
+                }
+                "sftp_upload" => {
+                    if let Some(mode) = map.next_value()? {
+                        config.sftp_upload = mode;
+                    }
+                }
                 "new_tab" => {
                     if let Some(new_tab) = map.next_value()? {
                         config.new_tab = new_tab;
@@ -1664,6 +1700,69 @@ pub(crate) mod tests {
         assert!(notices[0].contains("sftp_sidebar"), "{}", notices[0]);
     }
 
+    /// Spec 0008 §Settings: a click in the SFTP sidebar edits a file
+    /// unless `sftp_click: download` says otherwise.
+    #[test]
+    fn sftp_click_is_edit_unless_set_to_download() {
+        assert_eq!(parse("").config.sftp_click, SftpClick::Edit);
+        for (text, click) in [
+            ("sftp_click: download\n", SftpClick::Download),
+            ("sftp_click: edit\n", SftpClick::Edit),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.sftp_click, click, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a value `sftp_click` doesn't take falls back to `edit`
+    /// with a notice naming the key; the rest of the file still applies.
+    #[test]
+    fn a_bad_sftp_click_falls_back_to_edit_with_a_notice_and_the_rest_applies() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "sftp_click: run\n",
+            "copy_on_select: true\n",
+        ));
+        assert_eq!(config.sftp_click, SftpClick::Edit);
+        assert_eq!(config.scrollback, 500);
+        assert!(config.copy_on_select);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("sftp_click"), "{}", notices[0]);
+    }
+
+    /// Spec 0008 §Settings: edits upload on a click unless `sftp_upload`
+    /// says `save` or `focus`.
+    #[test]
+    fn sftp_upload_is_manual_unless_set_to_save_or_focus() {
+        assert_eq!(parse("").config.sftp_upload, UploadMode::Manual);
+        for (text, mode) in [
+            ("sftp_upload: save\n", UploadMode::Save),
+            ("sftp_upload: focus\n", UploadMode::Focus),
+            ("sftp_upload: manual\n", UploadMode::Manual),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.sftp_upload, mode, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a value `sftp_upload` doesn't take falls back to
+    /// `manual` with a notice naming the key; the rest still applies.
+    #[test]
+    fn a_bad_sftp_upload_falls_back_to_manual_with_a_notice_and_the_rest_applies() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "sftp_upload: always\n",
+            "copy_on_select: true\n",
+        ));
+        assert_eq!(config.sftp_upload, UploadMode::Manual);
+        assert_eq!(config.scrollback, 500);
+        assert!(config.copy_on_select);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("sftp_upload"), "{}", notices[0]);
+    }
+
     /// Spec 0011 §Model: `update_check` is unset unless it's `daily` or
     /// `off`; a key with no value is unset too, without a notice.
     #[test]
@@ -2079,6 +2178,8 @@ copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
 tab_bar: top                        # top | bottom | left | right (spec 0003)
 sftp_sidebar: right                 # left | right (spec 0008)
+sftp_click: edit                    # edit | download (spec 0008)
+sftp_upload: manual                 # manual | save | focus (spec 0008)
 new_tab: ask                    # what Ctrl+Shift+T opens: ask | default (spec 0004)
 close_on_exit: clean                # always | clean | never
 restore_session: true
@@ -2144,7 +2245,7 @@ theme:
                 default: "dark".into(),
                 custom: vec![("midnight".into(), midnight)],
             },
-            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 32)],
+            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 34)],
             ..Config::default()
         };
         assert_eq!(config, expected);

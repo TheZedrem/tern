@@ -11,8 +11,8 @@ pub mod yaml;
 
 use crate::commands::{self, AppCommand, OpenConfigFolder, keymap};
 use crate::config::{
-    CloseOnExit, Config, CursorStyle, NewTab, OpenLinks, Profile, ProfileKind, SftpSide,
-    TabBarSide, UpdateCheck,
+    CloseOnExit, Config, CursorStyle, NewTab, OpenLinks, Profile, ProfileKind, SftpClick, SftpSide,
+    TabBarSide, UpdateCheck, UploadMode,
 };
 use crate::layout::show_notice;
 use change::{Change, ProfileForm};
@@ -52,6 +52,8 @@ pub const FIELDS: &[&str] = &[
     "theme.default",
     "tab_bar",
     "sftp_sidebar",
+    "sftp_click",
+    "sftp_upload",
     "new_tab",
     "update_check",
 ];
@@ -552,6 +554,23 @@ fn sftp_side(config: &Config) -> &'static str {
     }
 }
 
+/// `sftp_click` as the file writes it.
+fn sftp_click_name(config: &Config) -> &'static str {
+    match config.sftp_click {
+        SftpClick::Edit => "edit",
+        SftpClick::Download => "download",
+    }
+}
+
+/// `sftp_upload` as the file writes it.
+fn sftp_upload_name(config: &Config) -> &'static str {
+    match config.sftp_upload {
+        UploadMode::Manual => "manual",
+        UploadMode::Save => "save",
+        UploadMode::Focus => "focus",
+    }
+}
+
 /// A number as YAML: no `.0` on a whole one.
 fn number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 {
@@ -1024,6 +1043,46 @@ impl Render for SettingsView {
                 .into_any_element(),
             ),
             row(
+                Page::General,
+                "SFTP",
+                "Double-clicking a remote file",
+                "sftp remote file click open edit download double",
+                self.options(
+                    "sftp-click",
+                    &[("edit", "Edits it"), ("download", "Downloads it")],
+                    sftp_click_name(config),
+                    |value| {
+                        choice(vec!["sftp_click"], value, |config| {
+                            sftp_click_name(config).to_owned()
+                        })
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            row(
+                Page::General,
+                "SFTP",
+                "Edits upload",
+                "sftp edit upload save focus manual remote",
+                self.options(
+                    "sftp-upload",
+                    &[
+                        ("manual", "On a click"),
+                        ("save", "On save"),
+                        ("focus", "On focus"),
+                    ],
+                    sftp_upload_name(config),
+                    |value| {
+                        choice(vec!["sftp_upload"], value, |config| {
+                            sftp_upload_name(config).to_owned()
+                        })
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            row(
                 Page::Appearance,
                 "Font",
                 "Font family",
@@ -1400,6 +1459,8 @@ mod tests {
         "tab_bar",
         // Spec 0008's, documented with spec 0005's.
         "sftp_sidebar",
+        "sftp_click",
+        "sftp_upload",
         "new_tab",
         // Spec 0011's, documented with spec 0005's.
         "update_check",

@@ -6,6 +6,7 @@
 //! window or a host.
 
 pub mod client;
+pub mod copies;
 mod transfer;
 pub mod view;
 
@@ -13,7 +14,7 @@ use std::cmp::Ordering;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-pub use view::{SftpEvent, SftpView};
+pub use view::{SftpEvent, SftpSettings, SftpView};
 
 /// The most entries a listing keeps; the rest are left out with a note
 /// (TM-sftp-17).
@@ -201,6 +202,63 @@ pub fn local_path(folder: &Path, name: &str, windows: bool) -> Option<PathBuf> {
     let direct = path.parent() == Some(folder)
         && path.file_name().and_then(|file| file.to_str()) == Some(local.as_str());
     (!local.is_empty() && direct).then_some(path)
+}
+
+/// Types Windows runs rather than opens, beyond what `PATHEXT` names.
+const WINDOWS_RUNS: &[&str] = &[
+    ".lnk",
+    ".url",
+    ".scr",
+    ".pif",
+    ".msi",
+    ".msp",
+    ".cpl",
+    ".hta",
+    ".reg",
+    ".appref-ms",
+    ".application",
+    ".settingcontent-ms",
+    ".library-ms",
+    ".search-ms",
+    ".scf",
+    ".wsh",
+    ".xll",
+    ".jar",
+];
+/// `PATHEXT` when it isn't set: Windows 11's default.
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC";
+/// Types a Linux desktop may run rather than open: launchers, packaged
+/// apps, Java, and Windows programs, which Wine runs where it's installed.
+const LINUX_RUNS: &[&str] = &[
+    ".desktop",
+    ".appimage",
+    ".jar",
+    ".exe",
+    ".com",
+    ".bat",
+    ".cmd",
+    ".msi",
+    ".scr",
+    ".lnk",
+];
+
+/// Whether the OS would run a file named `name` (as written to disk)
+/// rather than open it in an app (spec 0008 §Security, TM-sftp-05). Such a
+/// file is never opened. `pathext` is Windows' `PATHEXT`, if set; scripts
+/// like `.sh` and `.js` stay editable on Linux, where an edit copy has no
+/// execute bit.
+pub fn runs_when_opened(name: &str, windows: bool, pathext: Option<&str>) -> bool {
+    let name = name.to_lowercase();
+    let ends_with = |extension: &str| {
+        let extension = extension.trim().to_lowercase();
+        extension.starts_with('.') && name.ends_with(&extension)
+    };
+    if windows {
+        let pathext = pathext.unwrap_or(DEFAULT_PATHEXT);
+        pathext.split(';').any(ends_with) || WINDOWS_RUNS.iter().copied().any(ends_with)
+    } else {
+        LINUX_RUNS.iter().copied().any(ends_with)
+    }
 }
 
 /// Windows' device names, whatever their extension or case: `CON`,
@@ -550,5 +608,127 @@ mod tests {
     fn an_empty_name_has_no_local_path() {
         assert_eq!(local_path(Path::new("/tmp"), "", false), None);
         assert_eq!(local_path(Path::new("/tmp"), "", true), None);
+    }
+
+    /// Spec 0008 §Security and TM-sftp-05: on Windows, every type in
+    /// Windows 11's default `PATHEXT` and every type of the fixed list is
+    /// run rather than opened, whatever its case.
+    #[test]
+    fn on_windows_pathext_and_the_fixed_list_run_whatever_their_case() {
+        for name in [
+            "run.exe",
+            "a.com",
+            "b.bat",
+            "c.cmd",
+            "d.vbs",
+            "e.vbe",
+            "f.js",
+            "g.jse",
+            "h.wsf",
+            "i.wsh",
+            "j.msc",
+            "a.LNK",
+            "k.url",
+            "l.scr",
+            "m.pif",
+            "n.msi",
+            "o.msp",
+            "p.cpl",
+            "q.hta",
+            "r.reg",
+            "s.appref-ms",
+            "t.application",
+            "u.settingcontent-ms",
+            "v.library-ms",
+            "w.search-ms",
+            "x.scf",
+            "y.xll",
+            "z.jar",
+            "RUN.EXE",
+            "Setup.Msi",
+        ] {
+            assert!(runs_when_opened(name, true, None), "{name:?}");
+        }
+    }
+
+    /// Spec 0008 §Security: a `PATHEXT` that is set replaces the default
+    /// (case and spaces as Windows allows); the fixed list still applies.
+    #[test]
+    fn a_set_pathext_replaces_the_default_but_not_the_fixed_list() {
+        let pathext = Some(".EXE; .Py");
+        assert!(runs_when_opened("tool.py", true, pathext));
+        assert!(runs_when_opened("run.exe", true, pathext));
+        assert!(!runs_when_opened("script.js", true, pathext));
+        assert!(runs_when_opened("a.lnk", true, pathext));
+        assert!(!runs_when_opened("tool.py", true, None));
+    }
+
+    /// Spec 0008 §Security: on Linux, launchers, packaged apps, Java and
+    /// what Wine runs are never opened, whatever their case.
+    #[test]
+    fn on_linux_launchers_java_and_wine_types_run() {
+        for name in [
+            "x.desktop",
+            "App.AppImage",
+            "tool.jar",
+            "run.exe",
+            "a.com",
+            "b.bat",
+            "c.cmd",
+            "d.msi",
+            "e.scr",
+            "a.LNK",
+        ] {
+            assert!(runs_when_opened(name, false, None), "{name:?}");
+        }
+    }
+
+    /// Spec 0008 §Security: on Linux, scripts and text stay editable; an
+    /// edit copy has no execute bit, so opening them doesn't run them.
+    #[test]
+    fn on_linux_scripts_and_text_are_opened() {
+        for name in [
+            "deploy.sh",
+            "app.js",
+            "tool.py",
+            "notes.txt",
+            "nginx.conf",
+            "a.vbs",
+        ] {
+            assert!(!runs_when_opened(name, false, None), "{name:?}");
+        }
+    }
+
+    /// TM-sftp-05: only the real end of the name counts; an extension in
+    /// the middle, or a name that only ends in the letters, isn't one.
+    #[test]
+    fn an_extension_only_counts_at_the_end_of_the_name() {
+        for windows in [false, true] {
+            for name in [
+                "exe.txt",
+                "notes.desktop.txt",
+                "run.exe.md",
+                "readme",
+                "jar",
+            ] {
+                assert!(
+                    !runs_when_opened(name, windows, None),
+                    "{name:?}, {windows}"
+                );
+            }
+        }
+    }
+
+    /// TM-sftp-06 with -05: a direction override that shows `exe.txt` for
+    /// a `.exe` is escaped on disk, and the name on disk is still caught.
+    #[test]
+    fn a_disguised_exe_is_still_caught_by_its_name_on_disk() {
+        for windows in [false, true] {
+            let disk = local_name("photo\u{202E}gpj.exe", windows);
+            assert!(
+                runs_when_opened(&disk, windows, None),
+                "{disk:?}, {windows}"
+            );
+        }
     }
 }
