@@ -39,18 +39,21 @@ actions!(
         GoUp,
         DeleteSelected,
         RenameSelected,
-        CancelName
+        CancelName,
+        Dismiss
     ]
 );
 
 /// Binds the listing's keys: arrows move, Enter opens, Backspace goes up
-/// (spec 0008, flow 2), Delete and F2 delete and rename. The path field's
-/// own bindings win while it has the keyboard.
+/// (spec 0008, flow 2), Delete and F2 delete and rename. While a question
+/// is open, Enter answers it and Esc cancels it. The path field's own
+/// bindings win while it has the keyboard.
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("up", SelectPrevious, Some(CONTEXT)),
         KeyBinding::new("down", SelectNext, Some(CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(CONTEXT)),
+        KeyBinding::new("escape", Dismiss, Some(CONTEXT)),
         KeyBinding::new("backspace", GoUp, Some(CONTEXT)),
         KeyBinding::new("delete", DeleteSelected, Some(CONTEXT)),
         KeyBinding::new("f2", RenameSelected, Some(CONTEXT)),
@@ -1089,13 +1092,17 @@ impl Render for SftpView {
             .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.select(-1, cx)))
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select(1, cx)))
             .on_action(cx.listener(|this, _: &OpenSelected, _, cx| {
-                if let Some(ix) = this.selected {
+                if !this.asks.is_empty() {
+                    this.answer(true, cx);
+                } else if let Some(ix) = this.selected {
                     this.open(ix, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &Dismiss, _, cx| this.answer(false, cx)))
             .on_action(cx.listener(|this, _: &GoUp, _, cx| this.go_up(cx)))
             .on_action(cx.listener(|this, _: &DeleteSelected, _, cx| {
-                if let Some(ix) = this.selected {
+                // One question at a time: a second Delete doesn't queue another.
+                if let Some(ix) = this.selected.filter(|_| this.asks.is_empty()) {
                     this.ask_delete(ix, cx);
                 }
             }))

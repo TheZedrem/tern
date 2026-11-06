@@ -161,7 +161,9 @@ manager), and the sidebar asks for passwords the way the terminal does.
    confirmation naming the host; cancel stops and removes the part. A
    dropped folder fails in the transfer list, saying why.
 6. **Change:** rename and new folder ask for a name; delete asks for a
-   confirmation naming what goes and on which host. It removes files,
+   confirmation naming what goes and on which host; while a question is
+   open, Enter confirms it and Esc cancels it instead of acting on the
+   listing, and Delete asks nothing more. It removes files,
    links (as links, never followed) and empty folders; a folder with
    anything in it fails with the server's reason. The listing refreshes
    after each.
