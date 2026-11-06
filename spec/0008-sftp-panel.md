@@ -136,8 +136,8 @@ manager), and the sidebar asks for passwords the way the terminal does.
    Download to…, plus Rename and Delete (also F2 and Delete).
 3. **Edit:** the file downloads to its edit copy with progress (cancel
    deletes it), then opens with the OS's default app for its type and is
-   listed in the session's edits with its upload mode (a click on it
-   switches to the next mode), Upload, Open again and Close; closing an
+   listed in the session's edits with its upload mode (a dropdown of the
+   three, the current one checked), Upload, Open again and Close; closing an
    edit with changes not on the host asks first. Editing a file that's
    already open opens its copy again. A save marks it
    changed; it uploads when its mode says: the edit's Upload button

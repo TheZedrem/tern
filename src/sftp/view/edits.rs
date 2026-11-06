@@ -11,6 +11,7 @@ use crate::sftp::{copies, local_name, local_path, runs_when_opened};
 use crate::terminal::clean_title;
 use gpui::{Context, IntoElement, ParentElement, SharedString, Styled, div, px};
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::progress::Progress;
 use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable};
 use std::path::{Path, PathBuf};
@@ -369,17 +370,13 @@ impl SftpView {
         cx.notify();
     }
 
-    /// Switches edit `id` to the next upload mode, for as long as it lives
-    /// (spec 0008, Model). Switching to `save` uploads what's changed.
-    fn next_mode(&mut self, id: u64, cx: &mut Context<Self>) {
+    /// Sets edit `id`'s upload mode, for as long as it lives (spec 0008,
+    /// Model). Switching to `save` uploads what's changed.
+    fn set_mode(&mut self, id: u64, mode: UploadMode, cx: &mut Context<Self>) {
         let Some(edit) = self.edit_mut(id) else {
             return;
         };
-        edit.mode = match edit.mode {
-            UploadMode::Manual => UploadMode::Save,
-            UploadMode::Save => UploadMode::Focus,
-            UploadMode::Focus => UploadMode::Manual,
-        };
+        edit.mode = mode;
         if edit.mode == UploadMode::Save && matches!(edit.state, State::Changed) {
             self.upload_edit(id, false, cx);
         }
@@ -508,11 +505,9 @@ impl SftpView {
                 State::Failed(error) => format!("Upload failed: {error}"),
             };
             let failed = matches!(edit.state, State::Failed(_));
-            let mode = match edit.mode {
-                UploadMode::Manual => "On click",
-                UploadMode::Save => "On save",
-                UploadMode::Focus => "On focus",
-            };
+            let current = edit.mode;
+            let mode = mode_label(current);
+            let view = cx.entity().downgrade();
             let can_upload = matches!(edit.state, State::Changed | State::Failed(_));
             let progress = matches!(edit.state, State::Opening | State::Uploading).then(|| {
                 let percent = edit
@@ -545,12 +540,24 @@ impl SftpView {
                         .child(
                             Button::new(("sftp-edit-mode", id))
                                 .label(mode)
+                                .icon(IconName::ChevronDown)
                                 .ghost()
                                 .xsmall()
                                 .tooltip("When this edit uploads")
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.next_mode(id, cx)),
-                                ),
+                                .dropdown_menu(move |menu, _, _| {
+                                    MODES.iter().fold(menu, |menu, &choice| {
+                                        let view = view.clone();
+                                        menu.item(
+                                            PopupMenuItem::new(mode_label(choice))
+                                                .checked(choice == current)
+                                                .on_click(move |_, _, cx| {
+                                                    let _ = view.update(cx, |this, cx| {
+                                                        this.set_mode(id, choice, cx)
+                                                    });
+                                                }),
+                                        )
+                                    })
+                                }),
                         )
                         .child(
                             Button::new(("sftp-edit-upload", id))
@@ -604,6 +611,18 @@ impl SftpView {
                 .child(div().px(px(8.)).pt(px(4.)).text_color(muted).child("Edits"))
                 .children(rows),
         )
+    }
+}
+
+/// The upload modes, in the order the edit's menu lists them.
+const MODES: [UploadMode; 3] = [UploadMode::Manual, UploadMode::Save, UploadMode::Focus];
+
+/// An upload mode as the edit row names it.
+fn mode_label(mode: UploadMode) -> &'static str {
+    match mode {
+        UploadMode::Manual => "On click",
+        UploadMode::Save => "On save",
+        UploadMode::Focus => "On focus",
     }
 }
 
