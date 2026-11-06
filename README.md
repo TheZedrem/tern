@@ -75,16 +75,18 @@ interface that explains itself.
 - [ ] Docker / Compose: running containers in a sidebar, with controls to attach, view logs and restart
 - [ ] S3 and SMB: buckets and shares in a file sidebar, like the SFTP one (probably a plugin, maybe built in)
 
-## Install from source (Linux)
+## Install from source (Linux, macOS)
 
 With a Rust toolchain and the [prerequisites](docs/development.md#prerequisites):
 
 ```sh
-packaging/linux/install.sh
+packaging/linux/install.sh   # Linux
+packaging/macos/install.sh   # macOS
 ```
 
-It builds the release binary and links it as `~/.local/bin/tern`. Re-run
-it after pulling to update.
+It builds the release binary and links it as `~/.local/bin/tern`. On macOS
+it also puts a `Tern.app` (signed ad-hoc, not with an Apple Developer ID) in `~/Applications`. Re-run it after
+pulling to update.
 
 ## Links
 

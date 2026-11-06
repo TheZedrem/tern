@@ -35,6 +35,16 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 russh-sftp = "3"
 tokio = { version = "1", features = ["rt", "process", "io-util", "sync", "time", "macros"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Without font-kit, GPUI's macOS backend renders no text at all.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit"] }
+
+[features]
+# Compile GPUI's Metal shaders at launch instead of at build time, for Macs
+# without Xcode's `metal` compiler. Costs startup time on every launch;
+# packaging/macos/install.sh turns it on only when `metal` is missing.
+runtime-shaders = ["gpui_platform/runtime_shaders"]
+
 [target.'cfg(windows)'.dependencies]
 # What interprocess takes the askpass pipe's security descriptor as.
 widestring = "1"

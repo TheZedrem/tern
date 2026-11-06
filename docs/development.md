@@ -15,7 +15,12 @@ How to get a working dev setup. Day-to-day commands are in
   - **Fedora:** `sudo dnf install libxkbcommon-devel fontconfig-devel vulkan-loader mesa-vulkan-drivers`
   - **Debian/Ubuntu:** `sudo apt install libxkbcommon-dev libfontconfig-dev libvulkan1 mesa-vulkan-drivers`
 - **Windows 11:** the MSVC toolchain (Visual Studio Build Tools).
-- **macOS:** Xcode Command Line Tools (compile-only platform).
+- **macOS:** Xcode Command Line Tools (compile-only platform). GPUI
+  compiles its shaders with `xcrun metal` at build time, which only full
+  Xcode ships (`xcodebuild -downloadComponent MetalToolchain`). Without it,
+  build with `--features runtime-shaders`, which compiles them at every
+  launch instead and costs startup time; `packaging/macos/install.sh` does
+  this on its own, with a warning.
 
 ## First run
 
@@ -40,9 +45,11 @@ To try a config without touching your own, point `XDG_CONFIG_HOME`
 elsewhere (Linux): `XDG_CONFIG_HOME=/tmp/zt cargo run` reads and watches
 `/tmp/zt/tern/config.yaml`.
 
-To run this checkout as `tern` from anywhere (Linux),
-`packaging/linux/install.sh` builds the release binary and links it into
-`${XDG_BIN_HOME:-~/.local/bin}`. Re-run it after pulling to update.
+To run this checkout as `tern` from anywhere, `packaging/linux/install.sh`
+(or `packaging/macos/install.sh`) builds the release binary and links it into
+`${XDG_BIN_HOME:-~/.local/bin}`. The macOS script also writes an ad-hoc
+signed `~/Applications/Tern.app` with a copy of the binary. Re-run it after
+pulling to update.
 
 ## Tests
 
