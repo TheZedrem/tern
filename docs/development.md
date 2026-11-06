@@ -47,7 +47,9 @@ elsewhere (Linux): `XDG_CONFIG_HOME=/tmp/zt cargo run` reads and watches
 
 To run this checkout as `tern` from anywhere, `packaging/linux/install.sh`
 (or `packaging/macos/install.sh`) builds the release binary and links it into
-`${XDG_BIN_HOME:-~/.local/bin}`. The macOS script also writes an ad-hoc
+`${XDG_BIN_HOME:-~/.local/bin}`. The Linux script also installs the desktop
+entry and icon into `~/.local/share`, so launchers and taskbars show Tern's
+icon. The macOS script also writes an ad-hoc
 signed `~/Applications/Tern.app` with a copy of the binary. Re-run it after
 pulling to update.
 
@@ -84,3 +86,10 @@ it downloads the AppImage runtime while it runs. A local build links
 against your distro's glibc, so its packages only install on that distro
 version or newer. The release packages are built on Ubuntu 24.04 and need
 glibc 2.39.
+
+Every package takes its icon from `assets/icon.png`, rendered from the
+source `assets/icon.svg`. After changing the SVG, re-render it:
+
+```sh
+magick -background none -density 192 assets/icon.svg -resize 512x512 -depth 8 assets/icon.png
+```
