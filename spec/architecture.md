@@ -84,6 +84,7 @@ frame needs. Everything else is a module under `src/`:
 - `layout/` — tabs, title bar, split tree, session restore
 - `commands/` — actions, keymap, palette
 - `ssh/` — hosts, the ssh command, askpass (spec 0006)
+- `sftp/` — SFTP sessions per SSH pane and the sidebar (spec 0008)
 - `config.rs`, `theme.rs`, `session.rs` — files on disk
 - `secrets.rs` — the OS keychain
 - `update.rs` — the opt-in release check (spec 0011)

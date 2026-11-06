@@ -20,3 +20,4 @@ stable so tasks and bugs can cite them.
 |---|---|---|---|
 | [0001](0001-ssh-askpass.md) | SSH askpass and stored credentials | 2026-11-04 | accepted; residual risks signed off in OQ-016 |
 | [0002](0002-escape-sequences.md) | Escape sequences from programs and remote hosts | 2026-11-05 | draft; residual risks await sign-off in OQ-017 |
+| [0003](0003-sftp.md) | SFTP sidebar: remote names, edit copies, opening, uploads | 2026-11-06 | accepted; residual risks signed off in OQ-023 |

@@ -12,7 +12,8 @@ them for `ESC ] 7 ; file://host/path` up to 4 KiB, implementing
 in a local pane, for a host that is empty, `localhost` or this machine's
 name, naming an existing local directory (spec 0002, TM-escape-09); the
 pane's cwd prefers it over `/proc`, and a change saves the session
-(T-006). Ship the opt-in bash, zsh and pwsh snippets under
+(T-006). In an SSH pane, keep the last report's path in memory only as
+the remote cwd its SFTP session starts in (spec 0008). Ship the opt-in bash, zsh and pwsh snippets under
 `shell-integration/` (OQ-008) that emit it. Needs `polling` as a direct
 dependency (OQ-018). Area: src.
 

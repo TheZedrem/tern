@@ -42,7 +42,7 @@ interface that explains itself.
 - [x] Host picker with groups and filtering
 - [x] ssh prompts answered in the app, passwords remembered in the OS keychain on request
 - [x] Importing hosts from MobaXterm and Tabby ([spec 0010](spec/0010-import-hosts.md))
-- [ ] SFTP panel: browse, edit remote files in a local app, upload, download, rename, delete ([spec 0008](spec/0008-sftp-panel.md), [T-023](tasks/T-023-sftp-panel.md))
+- [ ] SFTP sidebar (left or right, opened per SSH pane): browse, edit remote files in a local app, upload, download, rename, delete ([spec 0008](spec/0008-sftp-panel.md), [T-023](tasks/T-023-sftp-panel.md))
 - [ ] Dragging files out of the SFTP panel into the file manager ([T-027](tasks/T-027-sftp-drag-out-local-files.md))
 
 **Distribution**
