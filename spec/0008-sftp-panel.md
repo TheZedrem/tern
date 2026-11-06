@@ -117,8 +117,9 @@ manager), and the sidebar asks for passwords the way the terminal does.
 
 1. **Open:** `sftp.toggle` opens the active pane's sidebar, or closes it
    (its session stays). If the pane has no session yet, it connects and
-   lists its start folder (Model). Prompts open the session's dialog,
-   filled from the keychain as in spec 0006, flow 4. On a local pane the
+   lists its start folder (Model). Its prompts open the pane's dialog,
+   named "<profile> (SFTP)", filled from the keychain as in spec 0006,
+   flow 4; they take turns with the terminal's prompts. On a local pane the
    command does nothing but show a notice that SFTP needs an SSH pane.
    Moving a pane to another tab or split (spec 0007) keeps its flag and
    session.

@@ -11,8 +11,8 @@ pub mod yaml;
 
 use crate::commands::{self, AppCommand, OpenConfigFolder, keymap};
 use crate::config::{
-    CloseOnExit, Config, CursorStyle, NewTab, OpenLinks, Profile, ProfileKind, TabBarSide,
-    UpdateCheck,
+    CloseOnExit, Config, CursorStyle, NewTab, OpenLinks, Profile, ProfileKind, SftpSide,
+    TabBarSide, UpdateCheck,
 };
 use crate::layout::show_notice;
 use change::{Change, ProfileForm};
@@ -51,6 +51,7 @@ pub const FIELDS: &[&str] = &[
     "keybindings",
     "theme.default",
     "tab_bar",
+    "sftp_sidebar",
     "new_tab",
     "update_check",
 ];
@@ -540,6 +541,14 @@ fn tab_bar_side(config: &Config) -> &'static str {
         TabBarSide::Bottom => "bottom",
         TabBarSide::Left => "left",
         TabBarSide::Right => "right",
+    }
+}
+
+/// `sftp_sidebar` as the file writes it.
+fn sftp_side(config: &Config) -> &'static str {
+    match config.sftp_sidebar {
+        SftpSide::Left => "left",
+        SftpSide::Right => "right",
     }
 }
 
@@ -1067,6 +1076,24 @@ impl Render for SettingsView {
                 )
                 .into_any_element(),
             ),
+            row(
+                Page::Appearance,
+                "SFTP",
+                "SFTP sidebar",
+                "sftp files sidebar panel left right side remote browser",
+                self.options(
+                    "sftp-sidebar",
+                    &[("left", "Left"), ("right", "Right")],
+                    sftp_side(config),
+                    |value| {
+                        choice(vec!["sftp_sidebar"], value, |config| {
+                            sftp_side(config).to_owned()
+                        })
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
         ];
         rows.push(row(
             Page::Appearance,
@@ -1362,6 +1389,8 @@ mod tests {
         "copy_on_select",
         "open_links",
         "tab_bar",
+        // Spec 0008's, documented with spec 0005's.
+        "sftp_sidebar",
         "new_tab",
         // Spec 0011's, documented with spec 0005's.
         "update_check",

@@ -47,6 +47,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::pin::pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use zeroize::Zeroizing;
@@ -440,6 +441,14 @@ struct Running {
     child_pid: Option<u32>,
 }
 
+/// Whose ssh a prompt dialog answers: the pane's terminal connection, or
+/// its SFTP connection (spec 0008).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Asker {
+    Terminal,
+    Sftp,
+}
+
 pub struct TerminalPane {
     focus: FocusHandle,
     state: State,
@@ -458,8 +467,14 @@ pub struct TerminalPane {
     /// Answers the running SSH connection's prompts (spec 0006, flow 4).
     /// Dropping it ends them, and their helpers exit 1.
     askpass: Option<Task<()>>,
-    /// The dialog over the pane while ssh waits on a prompt.
-    dialog: Option<Entity<PromptDialog>>,
+    /// Answers the prompts of the pane's SFTP connection, which has a token
+    /// of its own (spec 0008, Model).
+    sftp_askpass: Option<Task<()>>,
+    /// The dialog over the pane while an ssh waits on a prompt, and whose.
+    dialog: Option<(Asker, Entity<PromptDialog>)>,
+    /// The terminal's and the SFTP connection's prompts take turns at the
+    /// one dialog.
+    dialog_turn: Rc<futures::lock::Mutex<()>>,
     /// Where the grid was drawn last, its origin and cell size, for
     /// turning mouse positions into cells.
     geometry: Option<(Point<Pixels>, Size<Pixels>)>,
@@ -523,7 +538,9 @@ impl TerminalPane {
             first_frame_scheduled: false,
             title: None,
             askpass: None,
+            sftp_askpass: None,
             dialog: None,
+            dialog_turn: Rc::default(),
             geometry: None,
             selecting: false,
             scroll_remainder: 0.0,
@@ -622,12 +639,59 @@ impl TerminalPane {
                 Ok(connection) => {
                     command.env.extend(connection.env);
                     let args = command.args.clone();
-                    self.askpass = Some(self.answer_prompts(connection.prompts, args, window, cx));
+                    let prompts = connection.prompts;
+                    let task = self.answer_prompts(prompts, args, Asker::Terminal, window, cx);
+                    self.askpass = Some(task);
                 }
                 Err(error) => self.notice(format!("ssh asks in the terminal: {error}"), cx),
             }
         }
         command
+    }
+
+    /// `user@host` of an SSH pane, as its SFTP sidebar names it.
+    pub fn ssh_target(&self) -> Option<String> {
+        self.profile
+            .ssh
+            .then(|| ssh::target_label(&self.launch.command.args))
+    }
+
+    /// What starts a new SFTP connection to this SSH pane's host, with the
+    /// same options as the pane (spec 0008, Model). It gets a token of its
+    /// own, and its prompts open this pane's dialog, marked as the SFTP
+    /// connection's; a new one ends the last one's prompts. Without an
+    /// askpass server ssh can't ask at all, so it runs in batch mode and
+    /// fails rather than wait on a terminal it doesn't have.
+    pub fn sftp_command(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<pty::Command> {
+        if !self.profile.ssh {
+            return None;
+        }
+        let pane_args = self.launch.command.args.clone();
+        let mut args = ssh::sftp_args(&pane_args)?;
+        self.sftp_askpass = None;
+        self.close_dialog(Asker::Sftp, cx);
+        let mut env = self.launch.command.env.clone();
+        match askpass::connect(cx) {
+            Ok(connection) => {
+                env.extend(connection.env);
+                let prompts = connection.prompts;
+                let task = self.answer_prompts(prompts, pane_args, Asker::Sftp, window, cx);
+                self.sftp_askpass = Some(task);
+            }
+            Err(_) => {
+                args.insert(0, "BatchMode=yes".to_owned());
+                args.insert(0, "-o".to_owned());
+            }
+        }
+        Some(pty::Command {
+            program: self.launch.command.program.clone(),
+            args,
+            env,
+        })
     }
 
     /// Shows `notice` as a toast. Deferred, so one raised while the pane is
@@ -642,15 +706,17 @@ impl TerminalPane {
     /// Answers the prompts of the connection whose ssh runs with `args`, one
     /// at a time (spec 0006, flow 4). The connection's own password and
     /// passphrase prompts are filled in from the keychain once each, with a
-    /// notice; everything else gets a dialog.
+    /// notice; everything else gets a dialog, when it's `asker`'s turn.
     fn answer_prompts(
         &self,
         mut prompts: UnboundedReceiver<Prompt>,
         args: Vec<String>,
+        asker: Asker,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         let executor = cx.background_executor().clone();
+        let turn = Rc::clone(&self.dialog_turn);
         let target = secrets::off_thread(move || Target::resolve(&args));
         cx.spawn_in(window, async move |this, cx| {
             let target = within(target, RESOLVE_TIMEOUT, &executor)
@@ -684,8 +750,9 @@ impl TerminalPane {
                     }
                 }
                 let remember = offers.remember(key.clone());
+                let _turn = turn.lock().await;
                 let Ok(answered) = this.update_in(cx, |pane, window, cx| {
-                    pane.open_dialog(&prompt, remember, window, cx)
+                    pane.open_dialog(&prompt, remember, asker, window, cx)
                 }) else {
                     break;
                 };
@@ -693,7 +760,7 @@ impl TerminalPane {
                     Either::Left((Ok(answer), _)) => Some(answer),
                     _ => None,
                 };
-                let _ = this.update(cx, |pane, cx| pane.close_dialog(cx));
+                let _ = this.update(cx, |pane, cx| pane.close_dialog(asker, cx));
                 match answer {
                     Some(Answer::Typed { text, save }) => {
                         prompt.answer(&text);
@@ -716,12 +783,16 @@ impl TerminalPane {
         &mut self,
         prompt: &Prompt,
         remember: Option<Remember>,
+        asker: Asker,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> oneshot::Receiver<Answer> {
         let (answer, answered) = oneshot::channel();
-        let connection = SharedString::from(self.profile.name.clone());
-        self.dialog = Some(cx.new(|cx| {
+        let connection = match asker {
+            Asker::Terminal => SharedString::from(self.profile.name.clone()),
+            Asker::Sftp => format!("{} (SFTP)", self.profile.name).into(),
+        };
+        let dialog = cx.new(|cx| {
             PromptDialog::new(
                 connection,
                 &prompt.text,
@@ -731,23 +802,31 @@ impl TerminalPane {
                 window,
                 cx,
             )
-        }));
+        });
+        self.dialog = Some((asker, dialog));
         cx.emit(PaneEvent::DialogChanged);
         cx.notify();
         answered
     }
 
-    fn close_dialog(&mut self, cx: &mut Context<Self>) {
-        if self.dialog.take().is_some() {
+    /// Closes the dialog if it's `asker`'s.
+    fn close_dialog(&mut self, asker: Asker, cx: &mut Context<Self>) {
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner == asker)
+        {
+            self.dialog = None;
             cx.emit(PaneEvent::DialogChanged);
             cx.notify();
         }
     }
 
-    /// Ends the connection's prompts; helpers still waiting exit 1.
+    /// Ends the terminal connection's prompts; helpers still waiting exit
+    /// 1. The SFTP connection's have their own token and go on.
     fn end_prompts(&mut self, cx: &mut Context<Self>) {
         self.askpass = None;
-        self.close_dialog(cx);
+        self.close_dialog(Asker::Terminal, cx);
     }
 
     /// Saves what was typed under `key`, off the UI thread. Only a failure
@@ -822,7 +901,7 @@ impl TerminalPane {
     /// while one is open, else the grid.
     pub fn focus_handle(&self, cx: &App) -> FocusHandle {
         match &self.dialog {
-            Some(dialog) => dialog.read(cx).focus_target(cx),
+            Some((_, dialog)) => dialog.read(cx).focus_target(cx),
             None => self.focus.clone(),
         }
     }
@@ -1661,7 +1740,7 @@ impl Render for TerminalPane {
             .child(grid)
             .children(self.render_link_hint(cx))
             .children(self.render_search(cx))
-            .children(self.dialog.clone())
+            .children(self.dialog.as_ref().map(|(_, dialog)| dialog.clone()))
     }
 }
 

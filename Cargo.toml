@@ -30,6 +30,10 @@ interprocess = "2.4"
 getrandom = "0.4"
 zeroize = "1"
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+# The SFTP sidebar's client, over `ssh -s <host> sftp` (spec 0008). Its
+# thread runs a current-thread tokio runtime; GPUI already builds tokio.
+russh-sftp = "3"
+tokio = { version = "1", features = ["rt", "process", "io-util", "sync", "time", "macros"] }
 
 [target.'cfg(windows)'.dependencies]
 # What interprocess takes the askpass pipe's security descriptor as.

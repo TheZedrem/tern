@@ -14,12 +14,13 @@ use crate::commands::{
     FocusLeft, FocusRight, FocusUp, ForgetPassword, GoToTab, IncreaseFontSize, NewTab,
     NewTabWithProfile, NextTab, OpenConfig, OpenConfigFolder, OpenPalette, OpenSettings, Paste,
     PreviousTab, RenameTab, ResetFontSize, Search, SelectTheme, SplitDown, SplitDownWithProfile,
-    SplitRight, SplitRightWithProfile, ZoomPane,
+    SplitRight, SplitRightWithProfile, ToggleSftp, ZoomPane,
 };
-use crate::config::{self, Config, Profile, ProfileKind, TabBarSide};
+use crate::config::{self, Config, Profile, ProfileKind, SftpSide, TabBarSide};
 use crate::secrets;
 use crate::session::{self, SavedLeaf, SavedNode, SavedTab, Session, WindowSize};
 use crate::settings::{self, Pick, SettingsEvent, SettingsView, change::Change};
+use crate::sftp::{self, SftpEvent, SftpView};
 use crate::ssh;
 use crate::terminal::pty::{self, Command, GridSize};
 use crate::terminal::{
@@ -75,6 +76,10 @@ const SILENT_BOOT_WAIT: Duration = Duration::from_secs(1);
 /// How long the layout must stay put before the session is saved (spec
 /// 0003, flow 5).
 const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
+/// The SFTP sidebar's width until it's dragged, and the least it can be
+/// dragged to; the most is half the window (spec 0008, Model).
+const SFTP_WIDTH: f32 = 300.0;
+const SFTP_MIN_WIDTH: f32 = 200.0;
 
 actions!(tern, [CancelRename]);
 
@@ -86,6 +91,19 @@ pub fn init(cx: &mut App) {
         CancelRename,
         Some(RENAME_CONTEXT),
     )]);
+    sftp::view::init(cx);
+}
+
+/// Dragging the SFTP sidebar's inner edge to resize it (spec 0008).
+#[derive(Clone)]
+struct DraggedSftpEdge;
+
+/// An SSH pane's SFTP sidebar, and whether it's open. It outlives being
+/// closed: the session goes on until the pane closes (spec 0008, Model).
+struct Sidebar {
+    view: Entity<SftpView>,
+    open: bool,
+    _events: Subscription,
 }
 
 /// Dragging a tab to a new place in the bar, or onto a side of a pane
@@ -336,6 +354,11 @@ pub struct Workspace {
     update_timer: Option<Task<()>>,
     /// This run asked whether to check for updates; it asks once.
     update_asked: bool,
+    /// The SFTP sidebars of SSH panes, by pane (spec 0008). Only the
+    /// active pane's shows, if it's open.
+    sftp: HashMap<LeafId, Sidebar>,
+    /// The sidebars' width, one for the window, until Tern quits.
+    sftp_width: f32,
 }
 
 impl Workspace {
@@ -397,6 +420,8 @@ impl Workspace {
             bad_session,
             update_timer: None,
             update_asked: false,
+            sftp: HashMap::new(),
+            sftp_width: SFTP_WIDTH,
         };
         for (leaf, pane) in panes {
             let BootPane {
@@ -1410,6 +1435,107 @@ impl Workspace {
         self.panes.get(&self.tabs.active().focused).cloned()
     }
 
+    /// Opens or closes the active pane's SFTP sidebar, starting its session
+    /// the first time (spec 0008, flow 1). A local pane has none.
+    fn toggle_sftp(&mut self, _: &ToggleSftp, window: &mut Window, cx: &mut Context<Self>) {
+        let leaf = self.tabs.active().focused;
+        if let Some(sidebar) = self.sftp.get_mut(&leaf) {
+            sidebar.open = !sidebar.open;
+            if !sidebar.open {
+                self.focus_active(window, cx);
+            }
+            cx.notify();
+            return;
+        }
+        let Some(pane) = self.panes.get(&leaf).cloned() else {
+            return;
+        };
+        if pane.read(cx).ssh_target().is_none() {
+            show_notice("SFTP needs an SSH pane".into(), window, cx);
+            return;
+        }
+        let view = cx.new(|cx| SftpView::new(&pane, window, cx));
+        let events = cx.subscribe_in(&view, window, move |this, _, event, window, cx| {
+            let SftpEvent::Close = event;
+            if let Some(sidebar) = this.sftp.get_mut(&leaf) {
+                sidebar.open = false;
+            }
+            this.focus_active(window, cx);
+            cx.notify();
+        });
+        self.sftp.insert(
+            leaf,
+            Sidebar {
+                view,
+                open: true,
+                _events: events,
+            },
+        );
+        cx.notify();
+    }
+
+    /// The active pane's SFTP sidebar if it's open, with the inner edge it
+    /// is resized by (spec 0008, Model).
+    fn render_sftp(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let sidebar = self
+            .sftp
+            .get(&self.tabs.active().focused)
+            .filter(|sidebar| sidebar.open)?;
+        let theme = cx.theme();
+        let (background, border) = (theme.tab_bar, theme.border);
+        let edge = div()
+            .id("sftp-edge")
+            .w(px(DIVIDER))
+            .h_full()
+            .flex_shrink_0()
+            .bg(border)
+            .cursor_col_resize()
+            .on_drag(DraggedSftpEdge, |_, _, _, cx| cx.new(|_| DividerGhost));
+        let body = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(sidebar.view.clone());
+        let side = self.config.sftp_sidebar;
+        Some(
+            div()
+                .id("sftp")
+                .w(px(self.sftp_width))
+                .h_full()
+                .flex_shrink_0()
+                .flex()
+                .bg(background)
+                .map(|sidebar| match side {
+                    SftpSide::Left => sidebar.child(body).child(edge),
+                    SftpSide::Right => sidebar.child(edge).child(body),
+                })
+                .on_drag_move(cx.listener(
+                    |this, event: &DragMoveEvent<DraggedSftpEdge>, window, cx| {
+                        this.drag_sftp_edge(event, window, cx);
+                    },
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// Sets the SFTP sidebar's width from the mouse: from its outer edge,
+    /// which stays put, between [`SFTP_MIN_WIDTH`] and half the window.
+    fn drag_sftp_edge(
+        &mut self,
+        event: &DragMoveEvent<DraggedSftpEdge>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (bounds, x) = (event.bounds, event.event.position.x);
+        let width = match self.config.sftp_sidebar {
+            SftpSide::Left => x - bounds.left(),
+            SftpSide::Right => bounds.right() - x,
+        };
+        let most = (f32::from(window.viewport_size().width) / 2.0).max(SFTP_MIN_WIDTH);
+        self.sftp_width = f32::from(width).clamp(SFTP_MIN_WIDTH, most);
+        cx.notify();
+    }
+
     /// Moves keyboard focus to the active tab's focused pane.
     /// While the settings screen is open, the keyboard is its.
     fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1428,6 +1554,8 @@ impl Workspace {
     /// never started.
     fn stop_pane(&mut self, leaf: LeafId, cx: &mut Context<Self>) {
         self.pending.remove(&leaf);
+        // Its SFTP session ends with it, and its ssh with the session.
+        self.sftp.remove(&leaf);
         self.pane_subscriptions.remove(&leaf);
         if let Some(pane) = self.panes.remove(&leaf) {
             pane.update(cx, |pane, _| pane.shutdown());
@@ -2479,6 +2607,12 @@ impl Render for Workspace {
             TabBarSide::Right => (None, list),
             _ => (list, None),
         };
+        // The SFTP sidebar sits inside a tab list on its side (spec 0008).
+        let sftp = self.render_sftp(cx);
+        let (sftp_left, sftp_right) = match self.config.sftp_sidebar {
+            SftpSide::Left => (sftp, None),
+            SftpSide::Right => (None, sftp),
+        };
         let workspace = div()
             .size_full()
             .relative()
@@ -2552,6 +2686,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::select_theme))
             .on_action(cx.listener(Self::connect_to_host))
             .on_action(cx.listener(Self::forget_password))
+            .on_action(cx.listener(Self::toggle_sftp))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.close_tab(this.tabs.active_index(), window, cx);
             }))
@@ -2574,6 +2709,7 @@ impl Render for Workspace {
                     .min_h_0()
                     .flex()
                     .children(left)
+                    .children(sftp_left)
                     .child(
                         div()
                             .flex_1()
@@ -2585,6 +2721,7 @@ impl Render for Workspace {
                             .children(self.render_settings())
                             .children(self.render_palette(cx)),
                     )
+                    .children(sftp_right)
                     .children(right),
             )
             .children(bottom)

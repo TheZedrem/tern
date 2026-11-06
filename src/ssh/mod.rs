@@ -114,6 +114,31 @@ pub fn command(profile: &SshProfile) -> Command {
     }
 }
 
+/// The SFTP subsystem on the host `args` connect to (spec 0008): `args`
+/// are [`command`]'s, so the host is last; the same options come first,
+/// then `-s <host> sftp`. `None` for an empty list.
+pub fn sftp_args(args: &[String]) -> Option<Vec<String>> {
+    let (host, options) = args.split_last()?;
+    let mut sftp = options.to_vec();
+    sftp.extend(["-s".to_owned(), host.clone(), "sftp".to_owned()]);
+    Some(sftp)
+}
+
+/// Who and where [`command`]'s `args` connect to, as the SFTP sidebar's
+/// header names it: `user@host`, or the host alone when the profile names
+/// no user and `~/.ssh/config` decides (TM-sftp-01).
+pub fn target_label(args: &[String]) -> String {
+    let host = args.last().map(String::as_str).unwrap_or_default();
+    let user = args
+        .windows(2)
+        .find(|pair| pair[0] == "-l")
+        .map(|pair| pair[1].as_str());
+    match user {
+        Some(user) => format!("{user}@{host}"),
+        None => host.to_owned(),
+    }
+}
+
 /// Forgets what the keychain holds for the connection with `args` (spec
 /// 0006, flow 7): its target's password and its keys' passphrases. Returns
 /// what was forgotten. Runs `ssh -G` and keychain calls, so it blocks.
@@ -528,6 +553,67 @@ mod tests {
         ];
         for (profile, expected) in cases {
             assert_eq!(argv(&command(&profile)), expected, "{profile:?}");
+        }
+    }
+
+    /// Spec 0008, Model, and TM-sftp-19: the SFTP connection runs the
+    /// pane's own options, then `-s <host> sftp`, with the host from
+    /// `command` and never anything after it from config.
+    #[test]
+    fn the_sftp_connection_uses_the_panes_options_then_s_host_sftp() {
+        let profile = SshProfile {
+            user: Some("alice".into()),
+            port: NonZeroU16::new(2222),
+            identity_file: Some(PathBuf::from("/home/alice/.ssh/id_ed25519")),
+            ..ssh_to("myserver.example.com")
+        };
+        let expected = [
+            "-l",
+            "alice",
+            "-p",
+            "2222",
+            "-i",
+            "/home/alice/.ssh/id_ed25519",
+            "-s",
+            "myserver.example.com",
+            "sftp",
+        ];
+        assert_eq!(
+            sftp_args(&command(&profile).args),
+            Some(expected.map(String::from).to_vec())
+        );
+        assert_eq!(
+            sftp_args(&command(&ssh_to("web")).args),
+            Some(["-s", "web", "sftp"].map(String::from).to_vec())
+        );
+    }
+
+    /// Without a host there's nothing to connect the sidebar to.
+    #[test]
+    fn no_arguments_give_no_sftp_connection() {
+        assert_eq!(sftp_args(&[]), None);
+    }
+
+    /// Spec 0008, Model: the sidebar's header names its target as
+    /// `user@host`, or the host alone when `~/.ssh/config` picks the user.
+    #[test]
+    fn the_sidebar_names_its_target_user_at_host_or_the_host_alone() {
+        let full = SshProfile {
+            user: Some("alice".into()),
+            port: NonZeroU16::new(2222),
+            identity_file: Some(PathBuf::from("/home/alice/.ssh/id_ed25519")),
+            ..ssh_to("myserver.example.com")
+        };
+        let port_only = SshProfile {
+            port: NonZeroU16::new(2222),
+            ..ssh_to("prod")
+        };
+        for (profile, expected) in [
+            (full, "alice@myserver.example.com"),
+            (ssh_to("web"), "web"),
+            (port_only, "prod"),
+        ] {
+            assert_eq!(target_label(&command(&profile).args), expected);
         }
     }
 

@@ -70,6 +70,7 @@ stay):**
 | Focus pane | `Alt+←↑→↓` |
 | Zoom pane | `Ctrl+Shift+Z` |
 | Copy / paste / search | `Ctrl+Shift+C` / `Ctrl+Shift+V` / `Ctrl+Shift+F` |
+| Toggle the SFTP sidebar (spec 0008) | `Ctrl+Shift+S` |
 | Font size + / − / reset | `Ctrl+=` or `Ctrl++` / `Ctrl+-` / `Ctrl+0` (macOS: `Cmd`; OQ-015) |
 
 **[load-bearing]** Defaults never bind `Ctrl` or `Alt` plus a letter, digit

@@ -31,6 +31,7 @@ copy_on_select: false # copy a selection as soon as it's made
 restore_session: true # reopen the last run's tabs and splits
 open_links: ctrl_click # ctrl_click (Cmd+click on macOS) | click
 tab_bar: top          # top | bottom | left | right (left and right: vertical tabs)
+sftp_sidebar: right   # left | right: where an SSH pane's file sidebar opens (Ctrl+Shift+S)
 new_tab: ask          # what Ctrl+Shift+T does: ask (which profile) | default;
                       # Ctrl+Alt+Shift+T does the other
 

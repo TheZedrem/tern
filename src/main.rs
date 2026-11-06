@@ -11,6 +11,7 @@ mod layout;
 mod secrets;
 mod session;
 mod settings;
+mod sftp;
 mod ssh;
 mod terminal;
 mod theme;

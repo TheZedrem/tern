@@ -57,6 +57,9 @@ actions!(
         /// Asks GitHub for a newer release now, whatever `update_check`
         /// says (spec 0011, flow 6).
         CheckForUpdates,
+        /// Opens or closes the focused SSH pane's SFTP sidebar (spec 0008,
+        /// flow 1).
+        ToggleSftp,
     ]
 );
 
@@ -134,6 +137,9 @@ pub const COMMANDS: &[AppCommand] = &[
     }),
     command("host.forget", Some("Forget saved password…"), || {
         Box::new(ForgetPassword)
+    }),
+    command("sftp.toggle", Some("Toggle SFTP sidebar"), || {
+        Box::new(ToggleSftp)
     }),
     command("theme.select", Some("Select theme"), || {
         Box::new(SelectTheme)
@@ -318,5 +324,15 @@ mod tests {
             "runs {}",
             action.name()
         );
+    }
+
+    /// Spec 0008, flow 1: "Toggle SFTP sidebar" is in the palette,
+    /// bindable as `sftp.toggle`, and toggles the sidebar.
+    #[test]
+    fn toggling_the_sftp_sidebar_is_in_the_palette_and_bindable_as_sftp_toggle() {
+        let command = by_id("sftp.toggle").expect("no command has the ID `sftp.toggle`");
+        assert_eq!(command.title, Some("Toggle SFTP sidebar"));
+        let action = (command.action)();
+        assert!(action.partial_eq(&ToggleSftp), "runs {}", action.name());
     }
 }

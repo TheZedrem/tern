@@ -75,6 +75,7 @@ cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
 tab_bar: top                        # top | bottom | left | right (spec 0003)
+sftp_sidebar: right                 # left | right (spec 0008)
 new_tab: ask                        # what Ctrl+Shift+T opens: ask | default (spec 0004)
 close_on_exit: clean                # always | clean | never
 restore_session: true

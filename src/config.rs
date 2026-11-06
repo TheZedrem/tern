@@ -51,6 +51,9 @@ pub struct Config {
     pub open_links: OpenLinks,
     /// Which side of the window the tabs are on (spec 0003).
     pub tab_bar: TabBarSide,
+    /// Which side of the window an SSH pane's SFTP sidebar is on (spec
+    /// 0008).
+    pub sftp_sidebar: SftpSide,
     /// What `Ctrl+Shift+T` opens; `Ctrl+Alt+Shift+T` opens the other
     /// (spec 0004).
     pub new_tab: NewTab,
@@ -92,6 +95,15 @@ impl TabBarSide {
     pub fn vertical(self) -> bool {
         matches!(self, TabBarSide::Left | TabBarSide::Right)
     }
+}
+
+/// Which side of the window the SFTP sidebar is on (spec 0008). Inside the
+/// tab list when the tabs are on the same side.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SftpSide {
+    Left,
+    Right,
 }
 
 /// What opens a link: Ctrl+click, the owner's default, or a plain click
@@ -229,6 +241,7 @@ impl Default for Config {
             cursor: Cursor::default(),
             open_links: OpenLinks::CtrlClick,
             tab_bar: TabBarSide::Top,
+            sftp_sidebar: SftpSide::Right,
             new_tab: NewTab::Ask,
             update_check: None,
         }
@@ -1029,6 +1042,11 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.tab_bar = side;
                     }
                 }
+                "sftp_sidebar" => {
+                    if let Some(side) = map.next_value()? {
+                        config.sftp_sidebar = side;
+                    }
+                }
                 "new_tab" => {
                     if let Some(new_tab) = map.next_value()? {
                         config.new_tab = new_tab;
@@ -1614,6 +1632,38 @@ pub(crate) mod tests {
         assert!(notices[0].contains("new_tab"), "{}", notices[0]);
     }
 
+    /// Spec 0008 §Settings: the SFTP sidebar sits on the right unless
+    /// `sftp_sidebar: left` moves it.
+    #[test]
+    fn sftp_sidebar_is_right_unless_set_to_left() {
+        assert_eq!(parse("").config.sftp_sidebar, SftpSide::Right);
+        for (text, side) in [
+            ("sftp_sidebar: left\n", SftpSide::Left),
+            ("sftp_sidebar: right\n", SftpSide::Right),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.sftp_sidebar, side, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a value `sftp_sidebar` doesn't take, like `split` (a
+    /// later mode), falls back to `right` with a notice naming the key;
+    /// the rest of the file still applies.
+    #[test]
+    fn a_bad_sftp_sidebar_falls_back_to_right_with_a_notice_and_the_rest_applies() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "sftp_sidebar: split\n",
+            "copy_on_select: true\n",
+        ));
+        assert_eq!(config.sftp_sidebar, SftpSide::Right);
+        assert_eq!(config.scrollback, 500);
+        assert!(config.copy_on_select);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("sftp_sidebar"), "{}", notices[0]);
+    }
+
     /// Spec 0011 §Model: `update_check` is unset unless it's `daily` or
     /// `off`; a key with no value is unset too, without a notice.
     #[test]
@@ -2028,7 +2078,8 @@ cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
 tab_bar: top                        # top | bottom | left | right (spec 0003)
-new_tab: ask                        # what Ctrl+Shift+T opens: ask | default (spec 0004)
+sftp_sidebar: right                 # left | right (spec 0008)
+new_tab: ask                    # what Ctrl+Shift+T opens: ask | default (spec 0004)
 close_on_exit: clean                # always | clean | never
 restore_session: true
 keybindings: { "ctrl+shift+d": pane.splitRight }
@@ -2093,7 +2144,7 @@ theme:
                 default: "dark".into(),
                 custom: vec![("midnight".into(), midnight)],
             },
-            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 31)],
+            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 32)],
             ..Config::default()
         };
         assert_eq!(config, expected);

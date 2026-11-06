@@ -1,6 +1,6 @@
 ---
-status: next
-blocked-by: [T-023]
+status: now
+blocked-by: []
 ---
 # T-035: SFTP transfers and file changes
 
