@@ -41,6 +41,11 @@ specs or tasks until they're promoted to one.
   Tern runs no model and holds no API keys. Needs the plugin system first.
   Terminal output carries secrets, so only what the user picks per request
   is handed to the harness.
+- **Docker / Compose plugin.** A plugin that shows running containers in a
+  sidebar, possibly with controls to attach, view logs and restart. Needs
+  the plugin system first.
+- **S3 and SMB.** Browse and transfer files in S3 buckets and SMB shares,
+  like the SFTP sidebar. Probably a plugin rather than built in.
 
 ## Platforms
 

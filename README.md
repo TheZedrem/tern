@@ -72,6 +72,8 @@ interface that explains itself.
 **Possible plugins** (considered, not committed to; they need the plugin system first)
 
 - [ ] AI assistant: hands errors, commands and CLI questions to an agent harness you already run (e.g. Claude Code, Codex), like T3 Code does. Tern runs no model itself
+- [ ] Docker / Compose: running containers in a sidebar, with controls to attach, view logs and restart
+- [ ] S3 and SMB: buckets and shares in a file sidebar, like the SFTP one (probably a plugin, maybe built in)
 
 ## Install from source (Linux)
 
