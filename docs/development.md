@@ -61,8 +61,8 @@ session.
 ## Linux packages
 
 A `v*` tag matching `Cargo.toml`'s version builds the `.deb`, `.rpm` and
-AppImage in CI (`.github/workflows/release.yml`) and attaches them to a
-GitHub release. To build them locally after `cargo build --release`:
+AppImage in CI (`.github/workflows/release.yml`) once the CI checks pass,
+and attaches them to a GitHub release. To build them locally after `cargo build --release`:
 
 ```sh
 cargo install --locked cargo-deb cargo-generate-rpm   # once

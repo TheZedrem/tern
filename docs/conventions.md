@@ -51,6 +51,7 @@ verdict.
 
 ## CI
 
-GitHub Actions on Linux and Windows runners, triggered by `v*` tags only
-(`.github/workflows/ci.yml`); commits to `main` don't run CI, so fmt,
+GitHub Actions on Linux and Windows runners (`.github/workflows/ci.yml`),
+run only as the first stage of a `v*` tag's release: `release.yml` builds
+packages once the checks pass. Commits to `main` don't run CI, so fmt,
 clippy and tests run locally before every commit.

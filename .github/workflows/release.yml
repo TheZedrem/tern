@@ -1,5 +1,6 @@
 # Linux packages (T-026): a `v*` tag builds the .deb, .rpm and AppImage
-# from one release binary and attaches them to a GitHub release. Built on
+# from one release binary and attaches them to a GitHub release, after the
+# CI checks (ci.yml) pass on Linux and Windows. Built on
 # ubuntu-24.04, so every package needs glibc 2.39 or newer.
 name: Release
 
@@ -14,7 +15,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   linux:
+    needs: checks
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
