@@ -35,6 +35,12 @@ specs or tasks until they're promoted to one.
 - **Plugin system.** Let users and third parties extend Tern.
 - **Signed macOS builds.** Code signing and notarization for the Phase 7
   packages. Needs a paid Apple Developer account.
+- **AI assistant plugin.** A plugin, not built into Tern, that helps with
+  errors, commands and general CLI use by delegating to an agent harness
+  the user already runs (e.g. Claude Code, Codex), the way T3 Code does.
+  Tern runs no model and holds no API keys. Needs the plugin system first.
+  Terminal output carries secrets, so only what the user picks per request
+  is handed to the harness.
 
 ## Platforms
 

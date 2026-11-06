@@ -68,6 +68,10 @@ interface that explains itself.
 - [ ] Plugin system (considered, not committed to)
 - [ ] Signed macOS builds (considered, not committed to)
 
+**Possible plugins** (considered, not committed to; they need the plugin system first)
+
+- [ ] AI assistant: hands errors, commands and CLI questions to an agent harness you already run (e.g. Claude Code, Codex), like T3 Code does. Tern runs no model itself
+
 ## Install from source (Linux)
 
 With a Rust toolchain and the [prerequisites](docs/development.md#prerequisites):
