@@ -64,7 +64,9 @@ interface that explains itself.
 - [ ] Theme editor in the app, with a live preview
 - [ ] SSH port forwarding (local, remote and dynamic) on a profile
 - [ ] Custom profiles that launch a command (e.g. a coding agent) in the current cwd, or a picked folder from an SSH session
+- [ ] macOS as a supported platform: verified, in CI and packaged (it only compiles today)
 - [ ] Plugin system (considered, not committed to)
+- [ ] Signed macOS builds (considered, not committed to)
 
 ## Install from source (Linux)
 
