@@ -1,3 +1,5 @@
+<img src="assets/icon.svg" alt="Tern icon" width="128" height="128">
+
 # Tern
 
 A fast terminal emulator with built-in SSH/SFTP. Tabby's feature set, with
