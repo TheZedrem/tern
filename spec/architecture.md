@@ -23,6 +23,7 @@ local, single-user app: no accounts, no backend, no telemetry.
 | 4 — Theme editor | Edit themes in the app with a live preview, saved as `themes/*.yaml` files (spec 0005) | — |
 | 5 — Port forwarding | Local, remote and dynamic SSH forwards on a profile, passed to the system `ssh` as `-L`/`-R`/`-D` (deferred in spec 0006) | — |
 | 6 — Command profiles | Custom profiles that run a command (e.g. a coding agent like `claude` or `codex`) instead of the shell, launched in the focused pane's cwd; from an SSH pane there's no local cwd, so a folder picker asks for one | — |
+| 7 — macOS | Promote macOS from compile-only to a required platform: verified in the running app (PTY, `Cmd` shortcuts, Keychain, paths), in CI, and packaged | — |
 
 Only phases that have started get specs and tasks; later phases stay one
 row here. Phase 2 started before Phase 1 finished (owner's call,
@@ -32,6 +33,8 @@ row here. Phase 2 started before Phase 1 finished (owner's call,
 specs or tasks until they're promoted to one.
 
 - **Plugin system.** Let users and third parties extend Tern.
+- **Signed macOS builds.** Code signing and notarization for the Phase 7
+  packages. Needs a paid Apple Developer account.
 
 ## Platforms
 
@@ -44,7 +47,7 @@ of them alive.
 |---|---|---|
 | Linux, Wayland session | Required | Any compositor with `xdg-shell`. Needs a Vulkan driver (Mesa or NVIDIA) |
 | Windows 11 | Required | DirectX 11, ConPTY |
-| macOS | Compile-only | No CI builds, no signing, no blocking on it |
+| macOS | Compile-only | No CI builds, no signing, no blocking on it. Becomes required in Phase 7 |
 | X11 or XWayland sessions, Windows 10 and older | Not supported | In an X11 session Tern exits with a clear message (spec 0001) |
 
 ## Stack
