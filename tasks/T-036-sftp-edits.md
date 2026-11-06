@@ -1,6 +1,6 @@
 ---
-status: next
-blocked-by: [T-035]
+status: now
+blocked-by: []
 ---
 # T-036: SFTP edits in the default app
 
@@ -11,7 +11,11 @@ modes (`sftp_upload: manual | save | focus` plus the per-edit override),
 the pre-upload change check, the edit rows with state and last upload,
 the close-with-edits dialog on pane, tab and window close, deleting
 copies when a session ends and sweeping a crashed run's after the first
-frame. `sftp_click` and `sftp_upload` on the settings screen. Carries
+frame. `sftp_click` (default `edit`: until now a file's Enter or double
+click downloads, T-035) and `sftp_upload` on the settings screen, and Edit
+in an entry's context menu. Edits upload through T-035's part files, so
+an upload that fails or is cancelled never leaves a half-written file on
+the host. Carries
 TM-sftp-05, -07 (edit copies), -08, -09, -12 and -13. Area: src.
 
 Spec: ../spec/0008-sftp-panel.md (flow 3; AC6, 7, 8, 10's close half)

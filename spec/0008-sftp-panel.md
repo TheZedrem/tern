@@ -130,7 +130,8 @@ manager), and the sidebar asks for passwords the way the terminal does.
    that fails says why in the sidebar and keeps the last one. On a file,
    Enter or a double click does what `sftp_click` says: `edit` (default) or
    `download`; the context menu always offers Edit, Download and
-   Download to….
+   Download to…, plus Rename and Delete (also F2 and Delete). Until edits
+   exist (T-036), a file's Enter or double click downloads it.
 3. **Edit:** the file downloads to its edit copy with progress (cancel
    deletes it), then opens with the OS's default app for its type and is
    listed in the session's edits with its upload mode. A save marks it
@@ -145,18 +146,25 @@ manager), and the sidebar asks for passwords the way the terminal does.
    session has edits asks first, naming them; edits with changes not yet
    uploaded are called out, and the dialog offers to upload them first.
 4. **Download:** a click goes to the OS's Downloads folder, Download to…
-   picks a folder (the OS's file dialog); each file streams in 256 KiB
-   chunks with progress. An existing local file is only replaced after a
-   confirmation. Cancel, a full disk or a dropped connection stops and
-   deletes the partial file.
+   picks a folder (the OS's file dialog). Each file streams in 64 KiB
+   requests, 16 in flight, with progress, into `<name>.tern-part` beside
+   its target, renamed into place when complete **[load-bearing]**: a
+   cancel or failure never touches a file the user agreed to replace. An
+   existing local file is only replaced after a confirmation. Cancel, a
+   full disk or a dropped connection stops and deletes the part.
 5. **Upload:** the user picks local files, or drops them from the file
    manager onto the sidebar (into the folder shown, or the folder row under
-   the pointer, which highlights while dragging); an existing remote file
-   is only replaced after a confirmation naming the host; cancel stops and
-   removes the partial remote file.
+   the pointer, which highlights while dragging). Each writes to
+   `.<name>.tern-part` in its folder, renamed into place when complete; a
+   file it replaces lends it its permissions, so a script stays
+   executable. An existing remote file is only replaced after a
+   confirmation naming the host; cancel stops and removes the part. A
+   dropped folder fails in the transfer list, saying why.
 6. **Change:** rename and new folder ask for a name; delete asks for a
-   confirmation naming what goes and on which host (a symlink is removed
-   as a link, never followed). The listing refreshes after each.
+   confirmation naming what goes and on which host. It removes files,
+   links (as links, never followed) and empty folders; a folder with
+   anything in it fails with the server's reason. The listing refreshes
+   after each.
 7. **Failures:** no sftp subsystem, a refused login or a dropped connection
    shows ssh's reason in the sidebar with a "Connect again" button; edits
    stay listed and upload after reconnecting. Nothing hangs. A pane whose
@@ -222,7 +230,7 @@ Trust boundaries:
   `/`, `\`, control characters and invisible or direction characters
   (Unicode `Cf`); a name that is `.` or `..` has its dots escaped; on
   Windows also `< > : " | ? *`, the first character of a reserved device
-  name (`CON`, `aux.txt` → `%41ux.txt`) and a trailing dot or space. `%`
+  name (`CON`, `aux.txt` → `%61ux.txt`) and a trailing dot or space. `%`
   itself stays: the escape only has to be safe, not reversible, and a
   name that collides with an existing file gets the overwrite
   confirmation. The escaped name is joined to the target folder, and a

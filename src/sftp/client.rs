@@ -4,6 +4,7 @@
 //! the [`Event`]s that come back; nothing here runs on the UI thread.
 //! Dropping the [`Client`] ends the thread, which kills its ssh.
 
+use super::transfer;
 use super::{Entry, Kind, Listing, MAX_ENTRIES};
 use crate::terminal::clean_prompt;
 use crate::terminal::pty::Command;
@@ -11,8 +12,12 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures::future::join_all;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::error::Error;
-use russh_sftp::protocol::{File, StatusCode};
+use russh_sftp::protocol::{File, FileAttributes, StatusCode};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Child;
@@ -31,10 +36,24 @@ const STDERR_KEEP: usize = 4 * MAX_REASON_BYTES;
 /// How many link targets are looked up at once.
 const LINK_LOOKUPS: usize = 64;
 
-/// What the sidebar asks of its connection.
-pub enum Request {
-    /// List the folder at this absolute path.
+/// What the sidebar asks of its connection. Paths are absolute remote
+/// paths; a transfer's ID is the sidebar's, for its events and its cancel.
+enum Request {
     List(String),
+    Download(Download),
+    Upload(Upload),
+    /// Stop a transfer and remove what it wrote (spec 0008, flows 4, 5).
+    Cancel(u64),
+    Rename {
+        from: String,
+        to: String,
+    },
+    /// Remove a file, a link, or an empty folder (`folder`).
+    Delete {
+        path: String,
+        folder: bool,
+    },
+    MakeFolder(String),
 }
 
 /// What the connection reports.
@@ -50,8 +69,59 @@ pub enum Event {
         path: String,
         error: String,
     },
+    /// A transfer moved on: `done` bytes of `total`, if the size is known.
+    Progress {
+        id: u64,
+        done: u64,
+        total: Option<u64>,
+    },
+    TransferDone {
+        id: u64,
+    },
+    /// A transfer failed, and removed what it wrote. A cancelled one
+    /// reports nothing.
+    TransferFailed {
+        id: u64,
+        error: String,
+    },
+    /// An upload's target exists, and it wasn't to be replaced: nothing
+    /// was written. Asking and uploading again with `replace` is the
+    /// sidebar's.
+    Exists {
+        id: u64,
+    },
+    /// Something in this folder changed: an upload, rename, delete or new
+    /// folder.
+    Changed {
+        folder: String,
+    },
+    /// A rename, delete or new folder failed.
+    Failed(String),
     /// The connection is over, and why, in ssh's words where it gave some.
     Ended(String),
+}
+
+/// A download of remote file `remote` to local `target`, written to
+/// `part` next to it until it's complete (spec 0008, flow 4).
+#[derive(Debug)]
+pub struct Download {
+    pub id: u64,
+    pub remote: String,
+    pub target: PathBuf,
+    /// `target` may be replaced: the user confirmed it.
+    pub replace: bool,
+}
+
+/// An upload of local file `local` into remote `folder` as `name` (spec
+/// 0008, flow 5).
+#[derive(Debug)]
+pub struct Upload {
+    pub id: u64,
+    pub local: PathBuf,
+    pub folder: String,
+    pub name: String,
+    /// An existing remote file may be replaced: the user confirmed it.
+    pub replace: bool,
 }
 
 /// The sidebar's end of a running connection.
@@ -93,7 +163,35 @@ impl Client {
     /// Lists the folder at absolute `path`; a [`Event::Listed`] or
     /// [`Event::ListFailed`] answers.
     pub fn list(&self, path: String) {
-        let _ = self.requests.send(Request::List(path));
+        self.send(Request::List(path));
+    }
+
+    pub fn download(&self, download: Download) {
+        self.send(Request::Download(download));
+    }
+
+    pub fn upload(&self, upload: Upload) {
+        self.send(Request::Upload(upload));
+    }
+
+    pub fn cancel(&self, id: u64) {
+        self.send(Request::Cancel(id));
+    }
+
+    pub fn rename(&self, from: String, to: String) {
+        self.send(Request::Rename { from, to });
+    }
+
+    pub fn delete(&self, path: String, folder: bool) {
+        self.send(Request::Delete { path, folder });
+    }
+
+    pub fn make_folder(&self, path: String) {
+        self.send(Request::MakeFolder(path));
+    }
+
+    fn send(&self, request: Request) {
+        let _ = self.requests.send(request);
     }
 }
 
@@ -124,7 +222,10 @@ async fn run(
         request_timeout_secs: REQUEST_TIMEOUT_SECS,
         ..Default::default()
     };
-    let sftp = RawSftpSession::new_with_config(tokio::io::join(stdout, stdin), config);
+    let sftp = Arc::new(RawSftpSession::new_with_config(
+        tokio::io::join(stdout, stdin),
+        config,
+    ));
     let failure = match serve(&sftp, &mut ssh, &mut requests, &events).await {
         Ok(()) => return,
         Err(failure) => failure,
@@ -154,9 +255,10 @@ fn spawn(command: &Command) -> std::io::Result<Child> {
 
 /// Logs in, reports the home folder, then answers requests until the
 /// sidebar goes away (`Ok`) or the connection fails (`Err` with what
-/// failed, for when ssh says nothing).
+/// failed, for when ssh says nothing). Transfers run as tasks of their
+/// own, so listing goes on while they do.
 async fn serve(
-    sftp: &RawSftpSession,
+    sftp: &Arc<RawSftpSession>,
     ssh: &mut Child,
     requests: &mut mpsc::UnboundedReceiver<Request>,
     events: &UnboundedSender<Event>,
@@ -172,27 +274,74 @@ async fn serve(
         .map(|file| file.filename)
         .ok_or("The server didn't say where the home folder is")?;
     let _ = events.unbounded_send(Event::Connected { home });
+    let mut cancels: HashMap<u64, Arc<AtomicBool>> = HashMap::new();
     loop {
         let request = tokio::select! {
             request = requests.recv() => request,
             exit = ssh.wait() => return Err(exited(exit)),
         };
-        let Some(Request::List(path)) = request else {
+        let Some(request) = request else {
             return Ok(());
         };
-        let event = match list(sftp, &path).await {
-            Ok(listing) => Event::Listed(listing),
-            Err(Error::Status(status)) if status.status_code != StatusCode::ConnectionLost => {
-                Event::ListFailed {
-                    path,
-                    error: status_message(&status.error_message, status.status_code),
+        let event = match request {
+            Request::List(path) => match list(sftp, &path).await {
+                Ok(listing) => Event::Listed(listing),
+                Err(Error::Status(status)) if status.status_code != StatusCode::ConnectionLost => {
+                    Event::ListFailed {
+                        path,
+                        error: status_message(&status.error_message, status.status_code),
+                    }
                 }
+                Err(error) => return Err(describe(&error)),
+            },
+            Request::Download(download) => {
+                let cancel = cancels.entry(download.id).or_default().clone();
+                let task = transfer::download(Arc::clone(sftp), download, cancel, events.clone());
+                tokio::spawn(task);
+                continue;
             }
-            Err(error) => return Err(describe(&error)),
+            Request::Upload(upload) => {
+                let cancel = cancels.entry(upload.id).or_default().clone();
+                let task = transfer::upload(Arc::clone(sftp), upload, cancel, events.clone());
+                tokio::spawn(task);
+                continue;
+            }
+            Request::Cancel(id) => {
+                if let Some(cancel) = cancels.remove(&id) {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+                continue;
+            }
+            Request::Rename { from, to } => {
+                let done = sftp.rename(from.as_str(), to.as_str()).await;
+                changed(done.map(drop), &super::parent(&to))
+            }
+            Request::Delete { path, folder } => {
+                let done = if folder {
+                    sftp.rmdir(path.as_str()).await
+                } else {
+                    sftp.remove(path.as_str()).await
+                };
+                changed(done.map(drop), &super::parent(&path))
+            }
+            Request::MakeFolder(path) => {
+                let done = sftp.mkdir(path.as_str(), FileAttributes::empty()).await;
+                changed(done.map(drop), &super::parent(&path))
+            }
         };
         if events.unbounded_send(event).is_err() {
             return Ok(());
         }
+    }
+}
+
+/// What a rename, delete or new folder in `folder` reports.
+fn changed(done: Result<(), Error>, folder: &str) -> Event {
+    match done {
+        Ok(()) => Event::Changed {
+            folder: folder.to_owned(),
+        },
+        Err(error) => Event::Failed(describe(&error)),
     }
 }
 
@@ -346,7 +495,7 @@ fn tail(text: &str, bytes: usize) -> &str {
 }
 
 /// What a failed request says, in the sidebar's words.
-fn describe(error: &Error) -> String {
+pub(super) fn describe(error: &Error) -> String {
     match error {
         Error::Timeout => "The server stopped answering".into(),
         Error::Status(status) => status_message(&status.error_message, status.status_code),
@@ -619,6 +768,533 @@ mod tests {
                 }
                 other => panic!("expected Ended, got {other:?}"),
             }
+        }
+
+        /// `len` bytes that differ from offset to offset, so a chunk
+        /// written at the wrong place shows.
+        fn pattern(len: usize) -> Vec<u8> {
+            (0..len).map(|ix| (ix % 251) as u8).collect()
+        }
+
+        /// The events up to and including the first one `last` accepts,
+        /// within `seconds` each.
+        fn events_until(
+            events: &mut UnboundedReceiver<Event>,
+            seconds: u64,
+            last: impl Fn(&Event) -> bool,
+        ) -> Vec<Event> {
+            let mut seen = Vec::new();
+            loop {
+                let event = next_within(events, seconds).expect("the connection ended");
+                let done = last(&event);
+                seen.push(event);
+                if done {
+                    return seen;
+                }
+            }
+        }
+
+        /// The event that ends transfer `id`, with the events before it.
+        fn transfer_end(events: &mut UnboundedReceiver<Event>, id: u64) -> Vec<Event> {
+            events_until(events, 30, |event| match event {
+                Event::TransferDone { id: done }
+                | Event::TransferFailed { id: done, .. }
+                | Event::Exists { id: done } => *done == id,
+                _ => false,
+            })
+        }
+
+        /// Waits up to `seconds` for `gone` to hold.
+        fn eventually(seconds: u64, gone: impl Fn() -> bool) -> bool {
+            let until = std::time::Instant::now() + Duration::from_secs(seconds);
+            while std::time::Instant::now() < until {
+                if gone() {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            gone()
+        }
+
+        /// Names of the files in `dir` ending in `.tern-part`.
+        fn parts(dir: &Path) -> Vec<String> {
+            fs::read_dir(dir)
+                .expect("read the dir")
+                .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+                .filter(|name| name.ends_with(".tern-part"))
+                .collect()
+        }
+
+        /// The one event a rename, delete or new folder answers with.
+        fn change(events: &mut UnboundedReceiver<Event>) -> Event {
+            next_within(events, 10).expect("the connection ended")
+        }
+
+        /// Spec 0008, flow 4 and AC4: a download arrives byte-identical,
+        /// with progress ending at the file's size, and leaves no part.
+        #[test]
+        fn a_download_arrives_byte_identical_with_progress_and_no_part_left() {
+            let remote = TempDir::new("sftp-dl-remote");
+            let local = TempDir::new("sftp-dl-local");
+            // Not a multiple of the 64 KiB request size.
+            let data = pattern(3 * 1024 * 1024 + 12_345);
+            fs::write(remote.path().join("big.bin"), &data).expect("write big.bin");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let target = local.path().join("big.bin");
+            client.download(Download {
+                id: 1,
+                remote: format!("{}/big.bin", absolute(&remote)),
+                target: target.clone(),
+                replace: false,
+            });
+            let seen = transfer_end(&mut events, 1);
+            assert!(
+                matches!(seen.last(), Some(Event::TransferDone { id: 1 })),
+                "{:?}",
+                seen.last()
+            );
+            let progress: Vec<(u64, Option<u64>)> = seen
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Progress { id: 1, done, total } => Some((*done, *total)),
+                    _ => None,
+                })
+                .collect();
+            let size = data.len() as u64;
+            assert_eq!(progress.last(), Some(&(size, Some(size))), "{progress:?}");
+            assert!(fs::read(&target).expect("read the download") == data);
+            assert_eq!(parts(local.path()), Vec::<String>::new());
+        }
+
+        /// Spec 0008, flow 4 and TM-sftp-08: an existing local file isn't
+        /// replaced without the confirmation; it's reported instead.
+        #[test]
+        fn a_download_onto_an_existing_file_reports_exists_and_leaves_it() {
+            let remote = TempDir::new("sftp-dl-exists-remote");
+            let local = TempDir::new("sftp-dl-exists-local");
+            fs::write(remote.path().join("a.txt"), b"remote").expect("write remote");
+            let target = local.path().join("a.txt");
+            fs::write(&target, b"mine").expect("write local");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            client.download(Download {
+                id: 2,
+                remote: format!("{}/a.txt", absolute(&remote)),
+                target: target.clone(),
+                replace: false,
+            });
+            let seen = transfer_end(&mut events, 2);
+            assert!(
+                matches!(seen.last(), Some(Event::Exists { id: 2 })),
+                "{seen:?}"
+            );
+            assert_eq!(fs::read(&target).expect("read local"), b"mine");
+            assert_eq!(parts(local.path()), Vec::<String>::new());
+        }
+
+        /// Spec 0008, flow 4: once confirmed, the download replaces it.
+        #[test]
+        fn a_confirmed_download_replaces_the_existing_file() {
+            let remote = TempDir::new("sftp-dl-replace-remote");
+            let local = TempDir::new("sftp-dl-replace-local");
+            fs::write(remote.path().join("a.txt"), b"remote").expect("write remote");
+            let target = local.path().join("a.txt");
+            fs::write(&target, b"mine, and longer than remote").expect("write local");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            client.download(Download {
+                id: 3,
+                remote: format!("{}/a.txt", absolute(&remote)),
+                target: target.clone(),
+                replace: true,
+            });
+            let seen = transfer_end(&mut events, 3);
+            assert!(
+                matches!(seen.last(), Some(Event::TransferDone { id: 3 })),
+                "{seen:?}"
+            );
+            assert_eq!(fs::read(&target).expect("read local"), b"remote");
+        }
+
+        /// Spec 0008, flow 4 and TM-sftp-18: a download that fails says
+        /// why and leaves no part file (here: the remote is a folder).
+        #[test]
+        fn a_failed_download_says_why_and_leaves_no_part() {
+            let remote = TempDir::new("sftp-dl-fail-remote");
+            let local = TempDir::new("sftp-dl-fail-local");
+            fs::create_dir(remote.path().join("folder")).expect("create folder");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let target = local.path().join("folder");
+            client.download(Download {
+                id: 4,
+                remote: format!("{}/folder", absolute(&remote)),
+                target: target.clone(),
+                replace: false,
+            });
+            let seen = transfer_end(&mut events, 4);
+            match seen.last() {
+                Some(Event::TransferFailed { error, .. }) => assert!(!error.is_empty()),
+                other => panic!("expected TransferFailed, got {other:?}"),
+            }
+            assert!(!target.exists());
+            // The part goes as the task ends, which can be just after its
+            // event.
+            assert!(
+                eventually(5, || parts(local.path()).is_empty()),
+                "{:?}",
+                parts(local.path())
+            );
+        }
+
+        /// Spec 0008, flow 4 and AC4: a cancelled download reports no
+        /// end, and its part file goes away; the target never appears.
+        #[test]
+        fn a_cancelled_download_removes_its_part_and_reports_no_end() {
+            let remote = TempDir::new("sftp-dl-cancel-remote");
+            let local = TempDir::new("sftp-dl-cancel-local");
+            fs::write(remote.path().join("huge.bin"), vec![0u8; 64 * 1024 * 1024])
+                .expect("write huge.bin");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let target = local.path().join("huge.bin");
+            client.download(Download {
+                id: 5,
+                remote: format!("{}/huge.bin", absolute(&remote)),
+                target: target.clone(),
+                replace: false,
+            });
+            events_until(&mut events, 10, |event| {
+                matches!(event, Event::Progress { id: 5, .. })
+            });
+            client.cancel(5);
+            let part = local.path().join("huge.bin.tern-part");
+            assert!(
+                eventually(5, || !part.exists() && !target.exists()),
+                "part or target still there"
+            );
+            // A list round-trip: anything the transfer sent is ahead of it.
+            client.list(absolute(&remote));
+            let seen = events_until(&mut events, 10, |event| matches!(event, Event::Listed(_)));
+            assert!(
+                !seen.iter().any(|event| matches!(
+                    event,
+                    Event::TransferDone { id: 5 } | Event::TransferFailed { id: 5, .. }
+                )),
+                "{seen:?}"
+            );
+            assert!(!target.exists());
+        }
+
+        /// Spec 0008, flow 5: an upload arrives byte-identical, without a
+        /// part file left, and its folder is reported changed after it.
+        #[test]
+        fn an_upload_arrives_byte_identical_and_its_folder_changes() {
+            let remote = TempDir::new("sftp-up-remote");
+            let local = TempDir::new("sftp-up-local");
+            let data = pattern(2 * 1024 * 1024 + 777);
+            let source = local.path().join("up.bin");
+            fs::write(&source, &data).expect("write up.bin");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let folder = absolute(&remote);
+            client.upload(Upload {
+                id: 6,
+                local: source,
+                folder: folder.clone(),
+                name: "up.bin".into(),
+                replace: false,
+            });
+            let seen = transfer_end(&mut events, 6);
+            assert!(
+                matches!(seen.last(), Some(Event::TransferDone { id: 6 })),
+                "{:?}",
+                seen.last()
+            );
+            match change(&mut events) {
+                Event::Changed { folder: changed } => assert_eq!(changed, folder),
+                other => panic!("expected Changed, got {other:?}"),
+            }
+            assert!(fs::read(remote.path().join("up.bin")).expect("read upload") == data);
+            assert_eq!(parts(remote.path()), Vec::<String>::new());
+        }
+
+        /// Spec 0008, flow 5 and AC9: an existing remote file isn't
+        /// replaced without the confirmation.
+        #[test]
+        fn an_upload_onto_an_existing_remote_file_reports_exists_and_leaves_it() {
+            let remote = TempDir::new("sftp-up-exists-remote");
+            let local = TempDir::new("sftp-up-exists-local");
+            fs::write(remote.path().join("a.txt"), b"theirs").expect("write remote");
+            let source = local.path().join("a.txt");
+            fs::write(&source, b"mine").expect("write local");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            client.upload(Upload {
+                id: 7,
+                local: source,
+                folder: absolute(&remote),
+                name: "a.txt".into(),
+                replace: false,
+            });
+            let seen = transfer_end(&mut events, 7);
+            assert!(
+                matches!(seen.last(), Some(Event::Exists { id: 7 })),
+                "{seen:?}"
+            );
+            assert_eq!(
+                fs::read(remote.path().join("a.txt")).expect("read"),
+                b"theirs"
+            );
+            assert_eq!(parts(remote.path()), Vec::<String>::new());
+        }
+
+        /// Spec 0008, flow 5: a confirmed upload replaces the remote file
+        /// and keeps its permissions, so a script stays executable.
+        #[test]
+        fn a_confirmed_upload_replaces_the_file_and_keeps_its_permissions() {
+            use std::os::unix::fs::PermissionsExt;
+            let remote = TempDir::new("sftp-up-replace-remote");
+            let local = TempDir::new("sftp-up-replace-local");
+            let script = remote.path().join("run.sh");
+            fs::write(&script, b"#!/bin/sh\necho old\n").expect("write remote");
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
+            let source = local.path().join("run.sh");
+            fs::write(&source, b"#!/bin/sh\necho new\n").expect("write local");
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).expect("chmod");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            client.upload(Upload {
+                id: 8,
+                local: source,
+                folder: absolute(&remote),
+                name: "run.sh".into(),
+                replace: true,
+            });
+            let seen = transfer_end(&mut events, 8);
+            assert!(
+                matches!(seen.last(), Some(Event::TransferDone { id: 8 })),
+                "{seen:?}"
+            );
+            assert_eq!(fs::read(&script).expect("read"), b"#!/bin/sh\necho new\n");
+            let mode = fs::metadata(&script).expect("stat").permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+            assert_eq!(parts(remote.path()), Vec::<String>::new());
+        }
+
+        /// Spec 0008, flow 5, AC9 and TM-sftp-11: a folder isn't uploaded;
+        /// the transfer fails saying why and nothing is written.
+        #[test]
+        fn uploading_a_folder_fails_saying_why_and_writes_nothing() {
+            let remote = TempDir::new("sftp-up-folder-remote");
+            let local = TempDir::new("sftp-up-folder-local");
+            let source = local.path().join("docs");
+            fs::create_dir(&source).expect("create docs");
+            fs::write(source.join("inside.txt"), b"x").expect("write inside");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            client.upload(Upload {
+                id: 9,
+                local: source,
+                folder: absolute(&remote),
+                name: "docs".into(),
+                replace: false,
+            });
+            let seen = transfer_end(&mut events, 9);
+            match seen.last() {
+                Some(Event::TransferFailed { error, .. }) => {
+                    assert!(error.contains("folder"), "{error:?}")
+                }
+                other => panic!("expected TransferFailed, got {other:?}"),
+            }
+            let written: Vec<_> = fs::read_dir(remote.path()).expect("read").collect();
+            assert!(written.is_empty(), "{written:?}");
+        }
+
+        /// TM-sftp-11: a symlink to a file uploads its target's contents.
+        #[test]
+        fn uploading_a_symlink_sends_its_targets_contents() {
+            let remote = TempDir::new("sftp-up-link-remote");
+            let local = TempDir::new("sftp-up-link-local");
+            fs::write(local.path().join("real.txt"), b"the contents").expect("write real");
+            let link = local.path().join("link.txt");
+            symlink("real.txt", &link).expect("link");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            client.upload(Upload {
+                id: 10,
+                local: link,
+                folder: absolute(&remote),
+                name: "link.txt".into(),
+                replace: false,
+            });
+            let seen = transfer_end(&mut events, 10);
+            assert!(
+                matches!(seen.last(), Some(Event::TransferDone { id: 10 })),
+                "{seen:?}"
+            );
+            let uploaded = remote.path().join("link.txt");
+            assert!(!fs::symlink_metadata(&uploaded).expect("stat").is_symlink());
+            assert_eq!(fs::read(&uploaded).expect("read"), b"the contents");
+        }
+
+        /// Spec 0008, flow 5: a cancelled upload removes its remote part,
+        /// and the target never appears.
+        #[test]
+        fn a_cancelled_upload_removes_its_remote_part() {
+            let remote = TempDir::new("sftp-up-cancel-remote");
+            let local = TempDir::new("sftp-up-cancel-local");
+            let source = local.path().join("huge.bin");
+            fs::write(&source, vec![0u8; 64 * 1024 * 1024]).expect("write huge.bin");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            client.upload(Upload {
+                id: 11,
+                local: source,
+                folder: absolute(&remote),
+                name: "huge.bin".into(),
+                replace: false,
+            });
+            events_until(&mut events, 10, |event| {
+                matches!(event, Event::Progress { id: 11, .. })
+            });
+            client.cancel(11);
+            let part = remote.path().join(".huge.bin.tern-part");
+            let target = remote.path().join("huge.bin");
+            assert!(
+                eventually(5, || !part.exists() && !target.exists()),
+                "part or target still there"
+            );
+            client.list(absolute(&remote));
+            let seen = events_until(&mut events, 10, |event| matches!(event, Event::Listed(_)));
+            assert!(
+                !seen.iter().any(|event| matches!(
+                    event,
+                    Event::TransferDone { id: 11 } | Event::TransferFailed { id: 11, .. }
+                )),
+                "{seen:?}"
+            );
+            assert!(!target.exists());
+        }
+
+        /// Spec 0008, flow 6: a rename reports its folder changed.
+        #[test]
+        fn a_rename_changes_its_folder() {
+            let remote = TempDir::new("sftp-rename");
+            fs::write(remote.path().join("old.txt"), b"x").expect("write old");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let folder = absolute(&remote);
+            client.rename(format!("{folder}/old.txt"), format!("{folder}/new.txt"));
+            match change(&mut events) {
+                Event::Changed { folder: changed } => assert_eq!(changed, folder),
+                other => panic!("expected Changed, got {other:?}"),
+            }
+            assert!(!remote.path().join("old.txt").exists());
+            assert_eq!(fs::read(remote.path().join("new.txt")).expect("read"), b"x");
+        }
+
+        /// Spec 0008, flow 6: a new folder reports its parent changed.
+        #[test]
+        fn a_new_folder_changes_its_parent() {
+            let remote = TempDir::new("sftp-mkdir");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let folder = absolute(&remote);
+            client.make_folder(format!("{folder}/fresh"));
+            match change(&mut events) {
+                Event::Changed { folder: changed } => assert_eq!(changed, folder),
+                other => panic!("expected Changed, got {other:?}"),
+            }
+            assert!(remote.path().join("fresh").is_dir());
+        }
+
+        /// Spec 0008, flow 6: deleting a file reports its folder changed.
+        #[test]
+        fn deleting_a_file_changes_its_folder() {
+            let remote = TempDir::new("sftp-rm-file");
+            fs::write(remote.path().join("gone.txt"), b"x").expect("write");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let folder = absolute(&remote);
+            client.delete(format!("{folder}/gone.txt"), false);
+            match change(&mut events) {
+                Event::Changed { folder: changed } => assert_eq!(changed, folder),
+                other => panic!("expected Changed, got {other:?}"),
+            }
+            assert!(!remote.path().join("gone.txt").exists());
+        }
+
+        /// Spec 0008, flow 6: deleting an empty folder reports its parent
+        /// changed.
+        #[test]
+        fn deleting_an_empty_folder_changes_its_parent() {
+            let remote = TempDir::new("sftp-rm-empty");
+            fs::create_dir(remote.path().join("empty")).expect("create");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let folder = absolute(&remote);
+            client.delete(format!("{folder}/empty"), true);
+            match change(&mut events) {
+                Event::Changed { folder: changed } => assert_eq!(changed, folder),
+                other => panic!("expected Changed, got {other:?}"),
+            }
+            assert!(!remote.path().join("empty").exists());
+        }
+
+        /// Spec 0008, flow 6: a folder with anything in it isn't deleted;
+        /// it fails with the server's reason and its contents stay.
+        #[test]
+        fn deleting_a_folder_with_contents_fails_and_keeps_them() {
+            let remote = TempDir::new("sftp-rm-full");
+            fs::create_dir(remote.path().join("full")).expect("create");
+            fs::write(remote.path().join("full/kept.txt"), b"x").expect("write");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            client.delete(format!("{}/full", absolute(&remote)), true);
+            match change(&mut events) {
+                Event::Failed(reason) => assert!(!reason.is_empty()),
+                other => panic!("expected Failed, got {other:?}"),
+            }
+            assert!(remote.path().join("full/kept.txt").exists());
+        }
+
+        /// TM-sftp-10: deleting a link to a folder removes the link, never
+        /// what it points to.
+        #[test]
+        fn deleting_a_link_to_a_folder_removes_only_the_link() {
+            let remote = TempDir::new("sftp-rm-link");
+            fs::create_dir(remote.path().join("target")).expect("create");
+            fs::write(remote.path().join("target/kept.txt"), b"x").expect("write");
+            symlink("target", remote.path().join("link")).expect("link");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let folder = absolute(&remote);
+            client.delete(format!("{folder}/link"), false);
+            match change(&mut events) {
+                Event::Changed { folder: changed } => assert_eq!(changed, folder),
+                other => panic!("expected Changed, got {other:?}"),
+            }
+            assert!(fs::symlink_metadata(remote.path().join("link")).is_err());
+            assert!(remote.path().join("target/kept.txt").exists());
         }
     }
 }

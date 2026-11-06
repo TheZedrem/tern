@@ -1,13 +1,17 @@
 //! The SFTP sidebar (spec 0008): each SSH pane can open one, showing the
 //! files of its host. A pane's [`client`] runs `ssh -s <host> sftp` and
 //! the SFTP client on a thread of its own; its [`view`] draws what that
-//! thread reports. This module is the plain data both share: listings and
-//! remote paths, testable without a window or a host.
+//! thread reports. This module is the plain data both share: listings,
+//! remote paths and the local names of remote files, testable without a
+//! window or a host.
 
 pub mod client;
+mod transfer;
 pub mod view;
 
 use std::cmp::Ordering;
+use std::fmt::Write;
+use std::path::{Path, PathBuf};
 
 pub use view::{SftpEvent, SftpView};
 
@@ -153,6 +157,95 @@ pub fn date(seconds: u32) -> String {
     };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// The local file name for the remote name `name` (spec 0008 §Security,
+/// TM-sftp-03, -04, -06): never refused, but every character that could
+/// make it a path or disguise it escaped as `%XX` per UTF-8 byte. `windows`
+/// adds what Windows can't hold; callers pass `cfg!(windows)`. `%` itself
+/// stays: the escape is for safety, not to be undone.
+pub fn local_name(name: &str, windows: bool) -> String {
+    if matches!(name, "." | "..") {
+        return name.replace('.', "%2E");
+    }
+    let last = name.chars().count().saturating_sub(1);
+    let reserved = windows && is_reserved_device(name);
+    let mut local = String::with_capacity(name.len());
+    for (ix, c) in name.chars().enumerate() {
+        let escape = c == '/'
+            || c == '\\'
+            || c.is_control()
+            || is_format(c)
+            || (windows && matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+            || (reserved && ix == 0)
+            || (windows && ix == last && matches!(c, '.' | ' '));
+        if escape {
+            let mut bytes = [0; 4];
+            for byte in c.encode_utf8(&mut bytes).bytes() {
+                let _ = write!(local, "%{byte:02X}");
+            }
+        } else {
+            local.push(c);
+        }
+    }
+    local
+}
+
+/// Where a remote file named `name` lands in `folder`: its [`local_name`],
+/// which must come out as a direct child of `folder`. `None` only for an
+/// empty name, which no listing shows, or if escaping ever let a path
+/// through: the backstop of TM-sftp-03.
+pub fn local_path(folder: &Path, name: &str, windows: bool) -> Option<PathBuf> {
+    let local = local_name(name, windows);
+    let path = folder.join(&local);
+    let direct = path.parent() == Some(folder)
+        && path.file_name().and_then(|file| file.to_str()) == Some(local.as_str());
+    (!local.is_empty() && direct).then_some(path)
+}
+
+/// Windows' device names, whatever their extension or case: `CON`,
+/// `aux.txt`, `com1.log`.
+fn is_reserved_device(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end();
+    let upper = stem.to_ascii_uppercase();
+    match upper.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" => true,
+        _ => {
+            // By character, not byte: a stem may end in any letter.
+            let mut chars = upper.chars();
+            let digit = chars.next_back();
+            matches!(chars.as_str(), "COM" | "LPT") && digit.is_some_and(|c| c.is_ascii_digit())
+        }
+    }
+}
+
+/// Unicode format characters (category `Cf`): invisible, and some reorder
+/// the text around them, so a name can't hide its real end.
+fn is_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 #[cfg(test)]
@@ -314,5 +407,148 @@ mod tests {
         ] {
             assert_eq!(date(seconds), expected, "{seconds}");
         }
+    }
+
+    /// Remote names that a hostile server could send, on every platform.
+    const HOSTILE: &[&str] = &[
+        "../../.bashrc",
+        "/etc/passwd",
+        "a/b",
+        "a\\b",
+        "C:\\x",
+        "..\\..\\x",
+        ".",
+        "..",
+        "/",
+        "bad\nname\x07\x1b[31m",
+        "txt\u{202E}gpj.exe",
+        "CON",
+        "aux.txt",
+        "x.txt:evil",
+        "trailing. ",
+        "\u{200B}",
+    ];
+
+    /// Spec 0008 AC5 and TM-sftp-03: path separators and `.`/`..` are
+    /// escaped per UTF-8 byte, so no name is a path, on every platform.
+    #[test]
+    fn separators_and_dot_names_are_escaped_so_no_name_is_a_path() {
+        for windows in [false, true] {
+            for (name, expected) in [
+                ("../../.bashrc", "..%2F..%2F.bashrc"),
+                ("a/b", "a%2Fb"),
+                ("a\\b", "a%5Cb"),
+                ("/etc/passwd", "%2Fetc%2Fpasswd"),
+                (".", "%2E"),
+                ("..", "%2E%2E"),
+            ] {
+                assert_eq!(local_name(name, windows), expected, "{name:?}, {windows}");
+            }
+        }
+    }
+
+    /// Spec 0008 §Security and TM-sftp-06: control characters and Unicode
+    /// format characters (direction overrides, zero-width) are escaped as
+    /// their UTF-8 bytes, so a name can't disguise its real end.
+    #[test]
+    fn control_and_invisible_characters_are_escaped_as_their_utf8_bytes() {
+        for (name, expected) in [
+            ("bad\nname\x07", "bad%0Aname%07"),
+            ("\x1b[31m", "%1B[31m"),
+            ("del\x7f", "del%7F"),
+            ("c1\u{0085}", "c1%C2%85"),
+            ("photo\u{202E}gpj.exe", "photo%E2%80%AEgpj.exe"),
+            ("a\u{200B}b", "a%E2%80%8Bb"),
+            ("\u{2066}x\u{2069}", "%E2%81%A6x%E2%81%A9"),
+            ("\u{FEFF}bom", "%EF%BB%BFbom"),
+        ] {
+            assert_eq!(local_name(name, false), expected, "{name:?}");
+        }
+    }
+
+    /// Spec 0008 §Security: ordinary names, `%` included, are kept as
+    /// they are, on every platform.
+    #[test]
+    fn ordinary_names_and_percent_signs_are_unchanged() {
+        for windows in [false, true] {
+            for name in [
+                "report.pdf",
+                ".bashrc",
+                "my file (1).txt",
+                "Grüße – 東京.md",
+                "100%.txt",
+                "a%2Fb",
+                "CONSOLE.log",
+                "com10",
+                "lpt",
+            ] {
+                assert_eq!(local_name(name, windows), name, "{name:?}, {windows}");
+            }
+        }
+    }
+
+    /// Spec 0008 AC5 and TM-sftp-04: on Windows, the characters it can't
+    /// hold, a reserved device name's first character (any case, any
+    /// extension) and a trailing dot or space are escaped.
+    #[test]
+    fn on_windows_reserved_characters_devices_and_trailing_dots_are_escaped() {
+        for (name, expected) in [
+            ("CON", "%43ON"),
+            ("x.txt:evil", "x.txt%3Aevil"),
+            ("aux.txt", "%61ux.txt"),
+            ("Nul", "%4Eul"),
+            ("prn.tar.gz", "%70rn.tar.gz"),
+            ("COM0", "%43OM0"),
+            ("com9.log", "%63om9.log"),
+            ("LPT1", "%4CPT1"),
+            ("a<b>c\"d|e?f*g", "a%3Cb%3Ec%22d%7Ce%3Ff%2Ag"),
+            ("name.", "name%2E"),
+            ("name ", "name%20"),
+        ] {
+            assert_eq!(local_name(name, true), expected, "{name:?}");
+        }
+    }
+
+    /// TM-sftp-04: the Windows rules stay off elsewhere, where those names
+    /// are ordinary files.
+    #[test]
+    fn the_windows_rules_dont_apply_elsewhere() {
+        for name in [
+            "CON",
+            "aux.txt",
+            "x.txt:evil",
+            "a<b>?*|\"",
+            "name.",
+            "name ",
+            "...",
+        ] {
+            assert_eq!(local_name(name, false), name, "{name:?}");
+        }
+    }
+
+    /// Spec 0008 AC5 and TM-sftp-03: every hostile name lands directly in
+    /// its folder, under its escaped name.
+    #[test]
+    fn every_hostile_name_lands_directly_inside_its_folder() {
+        let folder = Path::new("/home/alice/Downloads");
+        for windows in [false, true] {
+            for name in HOSTILE {
+                let path = local_path(folder, name, windows)
+                    .unwrap_or_else(|| panic!("{name:?} refused ({windows})"));
+                assert_eq!(path.parent(), Some(folder), "{name:?}, {windows}");
+                assert_eq!(
+                    path.file_name().and_then(|file| file.to_str()),
+                    Some(local_name(name, windows).as_str()),
+                    "{name:?}, {windows}"
+                );
+            }
+        }
+    }
+
+    /// Spec 0008 §Security: an empty name has no local file.
+    #[test]
+    fn an_empty_name_has_no_local_path() {
+        assert_eq!(local_path(Path::new("/tmp"), "", false), None);
+        assert_eq!(local_path(Path::new("/tmp"), "", true), None);
     }
 }

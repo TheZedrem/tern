@@ -1455,14 +1455,20 @@ impl Workspace {
             return;
         }
         let view = cx.new(|cx| SftpView::new(&pane, window, cx));
-        let events = cx.subscribe_in(&view, window, move |this, _, event, window, cx| {
-            let SftpEvent::Close = event;
-            if let Some(sidebar) = this.sftp.get_mut(&leaf) {
-                sidebar.open = false;
-            }
-            this.focus_active(window, cx);
-            cx.notify();
-        });
+        let events = cx.subscribe_in(
+            &view,
+            window,
+            move |this, _, event, window, cx| match event {
+                SftpEvent::Close => {
+                    if let Some(sidebar) = this.sftp.get_mut(&leaf) {
+                        sidebar.open = false;
+                    }
+                    this.focus_active(window, cx);
+                    cx.notify();
+                }
+                SftpEvent::Notice(notice) => show_notice(notice.clone(), window, cx),
+            },
+        );
         self.sftp.insert(
             leaf,
             Sidebar {
