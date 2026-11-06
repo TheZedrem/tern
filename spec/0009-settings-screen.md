@@ -71,7 +71,8 @@ can be changed from the screen, the change applies within a second, and
    window; Esc or its close button leaves it. It shows the config as
    loaded, and follows reloads while open. Like Tabby's, it has tabs down
    its left side (General, Appearance, Terminal, Keyboard, Profiles), each
-   grouping its settings under headings; the panes below take no clicks
+   grouping its settings under headings, and the app's version below
+   them; the panes below take no clicks
    while it's open. Its header's "Open config folder" button (also the
    palette's `config.openFolder`) shows `config.yaml` in the OS's file
    manager, creating it first like "Open config file" does.

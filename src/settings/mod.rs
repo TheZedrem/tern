@@ -1300,7 +1300,16 @@ impl Render for SettingsView {
                             .update(cx, |search, cx| search.set_value("", window, cx));
                         cx.notify();
                     }))
-            }));
+            }))
+            // The build's version, pinned under the tabs: what to quote in a bug report.
+            .child(
+                div()
+                    .mt_auto()
+                    .px(px(8.))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(concat!("Tern ", env!("CARGO_PKG_VERSION"))),
+            );
 
         let theme_colors = cx.theme();
         let (border, background) = (theme_colors.border, theme_colors.popover);
