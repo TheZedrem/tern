@@ -6,6 +6,7 @@
 
 use super::browser::{Browser, BrowserEvent, BrowserSettings, Source, TitleMenu};
 use crate::config::{Config, ProfileKind, SshProfile};
+use crate::layout::answers::{self, Act, Answers};
 use crate::ssh::askpass::{self, Prompt};
 use crate::terminal::prompt::{Answer, PromptDialog, Remember};
 use crate::terminal::pty::Command;
@@ -17,9 +18,9 @@ use gpui::{
     IntoElement, MouseButton, ParentElement, Render, SharedString, Styled, Subscription, Task,
     WeakEntity, Window, div, px,
 };
-use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::button::ButtonVariants;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
-use gpui_component::{ActiveTheme, Sizable, WindowExt};
+use gpui_component::{ActiveTheme, WindowExt};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -178,9 +179,10 @@ impl FilesPane {
         });
         if connect {
             // Its SFTP connection asks this pane for its command, which
-            // can't happen while the pane is being updated.
+            // can't happen while the pane is being updated: `window.defer`
+            // runs once it isn't (`cx.defer_in` would still hold it).
             let weak = browser.downgrade();
-            cx.defer_in(window, move |_, window, cx| {
+            window.defer(cx, move |window, cx| {
                 let _ = weak.update(cx, |browser, cx| browser.connect(window, cx));
             });
         }
@@ -233,9 +235,30 @@ impl FilesPane {
         }
         let target = session.browser.read(cx).target();
         let pane = cx.entity().downgrade();
+        let disconnect: Act = Rc::new(move |window: &mut Window, cx: &mut App| {
+            let _ = pane.update(cx, |pane, cx| pane.end_session(id, window, cx));
+        });
+        // Enter with no button chosen is Cancel: nothing is lost by it.
+        let choices = Answers::new(
+            vec![
+                answers::Answer {
+                    label: "Cancel".into(),
+                    style: |button| button,
+                    act: Rc::new(|_, _| {}),
+                },
+                answers::Answer {
+                    label: "Disconnect".into(),
+                    style: |button| button.danger(),
+                    act: disconnect,
+                },
+            ],
+            0,
+            cx,
+        );
+        choices.focus_safe(window);
         window.open_dialog(cx, move |dialog, _, _| {
-            let pane = pane.clone();
-            dialog
+            choices
+                .apply(dialog)
                 .title(format!("Disconnect from {target}?"))
                 .child(
                     div()
@@ -248,30 +271,6 @@ impl FilesPane {
                             unsent
                                 .iter()
                                 .map(|name| div().pl(px(8.)).child(name.clone())),
-                        ),
-                )
-                .footer(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(6.))
-                        .child(
-                            Button::new("disconnect-cancel")
-                                .label("Cancel")
-                                .small()
-                                .on_click(|_, window, cx| window.close_dialog(cx)),
-                        )
-                        .child(
-                            Button::new("disconnect-anyway")
-                                .label("Disconnect")
-                                .small()
-                                .danger()
-                                .on_click(move |_, window, cx| {
-                                    window.close_dialog(cx);
-                                    let _ = pane.update(cx, |pane, cx| {
-                                        pane.end_session(id, window, cx);
-                                    });
-                                }),
                         ),
                 )
         });

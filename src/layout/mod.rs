@@ -4,6 +4,7 @@
 //! 0007). The layout itself is plain data in [`tabs`] and [`tree`]; this
 //! module owns the panes and draws them.
 
+pub mod answers;
 pub mod tabs;
 pub mod tree;
 mod updates;
@@ -105,6 +106,7 @@ pub fn init(cx: &mut App) {
         Some(RENAME_CONTEXT),
     )]);
     browser::init(cx);
+    answers::init(cx);
 }
 
 /// Dragging the SFTP sidebar's inner edge to resize it (spec 0008).
@@ -1909,47 +1911,46 @@ impl Workspace {
                 false => name.clone(),
             })
             .collect();
+        let answer = |label: &'static str, style: fn(Button) -> Button, upload: Option<bool>| {
+            let workspace = workspace.clone();
+            answers::Answer {
+                label: label.into(),
+                style,
+                act: Rc::new(move |window: &mut Window, cx: &mut App| {
+                    let _ = workspace.update(cx, |workspace, cx| {
+                        workspace.answer_close(closing, upload, window, cx);
+                    });
+                }),
+            }
+        };
+        let mut choices = vec![
+            answer("Cancel", |button| button, None),
+            answer("Close", |button| button.danger(), Some(false)),
+        ];
+        if unsent {
+            choices.push(answer(
+                "Upload and close",
+                |button| button.primary(),
+                Some(true),
+            ));
+        }
+        // Enter with no button chosen is Cancel: nothing is lost by it.
+        let choices = answers::Answers::new(choices, 0, cx);
+        choices.focus_safe(window);
         window.open_dialog(cx, move |dialog, _, _| {
-            let answer = |id: &'static str, label: &'static str, upload: Option<bool>| {
-                let workspace = workspace.clone();
-                Button::new(id)
-                    .label(label)
-                    .small()
-                    .on_click(move |_, window, cx| {
-                        window.close_dialog(cx);
-                        let _ = workspace.update(cx, |workspace, cx| {
-                            workspace.answer_close(closing, upload, window, cx);
-                        });
-                    })
-            };
-            dialog
-                .title(format!("Close {what}?"))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .text_sm()
-                        .child("Its SFTP edit copies are deleted when it closes:")
-                        .children(
-                            lines
-                                .iter()
-                                .map(|line| div().pl(px(8.)).child(line.clone())),
-                        ),
-                )
-                .footer(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(6.))
-                        .child(answer("close-cancel", "Cancel", None))
-                        .child(answer("close-anyway", "Close", Some(false)).danger())
-                        .when(unsent, |footer| {
-                            footer.child(
-                                answer("close-upload", "Upload and close", Some(true)).primary(),
-                            )
-                        }),
-                )
+            choices.apply(dialog).title(format!("Close {what}?")).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .text_sm()
+                    .child("Its SFTP edit copies are deleted when it closes:")
+                    .children(
+                        lines
+                            .iter()
+                            .map(|line| div().pl(px(8.)).child(line.clone())),
+                    ),
+            )
         });
     }
 
