@@ -50,6 +50,7 @@ Session  { window: { width, height }, tabs: Tab[], activeTab }
 Tab      { id, title?, root: Node, focusedLeaf, zoomedLeaf? }
 Node     = Split { direction: row|column, ratio, a: Node, b: Node }
          | Leaf  { id, pane: PaneId | null, profile, cwd? }  // null = not spawned yet
+         | Files { id, target: local | profileId, path }     // a files pane, spec 0013
 ```
 
 The tree is binary: repeated splits nest. No pane drops below 10 cols × 3

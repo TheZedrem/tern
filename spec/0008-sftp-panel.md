@@ -40,8 +40,8 @@ manager), and the sidebar asks for passwords the way the terminal does.
 
 **Out of scope:**
 
-- *Later (planned)*: `sftp_sidebar: split`, where the file view is a pane of the split tree that splits, moves and closes like a terminal (spec 0007), and a Detach button in the sidebar's header that turns the sidebar into that pane. The model below keeps a connection apart from where it's drawn, so neither needs a rewrite (T-032)
-- *Later (planned)*: the sidebar draws the same file browser as the files panel, with a tree view of folders; a local file browser is that panel's Local target, not this sidebar ([spec 0013](0013-files-panel.md))
+- *Later (planned)*: `sftp_sidebar: split`, where the file view is a pane of the split tree that splits, moves and closes like a terminal (spec 0007), and a Detach button in the sidebar's header that turns the sidebar into that pane. The model below keeps a connection apart from where it's drawn, so neither needs a rewrite (T-032); that pane is the files pane of [spec 0013](0013-files-panel.md)
+- *Later (planned)*: the sidebar draws the same file browser as the files pane, with a tree view of folders; a local file browser is that pane's Local target, not this sidebar ([spec 0013](0013-files-panel.md))
 - *Later (planned)*: suggestions in the path field: a dropdown of matching folders as the user types, fuzzy-matched like the listing filter, with Tab to complete (T-038)
 - *Later (planned)*: a follow-terminal mode, where the listing follows each `cd` the pane's shell reports, and an opt-in per profile that sets up those reports on bash servers after login, as MobaXterm's "Follow SSH path" does, for servers that don't send OSC 7 themselves (T-034)
 - *Later (planned)*: a fuzzy filter over the current folder's listing, best matches first with the matched characters highlighted; no recursive search on the server (T-037)
@@ -170,7 +170,8 @@ manager), and the sidebar asks for passwords the way the terminal does.
    executable. An existing remote file is only replaced after a
    confirmation naming the host; cancel stops and removes the part. A
    dropped folder fails in the transfer list, saying why.
-6. **Change:** rename and new folder ask for a name; delete asks for a
+6. **Change:** rename and new folder ask for a name; a rename onto an
+   existing name asks first (spec 0013, flow 5); delete asks for a
    confirmation naming what goes and on which host; while a question is
    open, Enter confirms it and Esc cancels it instead of acting on the
    listing, and Delete asks nothing more. It removes files,
