@@ -19,11 +19,11 @@ use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, ClickEvent, Context, Entity, EventEmitter, ExternalPaths,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, MouseButton,
-    ParentElement, PathPromptOptions, Render, ScrollStrategy, SharedString,
+    AnyElement, App, AppContext, ClickEvent, Context, DismissEvent, Entity, EventEmitter,
+    ExternalPaths, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
+    MouseButton, ParentElement, PathPromptOptions, Render, ScrollStrategy, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, WeakEntity,
-    Window, actions, div, px, uniform_list,
+    Window, actions, anchored, deferred, div, px, uniform_list,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -70,6 +70,7 @@ actions!(
         FocusPreviousControl,
         NextAnswer,
         PreviousAnswer,
+        ShowMenu,
         CancelName,
         Dismiss
     ]
@@ -77,9 +78,9 @@ actions!(
 
 /// Binds the browser's keys (spec 0013, Keys): everything it does has
 /// one; the mouse is a convenience. Arrows move, Right and Left expand and
-/// collapse, Enter opens (or connects, while not connected), Backspace
-/// goes up, F5 refreshes, Delete and F2 delete and rename, Ctrl+L goes to
-/// the path field and Esc back. While a question is open, it has the
+/// collapse, Enter opens (or connects, while not connected), Ctrl+Enter
+/// shows the context menu, Backspace goes up, F5 refreshes, Delete and F2
+/// delete and rename, Ctrl+L goes to the path field and Esc back. While a question is open, it has the
 /// keyboard. These are the browser's own: no terminal is under them.
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -99,6 +100,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-u", UploadFiles, Some(CONTEXT)),
         KeyBinding::new("ctrl-n", NewFolder, Some(CONTEXT)),
         KeyBinding::new("ctrl-l", FocusPath, Some(CONTEXT)),
+        KeyBinding::new("ctrl-enter", ShowMenu, Some(CONTEXT)),
         KeyBinding::new("escape", LeavePath, Some(PATH_CONTEXT)),
         // The widget library binds Tab nowhere: here it walks the tree, the
         // header's buttons, the path field, a question, edits and
@@ -262,6 +264,14 @@ enum Ask {
     Discard(u64),
 }
 
+/// The context menu Ctrl+Enter opens on row `ix`, as a right click
+/// would (spec 0013, Keys).
+struct KeyMenu {
+    ix: usize,
+    menu: Entity<PopupMenu>,
+    _dismissed: Subscription,
+}
+
 /// The field a new name is typed into, and what it names.
 struct Naming {
     kind: NameKind,
@@ -317,6 +327,8 @@ pub struct Browser {
     poll: Option<Task<()>>,
     /// The title's dropdown, in a files pane.
     title_menu: Option<TitleMenu>,
+    /// The selected entry's menu, opened by Ctrl+Enter: the row it's on.
+    key_menu: Option<KeyMenu>,
     _activation: Subscription,
 }
 
@@ -406,6 +418,7 @@ impl Browser {
             edits: Vec::new(),
             poll: None,
             title_menu: None,
+            key_menu: None,
             _activation: activation,
         };
         if connect {
@@ -1240,6 +1253,20 @@ impl Browser {
             .gap(px(4.))
             .when(self.selected == Some(ix), |row| row.bg(selected_bg))
             .hover(|row| row.bg(hover))
+            // First, so it opens at the row's start.
+            .children(
+                self.key_menu
+                    .as_ref()
+                    .filter(|open| open.ix == ix)
+                    .map(|open| {
+                        deferred(
+                            anchored()
+                                .snap_to_window_with_margin(px(8.))
+                                .child(div().mt(px(ROW_HEIGHT)).child(open.menu.clone())),
+                        )
+                        .with_priority(1)
+                    }),
+            )
             .child(
                 div()
                     .id(("files-chevron", ix))
@@ -1548,6 +1575,38 @@ impl Browser {
         )
     }
 
+    /// Ctrl+Enter: the selected entry's context menu, at its row, with the
+    /// keyboard in it. Its actions go to the browser, as a right click's.
+    fn show_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((ix, folder)) = self
+            .selected
+            .and_then(|ix| Some((ix, self.entry(ix)?.0.is_folder())))
+        else {
+            return;
+        };
+        let (focus, local) = (self.focus.clone(), self.is_local());
+        let menu = PopupMenu::build(window, cx, move |menu, _, _| {
+            Self::entry_menu(menu, focus, folder, local)
+        });
+        let dismissed =
+            cx.subscribe_in(&menu, window, |this, menu, _: &DismissEvent, window, cx| {
+                // An action may have moved the keyboard, like Rename into its
+                // field; only a menu left without one gives it back.
+                if menu.focus_handle(cx).is_focused(window) || window.focused(cx).is_none() {
+                    window.focus(&this.focus, cx);
+                }
+                this.key_menu = None;
+                cx.notify();
+            });
+        menu.focus_handle(cx).focus(window, cx);
+        self.key_menu = Some(KeyMenu {
+            ix,
+            menu,
+            _dismissed: dismissed,
+        });
+        cx.notify();
+    }
+
     /// Which of the open question's buttons has the keyboard: 0 yes, 1
     /// Edit, 2 Cancel.
     fn focused_answer(&self, window: &Window) -> Option<usize> {
@@ -1836,6 +1895,9 @@ impl Render for Browser {
             }))
             .on_action(cx.listener(|this, _: &NewFolder, window, cx| {
                 this.start_new_folder(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ShowMenu, window, cx| {
+                this.show_menu(window, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusPath, window, cx| {
                 this.path.update(cx, |input, cx| {

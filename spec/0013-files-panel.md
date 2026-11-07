@@ -199,6 +199,7 @@ key context, so no terminal is under them:
 | Ctrl+E, Ctrl+D, Ctrl+Alt+D | SFTP: edit, download, download to… |
 | Ctrl+U | SFTP: upload files… |
 | Ctrl+L, Esc | To the path field, and back to the tree |
+| Ctrl+Enter | The selected entry's context menu, as a right click opens it |
 | Tab, Shift+Tab | Through the tree, the header, the path field, a question, edits and transfers; Enter or Space presses a button |
 | `Ctrl+Shift+O` (`files.switchTarget`) | The target switcher in the palette: Local, a host, Disconnect |
 
