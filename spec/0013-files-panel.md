@@ -1,8 +1,8 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 2
-tasks: [T-042, T-033, T-041, T-043, T-044]
-related: [spec 0008, spec 0007, spec 0006, spec 0003, spec 0002, spec 0009, T-022, OQ-026 ✅, threat model 0003]
+tasks: [T-042, T-033, T-041, T-043, T-044, T-045]
+related: [spec 0008, spec 0007, spec 0006, spec 0003, spec 0002, spec 0009, T-022, OQ-026 ✅, OQ-027, OQ-028, threat model 0003]
 ---
 
 # Spec: Files pane
@@ -155,7 +155,11 @@ SFTP sidebar alike, because both are the same browser.
    offers Run, Edit and Cancel; `run` and `edit` skip the question. Run
    splits the files pane to the right with a local pane whose command is
    the file, in the file's folder, so its output and exit show as in
-   spec 0002 (without room, a notice; the file isn't run). Edit opens
+   spec 0002 (without room, a notice; the file isn't run). That pane
+   stays open after the program exits, whatever `close_on_exit` says, or
+   a program that exits at once would leave nothing to see. The question's
+   Enter means Edit: running takes its button, never a key pressed in
+   passing. Edit opens
    the file with the app the OS opens plain text with, never the app for
    the file's own type. An **edit-only** file (Security) always opens
    that way, with no question.
@@ -177,6 +181,31 @@ SFTP sidebar alike, because both are the same browser.
 7. **SFTP target:** spec 0008's flows 2–7, with the tree's rules for
    browsing.
 
+### Keys
+
+Everything the browser does has a key; the mouse is a convenience
+(owner's rule, 2026-11-07). The keys are the browser's own, bound in its
+key context, so no terminal is under them:
+
+| Key | Does |
+|---|---|
+| Up, Down | Move the selection |
+| Right, Left | Expand (then step in), collapse (then go to the folder above) |
+| Enter | Open (flows 3, 4); connect while not connected |
+| Backspace | The root's parent becomes the root |
+| F5 | Refresh |
+| F2, Delete | Rename, delete (after its question) |
+| Ctrl+N | New folder |
+| Ctrl+E, Ctrl+D, Ctrl+Alt+D | SFTP: edit, download, download to… |
+| Ctrl+U | SFTP: upload files… |
+| Ctrl+L, Esc | To the path field, and back to the tree |
+| Tab, Shift+Tab | Through the tree, the header, the path field, a question, edits and transfers; Enter or Space presses a button |
+| `Ctrl+Shift+O` (`files.switchTarget`) | The target switcher in the palette: Local, a host, Disconnect |
+
+A question takes the keyboard when it opens, on its safe answer (Edit
+for a Run question, else the one Enter has always meant); Left and Right
+move between its buttons, Esc cancels it. The context menu lists each action with its key.
+
 ### Startup impact
 
 A restored active tab with a files leaf draws the pane's frame empty on
@@ -189,8 +218,8 @@ T-043 reports the TTFP with a restored files pane in the active tab.
 
 - `files_executable: ask | run | edit` (default `ask`): what Enter or a
   double click does on a runnable local file (flow 4)
-- `files.open` and `files.newTab` are bindable like every command (spec
-  0004)
+- `files.open`, `files.newTab` and `files.switchTarget` are bindable like
+  every command (spec 0004)
 
 On the settings screen and in `src/default-config.yaml` (spec 0009).
 `sftp_click` and `sftp_upload` apply to SFTP targets in the pane too.
@@ -200,7 +229,10 @@ On the settings screen and in `src/default-config.yaml` (spec 0009).
 Local listings use `std::fs` on both platforms; Windows paths show with
 `\` and drive letters. Opening is GPUI's `open_with_system` as in spec
 0008. Edit opens the plain-text handler: Linux the `text/plain` handler
-launched with the file, Windows the `.txt` association. Run on Windows
+`xdg-mime` names, started as its desktop entry's `Exec` line says;
+Windows the `.txt` association, Notepad until OQ-027 is answered. Local
+names that aren't UTF-8 are left out of a listing until OQ-028 is
+answered. Run on Windows
 goes through `cmd /c "<file>"`, so every `PATHEXT` type runs; on Linux
 the file is the command. Deleting a symlink to a folder on Windows is a
 `remove_dir` of the link (a directory symlink or junction is a directory
@@ -271,3 +303,6 @@ Trust boundaries:
 
 - OQ-026 is resolved: a local delete is permanent, after the same
   confirmation as on SFTP; the trash is planned (T-044).
+- OQ-027: how Edit finds the `.txt` app on Windows (a new crate);
+  Notepad until then.
+- OQ-028: local names that aren't UTF-8; left out until then.

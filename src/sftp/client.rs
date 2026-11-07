@@ -1,11 +1,12 @@
 //! A pane's SFTP connection (spec 0008, Model): `ssh … -s <host> sftp`
 //! with the `russh-sftp` client on its stdio, on a thread of its own with a
-//! current-thread tokio runtime. The sidebar sends [`Request`]s and draws
+//! current-thread tokio runtime. The browser sends [`Request`]s and draws
 //! the [`Event`]s that come back; nothing here runs on the UI thread.
 //! Dropping the [`Client`] ends the thread, which kills its ssh.
 
 use super::transfer;
-use super::{Entry, Kind, Listing, MAX_ENTRIES};
+pub use crate::files::Event;
+use crate::files::{Entry, Kind, Listing, MAX_ENTRIES};
 use crate::terminal::clean_prompt;
 use crate::terminal::pty::Command;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -44,9 +45,12 @@ enum Request {
     Upload(Upload),
     /// Stop a transfer and remove what it wrote (spec 0008, flows 4, 5).
     Cancel(u64),
+    /// Rename `from` to `to`; an existing `to` only with `replace`, else
+    /// it's reported (spec 0013, flow 5).
     Rename {
         from: String,
         to: String,
+        replace: bool,
     },
     /// Remove a file, a link, or an empty folder (`folder`).
     Delete {
@@ -54,55 +58,6 @@ enum Request {
         folder: bool,
     },
     MakeFolder(String),
-}
-
-/// What the connection reports.
-#[derive(Debug)]
-pub enum Event {
-    /// Logged in; the remote home folder, where relative paths start.
-    Connected {
-        home: String,
-    },
-    Listed(Listing),
-    /// Listing `path` failed; the connection is still up.
-    ListFailed {
-        path: String,
-        error: String,
-    },
-    /// A transfer moved on: `done` bytes of `total`, if the size is known.
-    Progress {
-        id: u64,
-        done: u64,
-        total: Option<u64>,
-    },
-    /// A transfer is complete; `stat` is the remote file's size and time,
-    /// as fetched or as uploaded, when the server said.
-    TransferDone {
-        id: u64,
-        stat: Option<RemoteStat>,
-    },
-    /// A transfer failed, and removed what it wrote. A cancelled one
-    /// reports nothing.
-    TransferFailed {
-        id: u64,
-        error: String,
-    },
-    /// A transfer's target exists and wasn't to be replaced, or an edit's
-    /// remote file changed since it was fetched: nothing was written.
-    /// Asking and starting again with `replace` (or no `expect`) is the
-    /// sidebar's.
-    Exists {
-        id: u64,
-    },
-    /// Something in this folder changed: an upload, rename, delete or new
-    /// folder.
-    Changed {
-        folder: String,
-    },
-    /// A rename, delete or new folder failed.
-    Failed(String),
-    /// The connection is over, and why, in ssh's words where it gave some.
-    Ended(String),
 }
 
 /// A download of remote file `remote` to local `target`, written to
@@ -205,8 +160,10 @@ impl Client {
         self.send(Request::Cancel(id));
     }
 
-    pub fn rename(&self, from: String, to: String) {
-        self.send(Request::Rename { from, to });
+    /// Renames `from` to `to`. Unless `replace`, an existing `to` is left
+    /// alone and [`Event::RenameExists`] says so.
+    pub fn rename(&self, from: String, to: String, replace: bool) {
+        self.send(Request::Rename { from, to, replace });
     }
 
     pub fn delete(&self, path: String, folder: bool) {
@@ -339,9 +296,15 @@ async fn serve(
                 }
                 continue;
             }
-            Request::Rename { from, to } => {
-                let done = sftp.rename(from.as_str(), to.as_str()).await;
-                changed(done.map(drop), &super::parent(&to))
+            Request::Rename { from, to, replace } => {
+                // The look and the rename are two requests; a name taken in
+                // between is replaced or refused as the server does.
+                let taken = sftp.lstat(to.as_str()).await.is_ok();
+                if taken && !replace {
+                    Event::RenameExists { from, to }
+                } else {
+                    changed(rename(sftp, &from, &to, taken).await, &super::parent(&to))
+                }
             }
             Request::Delete { path, folder } => {
                 let done = if folder {
@@ -360,6 +323,15 @@ async fn serve(
             return Ok(());
         }
     }
+}
+
+/// Renames `from` to `to`. SFTP's rename won't replace a file, so a
+/// `taken` one the user agreed to replace goes first.
+async fn rename(sftp: &RawSftpSession, from: &str, to: &str, taken: bool) -> Result<(), Error> {
+    if taken {
+        sftp.remove(to).await?;
+    }
+    sftp.rename(from, to).await.map(drop)
 }
 
 /// What a rename, delete or new folder in `folder` reports.
@@ -385,7 +357,7 @@ async fn list(sftp: &RawSftpSession, path: &str) -> Result<Listing, Error> {
                 let shown = name
                     .files
                     .into_iter()
-                    .filter(|file| !super::hidden(&file.filename));
+                    .filter(|file| !crate::files::hidden(&file.filename));
                 for file in shown {
                     if files.len() == MAX_ENTRIES {
                         truncated = true;
@@ -405,7 +377,7 @@ async fn list(sftp: &RawSftpSession, path: &str) -> Result<Listing, Error> {
     read?;
     let mut entries: Vec<Entry> = files.into_iter().map(entry).collect();
     resolve_links(sftp, path, &mut entries).await;
-    super::sort(&mut entries);
+    crate::files::sort(&mut entries);
     Ok(Listing {
         path: path.to_owned(),
         entries,
@@ -1236,13 +1208,64 @@ mod tests {
                 return;
             };
             let folder = absolute(&remote);
-            client.rename(format!("{folder}/old.txt"), format!("{folder}/new.txt"));
+            client.rename(
+                format!("{folder}/old.txt"),
+                format!("{folder}/new.txt"),
+                false,
+            );
             match change(&mut events) {
                 Event::Changed { folder: changed } => assert_eq!(changed, folder),
                 other => panic!("expected Changed, got {other:?}"),
             }
             assert!(!remote.path().join("old.txt").exists());
             assert_eq!(fs::read(remote.path().join("new.txt")).expect("read"), b"x");
+        }
+
+        /// Spec 0013, flow 5 and AC7: on an SFTP target, renaming onto an
+        /// existing name is reported, not done, so the browser can ask.
+        #[test]
+        fn a_rename_onto_an_existing_name_reports_it_and_changes_nothing() {
+            let remote = TempDir::new("sftp-rename-exists");
+            fs::write(remote.path().join("a.txt"), b"a").expect("write a");
+            fs::write(remote.path().join("b.txt"), b"b").expect("write b");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let folder = absolute(&remote);
+            let (from, to) = (format!("{folder}/a.txt"), format!("{folder}/b.txt"));
+            client.rename(from.clone(), to.clone(), false);
+            match change(&mut events) {
+                Event::RenameExists {
+                    from: reported_from,
+                    to: reported_to,
+                } => {
+                    assert_eq!(reported_from, from);
+                    assert_eq!(reported_to, to);
+                }
+                other => panic!("expected RenameExists, got {other:?}"),
+            }
+            assert_eq!(fs::read(remote.path().join("a.txt")).expect("read a"), b"a");
+            assert_eq!(fs::read(remote.path().join("b.txt")).expect("read b"), b"b");
+        }
+
+        /// Spec 0013, flow 5: once confirmed, the rename replaces the
+        /// existing remote file and its folder changes.
+        #[test]
+        fn a_confirmed_rename_replaces_the_existing_file() {
+            let remote = TempDir::new("sftp-rename-replace");
+            fs::write(remote.path().join("a.txt"), b"a").expect("write a");
+            fs::write(remote.path().join("b.txt"), b"b").expect("write b");
+            let Some((client, mut events, _)) = connect(remote.path()) else {
+                return;
+            };
+            let folder = absolute(&remote);
+            client.rename(format!("{folder}/a.txt"), format!("{folder}/b.txt"), true);
+            match change(&mut events) {
+                Event::Changed { folder: changed } => assert_eq!(changed, folder),
+                other => panic!("expected Changed, got {other:?}"),
+            }
+            assert!(!remote.path().join("a.txt").exists());
+            assert_eq!(fs::read(remote.path().join("b.txt")).expect("read b"), b"a");
         }
 
         /// Spec 0008, flow 6: a new folder reports its parent changed.

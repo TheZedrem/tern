@@ -58,6 +58,9 @@ pub struct Config {
     pub sftp_click: SftpClick,
     /// When an SFTP edit uploads, until the edit says otherwise.
     pub sftp_upload: UploadMode,
+    /// What Enter or a double click does to a runnable local file in a
+    /// files pane (spec 0013, flow 4).
+    pub files_executable: FilesExecutable,
     /// What `Ctrl+Shift+T` opens; `Ctrl+Alt+Shift+T` opens the other
     /// (spec 0004).
     pub new_tab: NewTab,
@@ -128,6 +131,16 @@ pub enum UploadMode {
     Manual,
     Save,
     Focus,
+}
+
+/// What Enter or a double click does to a runnable local file (spec 0013,
+/// flow 4): ask whether to run it or open it as text, or do one of them.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FilesExecutable {
+    Ask,
+    Run,
+    Edit,
 }
 
 /// What opens a link: Ctrl+click, the owner's default, or a plain click
@@ -268,6 +281,7 @@ impl Default for Config {
             sftp_sidebar: SftpSide::Right,
             sftp_click: SftpClick::Edit,
             sftp_upload: UploadMode::Manual,
+            files_executable: FilesExecutable::Ask,
             new_tab: NewTab::Ask,
             update_check: None,
         }
@@ -1083,6 +1097,11 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.sftp_upload = mode;
                     }
                 }
+                "files_executable" => {
+                    if let Some(executable) = map.next_value()? {
+                        config.files_executable = executable;
+                    }
+                }
                 "new_tab" => {
                     if let Some(new_tab) = map.next_value()? {
                         config.new_tab = new_tab;
@@ -1763,6 +1782,39 @@ pub(crate) mod tests {
         assert!(notices[0].contains("sftp_upload"), "{}", notices[0]);
     }
 
+    /// Spec 0013 §Settings: a runnable local file asks unless
+    /// `files_executable` says `run` or `edit`.
+    #[test]
+    fn files_executable_asks_unless_set_to_run_or_edit() {
+        assert_eq!(parse("").config.files_executable, FilesExecutable::Ask);
+        for (text, executable) in [
+            ("files_executable: run\n", FilesExecutable::Run),
+            ("files_executable: edit\n", FilesExecutable::Edit),
+            ("files_executable: ask\n", FilesExecutable::Ask),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.files_executable, executable, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a value `files_executable` doesn't take falls back to
+    /// `ask`, never to running, with a notice naming the key; the rest
+    /// still applies.
+    #[test]
+    fn a_bad_files_executable_falls_back_to_ask_with_a_notice_and_the_rest_applies() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "files_executable: always\n",
+            "copy_on_select: true\n",
+        ));
+        assert_eq!(config.files_executable, FilesExecutable::Ask);
+        assert_eq!(config.scrollback, 500);
+        assert!(config.copy_on_select);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("files_executable"), "{}", notices[0]);
+    }
+
     /// Spec 0011 §Model: `update_check` is unset unless it's `daily` or
     /// `off`; a key with no value is unset too, without a notice.
     #[test]
@@ -2180,6 +2232,7 @@ tab_bar: top                        # top | bottom | left | right (spec 0003)
 sftp_sidebar: right                 # left | right (spec 0008)
 sftp_click: edit                    # edit | download (spec 0008)
 sftp_upload: manual                 # manual | save | focus (spec 0008)
+files_executable: ask               # ask | run | edit (spec 0013)
 new_tab: ask                    # what Ctrl+Shift+T opens: ask | default (spec 0004)
 close_on_exit: clean                # always | clean | never
 restore_session: true
@@ -2245,7 +2298,7 @@ theme:
                 default: "dark".into(),
                 custom: vec![("midnight".into(), midnight)],
             },
-            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 34)],
+            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 35)],
             ..Config::default()
         };
         assert_eq!(config, expected);

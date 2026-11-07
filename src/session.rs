@@ -1,7 +1,8 @@
 //! The session (spec 0003): the window's size and its tabs' layout, with
-//! each pane's profile, directory and title, kept in `session.json` so a
-//! relaunch comes back the way the app was left. Never scrollback,
-//! commands or the environment [load-bearing].
+//! each pane's profile, directory and title (a files pane's target and
+//! folder, spec 0013), kept in `session.json` so a relaunch comes back
+//! the way the app was left. Never scrollback, commands or the
+//! environment [load-bearing].
 
 use crate::layout::tree::{Axis, LeafId, Node};
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,19 @@ pub struct SavedLeaf {
     pub cwd: Option<PathBuf>,
     /// The title its program set last.
     pub title: Option<String>,
+    /// A files pane instead of a terminal (spec 0013, Saved); `profile`,
+    /// `cwd` and `title` then go unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<SavedFiles>,
+}
+
+/// A files pane as saved: the target it showed and its folder, nothing
+/// else (spec 0013, Saved).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedFiles {
+    /// The SSH profile it showed; `None` for Local.
+    pub target: Option<String>,
+    pub folder: Option<String>,
 }
 
 impl Session {
@@ -249,6 +263,22 @@ pub(crate) mod tests {
             profile: profile.into(),
             cwd: cwd.map(PathBuf::from),
             title: title.map(str::to_owned),
+            files: None,
+        })
+    }
+
+    /// A saved files pane on SSH profile `target` (`None`: Local) at
+    /// `folder`. Shared with the tests of the modules that restore one.
+    pub(crate) fn files_leaf(id: LeafId, target: Option<&str>, folder: Option<&str>) -> SavedNode {
+        SavedNode::Leaf(SavedLeaf {
+            id,
+            profile: "shell".into(),
+            cwd: None,
+            title: None,
+            files: Some(SavedFiles {
+                target: target.map(str::to_owned),
+                folder: folder.map(str::to_owned),
+            }),
         })
     }
 
@@ -365,6 +395,62 @@ pub(crate) mod tests {
             .filter(|key| !layout.contains(&key.as_str()) && !pane.contains(&key.as_str()))
             .collect();
         assert!(other.is_empty(), "session.json also holds {other:?}");
+    }
+
+    /// Spec 0013, Saved: a files pane, on Local or on a host, saves and
+    /// loads back as it was, beside terminal panes.
+    #[test]
+    fn a_files_pane_saves_and_loads_back_with_its_target_and_folder() {
+        let root = TempDir::new("session-files");
+        let path = root.path().join("session.json");
+        let mut session = two_tabs();
+        session.tabs[1] = tab(
+            split(
+                Axis::Row,
+                0.5,
+                leaf(4, "ssh:prod", None, None),
+                files_leaf(5, Some("ssh:prod"), Some("/var/log")),
+            ),
+            5,
+        );
+        session
+            .tabs
+            .push(tab(files_leaf(6, None, Some("/home/me/notes")), 6));
+        save(&path, &session).expect("save");
+        assert_eq!(load(&path), Ok(Some(session)));
+    }
+
+    /// Spec 0013, Saved and §Security & privacy: a files pane adds only its
+    /// target and folder to the file: no expanded folders, transfers,
+    /// edits or other targets.
+    #[test]
+    fn a_files_pane_saves_only_its_target_and_folder() {
+        let session = Session::new(
+            None,
+            vec![tab(files_leaf(1, Some("prod"), Some("/srv")), 1)],
+            0,
+        );
+        let file: serde_json::Value =
+            serde_json::from_str(&json(&session)).expect("session.json is JSON");
+        let saved = &file["tabs"][0]["root"]["leaf"]["files"];
+        assert_eq!(
+            keys(saved),
+            BTreeSet::from(["target".into(), "folder".into()])
+        );
+        assert_eq!(saved["target"], "prod");
+        assert_eq!(saved["folder"], "/srv");
+    }
+
+    /// Spec 0013, Saved: a session saved before files panes existed, whose
+    /// panes have no `files` key, still loads, all of them terminals.
+    #[test]
+    fn a_session_saved_before_files_panes_loads_with_terminal_panes() {
+        let text = r#"{"version":1,"window":null,"tabs":[{"name":null,"root":{"leaf":{"id":1,"profile":"shell","cwd":"/tmp","title":"vim"}},"focused":1,"zoomed":null}],"active":0}"#;
+        let session = parse(text).expect("an older session loads");
+        let leaves = session.tabs[0].root.leaves();
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(leaves[0].profile, "shell");
+        assert_eq!(leaves[0].files, None);
     }
 
     /// Spec 0003, flow 7, and spec 0001, flow 3: before the first save there

@@ -45,8 +45,8 @@ specs or tasks until they're promoted to one.
   sidebar, possibly with controls to attach, view logs and restart. Needs
   the plugin system first.
 - **S3 and SMB.** Browse and transfer files in S3 buckets and SMB shares
-  as plugins that add a backend to the file browser the SFTP sidebar is
-  being generalized into (T-042). Needs the plugin system first.
+  as plugins that add a target to the file browser of the SFTP sidebar and
+  the files pane (spec 0013). Needs the plugin system first.
 
 ## Platforms
 
@@ -99,7 +99,8 @@ frame needs. Everything else is a module under `src/`:
 - `layout/` — tabs, title bar, split tree, session restore
 - `commands/` — actions, keymap, palette
 - `ssh/` — hosts, the ssh command, askpass (spec 0006)
-- `sftp/` — SFTP sessions per SSH pane and the sidebar (spec 0008)
+- `files/` — the file browser over a target (Local or SFTP) as a tree, and the files pane (spec 0013)
+- `sftp/` — SFTP connections, transfers and edit copies, which the browser draws in an SSH pane's sidebar or a files pane (spec 0008)
 - `config.rs`, `theme.rs`, `session.rs` — files on disk
 - `secrets.rs` — the OS keychain
 - `update.rs` — the opt-in release check (spec 0011)

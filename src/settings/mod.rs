@@ -11,8 +11,8 @@ pub mod yaml;
 
 use crate::commands::{self, AppCommand, OpenConfigFolder, keymap};
 use crate::config::{
-    CloseOnExit, Config, CursorStyle, NewTab, OpenLinks, Profile, ProfileKind, SftpClick, SftpSide,
-    TabBarSide, UpdateCheck, UploadMode,
+    CloseOnExit, Config, CursorStyle, FilesExecutable, NewTab, OpenLinks, Profile, ProfileKind,
+    SftpClick, SftpSide, TabBarSide, UpdateCheck, UploadMode,
 };
 use crate::layout::show_notice;
 use change::{Change, ProfileForm};
@@ -54,6 +54,7 @@ pub const FIELDS: &[&str] = &[
     "sftp_sidebar",
     "sftp_click",
     "sftp_upload",
+    "files_executable",
     "new_tab",
     "update_check",
 ];
@@ -571,6 +572,15 @@ fn sftp_upload_name(config: &Config) -> &'static str {
     }
 }
 
+/// `files_executable` as the file writes it.
+fn files_executable_name(config: &Config) -> &'static str {
+    match config.files_executable {
+        FilesExecutable::Ask => "ask",
+        FilesExecutable::Run => "run",
+        FilesExecutable::Edit => "edit",
+    }
+}
+
 /// A number as YAML: no `.0` on a whole one.
 fn number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 {
@@ -1083,6 +1093,28 @@ impl Render for SettingsView {
                 .into_any_element(),
             ),
             row(
+                Page::General,
+                "Files",
+                "Double-clicking a local program",
+                "files pane local executable program script run edit ask double click",
+                self.options(
+                    "files-executable",
+                    &[
+                        ("ask", "Asks"),
+                        ("run", "Runs it"),
+                        ("edit", "Opens it as text"),
+                    ],
+                    files_executable_name(config),
+                    |value| {
+                        choice(vec!["files_executable"], value, |config| {
+                            files_executable_name(config).to_owned()
+                        })
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            row(
                 Page::Appearance,
                 "Font",
                 "Font family",
@@ -1461,6 +1493,8 @@ mod tests {
         "sftp_sidebar",
         "sftp_click",
         "sftp_upload",
+        // Spec 0013's, documented with spec 0005's.
+        "files_executable",
         "new_tab",
         // Spec 0011's, documented with spec 0005's.
         "update_check",

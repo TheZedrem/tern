@@ -34,6 +34,7 @@ tab_bar: top          # top | bottom | left | right (left and right: vertical ta
 sftp_sidebar: right   # left | right: where an SSH pane's file sidebar opens (Ctrl+Shift+S)
 sftp_click: edit      # what double-clicking a remote file does: edit (in your app) | download
 sftp_upload: manual   # when an edit's saves go back: manual (Upload button) | save | focus
+files_executable: ask # what double-clicking a local program in the files pane (Ctrl+Shift+B) does: ask | run | edit
 new_tab: ask          # what Ctrl+Shift+T does: ask (which profile) | default;
                       # Ctrl+Alt+Shift+T does the other
 

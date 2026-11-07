@@ -60,6 +60,14 @@ actions!(
         /// Opens or closes the focused SSH pane's SFTP sidebar (spec 0008,
         /// flow 1).
         ToggleSftp,
+        /// Splits the focused pane with a files pane on its target, or
+        /// focuses the tab's files pane (spec 0013, flow 1).
+        OpenFiles,
+        /// Opens a tab holding a files pane on Local at home (spec 0013).
+        OpenFilesInNewTab,
+        /// Picks what the focused files pane shows: Local, a host, or
+        /// Disconnect (spec 0013, flow 2).
+        SwitchFilesTarget,
     ]
 );
 
@@ -141,6 +149,15 @@ pub const COMMANDS: &[AppCommand] = &[
     command("sftp.toggle", Some("Toggle SFTP sidebar"), || {
         Box::new(ToggleSftp)
     }),
+    command("files.open", Some("Open files"), || Box::new(OpenFiles)),
+    command("files.newTab", Some("Open files in a new tab"), || {
+        Box::new(OpenFilesInNewTab)
+    }),
+    command(
+        "files.switchTarget",
+        Some("Switch files pane to…"),
+        || Box::new(SwitchFilesTarget),
+    ),
     command("theme.select", Some("Select theme"), || {
         Box::new(SelectTheme)
     }),
@@ -334,5 +351,29 @@ mod tests {
         assert_eq!(command.title, Some("Toggle SFTP sidebar"));
         let action = (command.action)();
         assert!(action.partial_eq(&ToggleSftp), "runs {}", action.name());
+    }
+
+    /// Spec 0013, flow 1 and §Settings: "Open files" and "Open files in a
+    /// new tab" are in the palette, bindable as `files.open` and
+    /// `files.newTab`, and run their actions.
+    #[test]
+    fn opening_files_is_in_the_palette_and_bindable_as_files_open_and_files_new_tab() {
+        for (id, title, expected) in [
+            (
+                "files.open",
+                "Open files",
+                Box::new(OpenFiles) as Box<dyn Action>,
+            ),
+            (
+                "files.newTab",
+                "Open files in a new tab",
+                Box::new(OpenFilesInNewTab),
+            ),
+        ] {
+            let command = by_id(id).unwrap_or_else(|| panic!("no command has the ID `{id}`"));
+            assert_eq!(command.title, Some(title));
+            let action = (command.action)();
+            assert!(action.partial_eq(&*expected), "{id} runs {}", action.name());
+        }
     }
 }

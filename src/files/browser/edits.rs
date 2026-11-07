@@ -1,10 +1,10 @@
-//! A session's edits (spec 0008, flow 3): a remote file downloaded to a
-//! private copy, opened in the OS's default app, and watched. A save marks
-//! it changed; it uploads as its mode says, only if the host's file is
-//! still the one fetched, else the sidebar asks. Copies outlive a dropped
-//! connection and go when the session does.
+//! An SFTP session's edits (spec 0008, flow 3): a remote file downloaded
+//! to a private copy, opened in the OS's default app, and watched. A save
+//! marks it changed; it uploads as its mode says, only if the host's file
+//! is still the one fetched, else the browser asks. Copies outlive a
+//! dropped connection and go when the session does.
 
-use super::{Ask, SftpEvent, SftpView};
+use super::{Ask, Browser, BrowserEvent, Link};
 use crate::config::UploadMode;
 use crate::sftp::client::{Download, RemoteStat, Upload};
 use crate::sftp::{copies, local_name, local_path, runs_when_opened};
@@ -104,7 +104,7 @@ impl Edit {
     }
 }
 
-impl SftpView {
+impl Browser {
     pub(super) fn edit_mut(&mut self, id: u64) -> Option<&mut Edit> {
         self.edits.iter_mut().find(|edit| edit.id == id)
     }
@@ -138,25 +138,25 @@ impl SftpView {
                 "{} would run rather than open, so it was downloaded instead",
                 clean_title(&name)
             );
-            cx.emit(SftpEvent::Notice(notice));
+            cx.emit(BrowserEvent::Notice(notice));
             self.download(ix, None, cx);
             return;
         }
         let Some(copies) = self.copies.clone() else {
-            cx.emit(SftpEvent::Notice(
+            cx.emit(BrowserEvent::Notice(
                 "There's no data folder for edit copies".into(),
             ));
             return;
         };
-        if self.client.is_none() {
+        if self.sftp().is_none() {
             return;
         }
         let id = self.next_id();
         let Some(copy) = local_path(&copies.join(id.to_string()), &name, windows) else {
             return;
         };
-        let folder = super::super::parent(&remote);
-        if let Some(client) = &self.client {
+        let folder = crate::sftp::parent(&remote);
+        if let Some(client) = self.sftp() {
             client.download(Download {
                 id,
                 remote: remote.clone(),
@@ -223,7 +223,7 @@ impl SftpView {
             State::Opening => {
                 let notice = format!("Couldn't open {}: {error}", edit.label);
                 self.remove_edit(id, cx);
-                cx.emit(SftpEvent::Notice(notice));
+                cx.emit(BrowserEvent::Notice(notice));
             }
             State::Uploading => {
                 edit.sending = None;
@@ -294,9 +294,9 @@ impl SftpView {
     /// Uploads edit `id` over its remote file: only if that's still as
     /// fetched, unless `force` (the user said so after being asked).
     pub(super) fn upload_edit(&mut self, id: u64, force: bool, cx: &mut Context<Self>) {
-        let Some(client) = &self.client else {
+        let Some(Link::Sftp(client)) = &self.link else {
             let notice = format!("{}: connect again to upload", self.target);
-            cx.emit(SftpEvent::Notice(notice));
+            cx.emit(BrowserEvent::Notice(notice));
             return;
         };
         let Some(edit) = self.edits.iter_mut().find(|edit| edit.id == id) else {
@@ -327,7 +327,7 @@ impl SftpView {
             return;
         };
         let edit = self.edits.remove(ix);
-        if let Some(client) = &self.client
+        if let Some(client) = self.sftp()
             && matches!(edit.state, State::Opening | State::Uploading)
         {
             client.cancel(id);
@@ -352,7 +352,7 @@ impl SftpView {
             State::Uploading => {
                 edit.sending = None;
                 edit.state = State::Changed;
-                if let Some(client) = &self.client {
+                if let Some(Link::Sftp(client)) = &self.link {
                     client.cancel(id);
                 }
                 self.settle(cx);
@@ -386,7 +386,7 @@ impl SftpView {
     /// Tells a close waiting on uploads that none is running now.
     fn settle(&mut self, cx: &mut Context<Self>) {
         if !self.edits.iter().any(|edit| edit.state == State::Uploading) {
-            cx.emit(SftpEvent::Settled);
+            cx.emit(BrowserEvent::Settled);
         }
     }
 
@@ -514,7 +514,7 @@ impl SftpView {
                     .total
                     .filter(|&total| total > 0)
                     .map(|total| edit.done as f32 * 100.0 / total as f32);
-                Progress::new(("sftp-edit-progress", id))
+                Progress::new(("files-edit-progress", id))
                     .value(percent.unwrap_or_default())
                     .loading(percent.is_none())
             });
@@ -538,7 +538,7 @@ impl SftpView {
                                 .child(edit.label.clone()),
                         )
                         .child(
-                            Button::new(("sftp-edit-mode", id))
+                            Button::new(("files-edit-mode", id))
                                 .label(mode)
                                 .icon(IconName::ChevronDown)
                                 .ghost()
@@ -560,7 +560,7 @@ impl SftpView {
                                 }),
                         )
                         .child(
-                            Button::new(("sftp-edit-upload", id))
+                            Button::new(("files-edit-upload", id))
                                 .icon(IconName::ArrowUp)
                                 .ghost()
                                 .xsmall()
@@ -571,7 +571,7 @@ impl SftpView {
                                 })),
                         )
                         .child(
-                            Button::new(("sftp-edit-open", id))
+                            Button::new(("files-edit-open", id))
                                 .icon(IconName::ExternalLink)
                                 .ghost()
                                 .xsmall()
@@ -584,7 +584,7 @@ impl SftpView {
                                 })),
                         )
                         .child(
-                            Button::new(("sftp-edit-close", id))
+                            Button::new(("files-edit-close", id))
                                 .icon(IconName::Close)
                                 .ghost()
                                 .xsmall()

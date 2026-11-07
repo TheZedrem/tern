@@ -6,6 +6,7 @@
 mod bench;
 mod commands;
 mod config;
+mod files;
 mod import;
 mod layout;
 mod secrets;

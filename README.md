@@ -14,8 +14,9 @@ picker, stored passwords and host import from MobaXterm and Tabby are in,
 as are an opt-in daily check for new releases on GitHub and Linux
 packages. The SFTP sidebar (`Ctrl+Shift+S` on an SSH pane) browses a
 host's folders, downloads, uploads (also by drag and drop), renames,
-deletes, and edits remote files in your own app, uploading your saves;
-package repositories come next. A Tauri/WebKitGTK version was
+deletes, and edits remote files in your own app, uploading your saves.
+The files pane (`Ctrl+Shift+B`) browses the local disk or any saved host
+as a tree beside your terminals; package repositories come next. A Tauri/WebKitGTK version was
 built and measured first (1.07 s) and dropped; see OQ-009, OQ-010 and
 OQ-013.
 
@@ -50,6 +51,8 @@ interface that explains itself.
 - [x] SFTP sidebar (left or right, opened per SSH pane, `Ctrl+Shift+S`): browse folders with a path field ([spec 0008](spec/0008-sftp-panel.md), [T-023](tasks/resolved/T-023-sftp-panel.md))
 - [x] SFTP downloads, uploads (also dropped from the file manager), rename, delete, new folder ([T-035](tasks/resolved/T-035-sftp-transfers.md))
 - [x] Editing remote files in a local app from the SFTP sidebar, saves uploaded on a click, on save or on focus ([T-036](tasks/resolved/T-036-sftp-edits.md))
+- [x] Files pane (`Ctrl+Shift+B`): the local disk or any saved host as a tree, as a pane of the split tree; the SFTP sidebar shows the same tree ([spec 0013](spec/0013-files-panel.md))
+- [ ] Local deletes go to the OS's trash ([T-044](tasks/T-044-local-delete-to-trash.md))
 - [ ] Dragging files out of the SFTP panel into the file manager ([T-027](tasks/T-027-sftp-drag-out-local-files.md))
 
 **Distribution**

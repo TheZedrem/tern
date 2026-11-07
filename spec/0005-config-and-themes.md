@@ -78,6 +78,7 @@ tab_bar: top                        # top | bottom | left | right (spec 0003)
 sftp_sidebar: right                 # left | right (spec 0008)
 sftp_click: edit                    # edit | download (spec 0008)
 sftp_upload: manual                 # manual | save | focus (spec 0008)
+files_executable: ask               # ask | run | edit (spec 0013)
 new_tab: ask                        # what Ctrl+Shift+T opens: ask | default (spec 0004)
 close_on_exit: clean                # always | clean | never
 restore_session: true

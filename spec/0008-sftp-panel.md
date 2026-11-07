@@ -30,7 +30,7 @@ manager), and the sidebar asks for passwords the way the terminal does.
 **In scope:**
 
 - "Toggle SFTP sidebar" (`sftp.toggle`, `Ctrl+Shift+S`): opens or closes the focused SSH pane's sidebar, on the window's right (default) or left (`sftp_sidebar`), showing that pane's host; each pane remembers whether its sidebar is open
-- A flat listing of one folder (name, size, modified, kind), entering folders, going up, and a path field that is always shown and always editable
+- A listing of one folder (name, size, modified, kind) as a tree whose folders expand in place (spec 0013, the same file browser as the files pane), entering folders, going up, and a path field that is always shown and always editable
 - Starting in the folder the pane's remote shell is in, if it reported one, else the home folder
 - Editing a remote file in the OS's default app for its type: what a click on a file does by default
 - Uploading an edit on a click in the sidebar by default; a setting (`sftp_upload`) for upload on save or on focus, and a per-edit override
@@ -41,7 +41,7 @@ manager), and the sidebar asks for passwords the way the terminal does.
 **Out of scope:**
 
 - *Later (planned)*: `sftp_sidebar: split`, where the file view is a pane of the split tree that splits, moves and closes like a terminal (spec 0007), and a Detach button in the sidebar's header that turns the sidebar into that pane. The model below keeps a connection apart from where it's drawn, so neither needs a rewrite (T-032); that pane is the files pane of [spec 0013](0013-files-panel.md)
-- *Later (planned)*: the sidebar draws the same file browser as the files pane, with a tree view of folders; a local file browser is that pane's Local target, not this sidebar ([spec 0013](0013-files-panel.md))
+- A local file browser: that is the files pane's Local target, not this sidebar ([spec 0013](0013-files-panel.md))
 - *Later (planned)*: suggestions in the path field: a dropdown of matching folders as the user types, fuzzy-matched like the listing filter, with Tab to complete (T-038)
 - *Later (planned)*: a follow-terminal mode, where the listing follows each `cd` the pane's shell reports, and an opt-in per profile that sets up those reports on bash servers after login, as MobaXterm's "Follow SSH path" does, for servers that don't send OSC 7 themselves (T-034)
 - *Later (planned)*: a fuzzy filter over the current folder's listing, best matches first with the matched characters highlighted; no recursive search on the server (T-037)
@@ -128,8 +128,9 @@ manager), and the sidebar asks for passwords the way the terminal does.
    command does nothing but show a notice that SFTP needs an SSH pane.
    Moving a pane to another tab or split (spec 0007) keeps its flag and
    session.
-2. **Browse:** the listing is flat: one folder, folders first, then files,
-   by name. Enter or a double click enters a folder (a symlink to one
+2. **Browse:** the listing is a tree (spec 0013, flow 3): one folder,
+   folders first, then files, by name, each folder expanding in place.
+   Enter or a double click enters a folder (a symlink to one
    too), Backspace goes up, and the path field goes anywhere (`~` and
    relative paths resolve against the home folder). A listing
    that fails says why in the sidebar and keeps the last one. On a file,

@@ -6,7 +6,7 @@ mod element;
 pub mod grid;
 pub mod input;
 pub mod link;
-mod prompt;
+pub mod prompt;
 pub mod pty;
 pub mod search;
 pub mod select;
@@ -244,6 +244,10 @@ pub struct PaneProfile {
     /// An SSH connection (spec 0006): its prompts are answered in the app,
     /// and when it drops it waits for Enter to reconnect.
     pub ssh: bool,
+    /// A program run from a files pane (spec 0013, flow 4): it stays open
+    /// after it exits, whatever `close_on_exit` says, so its output and
+    /// exit show.
+    pub stays: bool,
 }
 
 impl From<&Profile> for PaneProfile {
@@ -253,6 +257,7 @@ impl From<&Profile> for PaneProfile {
             name: profile.display_name().to_owned(),
             theme: profile.theme.clone(),
             ssh: matches!(profile.kind, ProfileKind::Ssh(_)),
+            stays: false,
         }
     }
 }
@@ -444,7 +449,7 @@ struct Running {
 /// Whose ssh a prompt dialog answers: the pane's terminal connection, or
 /// its SFTP connection (spec 0008).
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Asker {
+pub enum Asker {
     Terminal,
     Sftp,
 }
@@ -640,7 +645,8 @@ impl TerminalPane {
                     command.env.extend(connection.env);
                     let args = command.args.clone();
                     let prompts = connection.prompts;
-                    let task = self.answer_prompts(prompts, args, Asker::Terminal, window, cx);
+                    let turn = Rc::clone(&self.dialog_turn);
+                    let task = answer_prompts(prompts, args, Asker::Terminal, turn, window, cx);
                     self.askpass = Some(task);
                 }
                 Err(error) => self.notice(format!("ssh asks in the terminal: {error}"), cx),
@@ -679,7 +685,8 @@ impl TerminalPane {
             Ok(connection) => {
                 env.extend(connection.env);
                 let prompts = connection.prompts;
-                let task = self.answer_prompts(prompts, pane_args, Asker::Sftp, window, cx);
+                let turn = Rc::clone(&self.dialog_turn);
+                let task = answer_prompts(prompts, pane_args, Asker::Sftp, turn, window, cx);
                 self.sftp_askpass = Some(task);
             }
             Err(_) => {
@@ -701,80 +708,6 @@ impl TerminalPane {
         cx.defer(move |cx| {
             let _ = pane.update(cx, |_, cx| cx.emit(PaneEvent::Notice(notice)));
         });
-    }
-
-    /// Answers the prompts of the connection whose ssh runs with `args`, one
-    /// at a time (spec 0006, flow 4). The connection's own password and
-    /// passphrase prompts are filled in from the keychain once each, with a
-    /// notice; everything else gets a dialog, when it's `asker`'s turn.
-    fn answer_prompts(
-        &self,
-        mut prompts: UnboundedReceiver<Prompt>,
-        args: Vec<String>,
-        asker: Asker,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Task<()> {
-        let executor = cx.background_executor().clone();
-        let turn = Rc::clone(&self.dialog_turn);
-        let target = secrets::off_thread(move || Target::resolve(&args));
-        cx.spawn_in(window, async move |this, cx| {
-            let target = within(target, RESOLVE_TIMEOUT, &executor)
-                .await
-                .and_then(Result::ok)
-                .flatten();
-            let mut offers = Offers::default();
-            while let Some(mut prompt) = prompts.next().await {
-                let key = target
-                    .as_ref()
-                    .filter(|_| prompt.kind == PromptKind::Secret)
-                    .and_then(|target| target.secret_for(&prompt.text));
-                if let Some(key) = key.as_ref().filter(|key| offers.ask(key)) {
-                    match lookup(key, &executor).await {
-                        Lookup::Found(secret) => {
-                            prompt.answer(&secret);
-                            offers.filled.insert(key.clone());
-                            let notice = filled_notice(key);
-                            let _ = this.update(cx, |_, cx| cx.emit(PaneEvent::Notice(notice)));
-                            continue;
-                        }
-                        Lookup::Nothing => {}
-                        Lookup::Failed(error) => {
-                            let notice = format!("Couldn't read the keychain: {error}");
-                            let _ = this.update(cx, |_, cx| cx.emit(PaneEvent::Notice(notice)));
-                        }
-                        Lookup::NoKeychain => {
-                            offers.no_keychain = true;
-                            let _ = this.update(cx, |_, cx| cx.emit(PaneEvent::NoKeychain));
-                        }
-                    }
-                }
-                let remember = offers.remember(key.clone());
-                let _turn = turn.lock().await;
-                let Ok(answered) = this.update_in(cx, |pane, window, cx| {
-                    pane.open_dialog(&prompt, remember, asker, window, cx)
-                }) else {
-                    break;
-                };
-                let answer = match select(answered, pin!(prompt.ended())).await {
-                    Either::Left((Ok(answer), _)) => Some(answer),
-                    _ => None,
-                };
-                let _ = this.update(cx, |pane, cx| pane.close_dialog(asker, cx));
-                match answer {
-                    Some(Answer::Typed { text, save }) => {
-                        prompt.answer(&text);
-                        if let Some(key) = key.filter(|_| save) {
-                            let _ = this.update(cx, |pane, cx| pane.save(key, text, cx));
-                        }
-                    }
-                    Some(Answer::Yes) => prompt.answer("yes"),
-                    // Declined, or ssh is done with it: dropping it ends the
-                    // helper.
-                    None => {}
-                }
-            }
-        })
     }
 
     /// Opens the dialog for `prompt` over the pane. The receiver gets the
@@ -827,24 +760,6 @@ impl TerminalPane {
     fn end_prompts(&mut self, cx: &mut Context<Self>) {
         self.askpass = None;
         self.close_dialog(Asker::Terminal, cx);
-    }
-
-    /// Saves what was typed under `key`, off the UI thread. Only a failure
-    /// makes a notice.
-    fn save(&self, key: Key, secret: Zeroizing<String>, cx: &mut Context<Self>) {
-        let executor = cx.background_executor().clone();
-        let described = key.describe();
-        let saving = secrets::off_thread(move || secrets::set(&key, &secret));
-        cx.spawn(async move |this, cx| {
-            let error = match within(saving, KEYCHAIN_TIMEOUT, &executor).await {
-                Some(Ok(Ok(()))) => return,
-                Some(Ok(Err(error))) => error,
-                _ => "the keychain didn't answer".to_owned(),
-            };
-            let notice = format!("Couldn't save {described}: {error}");
-            let _ = this.update(cx, |_, cx| cx.emit(PaneEvent::Notice(notice)));
-        })
-        .detach();
     }
 
     /// Text where the grid would be, in the pane's font: a waiting pane's
@@ -994,7 +909,11 @@ impl TerminalPane {
         self.exited = true;
         // The connection's token dies with its ssh (TM-askpass-03).
         self.end_prompts(cx);
-        let after = after_exit(self.profile.ssh, self.settings.close_on_exit, code);
+        let policy = match self.profile.stays {
+            true => CloseOnExit::Never,
+            false => self.settings.close_on_exit,
+        };
+        let after = after_exit(self.profile.ssh, policy, code);
         self.reconnect = after == AfterExit::Reconnect;
         let notice = if self.reconnect {
             RECONNECT_NOTICE.to_owned()
@@ -1742,6 +1661,158 @@ impl Render for TerminalPane {
             .children(self.render_search(cx))
             .children(self.dialog.as_ref().map(|(_, dialog)| dialog.clone()))
     }
+}
+
+impl PromptHost for TerminalPane {
+    type Asker = Asker;
+
+    fn open_prompt(
+        &mut self,
+        prompt: &Prompt,
+        remember: Option<Remember>,
+        asker: Asker,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> oneshot::Receiver<Answer> {
+        self.open_dialog(prompt, remember, asker, window, cx)
+    }
+
+    fn close_prompt(&mut self, asker: Asker, cx: &mut Context<Self>) {
+        self.close_dialog(asker, cx);
+    }
+
+    fn prompt_notice(&mut self, notice: PromptNotice, cx: &mut Context<Self>) {
+        cx.emit(match notice {
+            PromptNotice::Say(notice) => PaneEvent::Notice(notice),
+            PromptNotice::NoKeychain => PaneEvent::NoKeychain,
+        });
+    }
+}
+
+/// A view that answers its ssh connections' prompts in a dialog of its
+/// own (spec 0006, flow 4): a terminal pane, or a files pane for its SFTP
+/// sessions (spec 0013).
+pub trait PromptHost: Sized + 'static {
+    /// Whose connection a prompt is, when several take turns at the one
+    /// dialog.
+    type Asker: Copy + PartialEq + 'static;
+
+    /// Opens the dialog for `prompt`. The receiver gets the answer, or
+    /// fails when the dialog is left without one.
+    fn open_prompt(
+        &mut self,
+        prompt: &Prompt,
+        remember: Option<Remember>,
+        asker: Self::Asker,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> oneshot::Receiver<Answer>;
+
+    /// Closes the dialog if it's `asker`'s.
+    fn close_prompt(&mut self, asker: Self::Asker, cx: &mut Context<Self>);
+
+    /// Says something about the prompts, as a notice.
+    fn prompt_notice(&mut self, notice: PromptNotice, cx: &mut Context<Self>);
+}
+
+/// What answering prompts has to say.
+pub enum PromptNotice {
+    Say(String),
+    /// There is no keychain; said once per window (spec 0006, flow 8).
+    NoKeychain,
+}
+
+/// Answers the prompts of the connection whose ssh runs with `args`, one
+/// at a time (spec 0006, flow 4). The connection's own password and
+/// passphrase prompts are filled in from the keychain once each, with a
+/// notice; everything else gets `host`'s dialog when it's `asker`'s
+/// `turn`. Dropping the task ends the prompts.
+pub fn answer_prompts<H: PromptHost>(
+    mut prompts: UnboundedReceiver<Prompt>,
+    args: Vec<String>,
+    asker: H::Asker,
+    turn: Rc<futures::lock::Mutex<()>>,
+    window: &mut Window,
+    cx: &mut Context<H>,
+) -> Task<()> {
+    let executor = cx.background_executor().clone();
+    let target = secrets::off_thread(move || Target::resolve(&args));
+    cx.spawn_in(window, async move |this, cx| {
+        let target = within(target, RESOLVE_TIMEOUT, &executor)
+            .await
+            .and_then(Result::ok)
+            .flatten();
+        let mut offers = Offers::default();
+        let say = |notice| move |host: &mut H, cx: &mut Context<H>| host.prompt_notice(notice, cx);
+        while let Some(mut prompt) = prompts.next().await {
+            let key = target
+                .as_ref()
+                .filter(|_| prompt.kind == PromptKind::Secret)
+                .and_then(|target| target.secret_for(&prompt.text));
+            if let Some(key) = key.as_ref().filter(|key| offers.ask(key)) {
+                match lookup(key, &executor).await {
+                    Lookup::Found(secret) => {
+                        prompt.answer(&secret);
+                        offers.filled.insert(key.clone());
+                        let notice = PromptNotice::Say(filled_notice(key));
+                        let _ = this.update(cx, say(notice));
+                        continue;
+                    }
+                    Lookup::Nothing => {}
+                    Lookup::Failed(error) => {
+                        let notice = format!("Couldn't read the keychain: {error}");
+                        let _ = this.update(cx, say(PromptNotice::Say(notice)));
+                    }
+                    Lookup::NoKeychain => {
+                        offers.no_keychain = true;
+                        let _ = this.update(cx, say(PromptNotice::NoKeychain));
+                    }
+                }
+            }
+            let remember = offers.remember(key.clone());
+            let _turn = turn.lock().await;
+            let Ok(answered) = this.update_in(cx, |host, window, cx| {
+                host.open_prompt(&prompt, remember, asker, window, cx)
+            }) else {
+                break;
+            };
+            let answer = match select(answered, pin!(prompt.ended())).await {
+                Either::Left((Ok(answer), _)) => Some(answer),
+                _ => None,
+            };
+            let _ = this.update(cx, |host, cx| host.close_prompt(asker, cx));
+            match answer {
+                Some(Answer::Typed { text, save }) => {
+                    prompt.answer(&text);
+                    if let Some(key) = key.filter(|_| save) {
+                        let _ = this.update(cx, |_, cx| save_secret(key, text, cx));
+                    }
+                }
+                Some(Answer::Yes) => prompt.answer("yes"),
+                // Declined, or ssh is done with it: dropping it ends the
+                // helper.
+                None => {}
+            }
+        }
+    })
+}
+
+/// Saves what was typed under `key`, off the UI thread. Only a failure
+/// makes a notice.
+fn save_secret<H: PromptHost>(key: Key, secret: Zeroizing<String>, cx: &mut Context<H>) {
+    let executor = cx.background_executor().clone();
+    let described = key.describe();
+    let saving = secrets::off_thread(move || secrets::set(&key, &secret));
+    cx.spawn(async move |this, cx| {
+        let error = match within(saving, KEYCHAIN_TIMEOUT, &executor).await {
+            Some(Ok(Ok(()))) => return,
+            Some(Ok(Err(error))) => error,
+            _ => "the keychain didn't answer".to_owned(),
+        };
+        let notice = PromptNotice::Say(format!("Couldn't save {described}: {error}"));
+        let _ = this.update(cx, |host, cx| host.prompt_notice(notice, cx));
+    })
+    .detach();
 }
 
 /// What a connection's prompts got from the keychain so far (spec 0006,

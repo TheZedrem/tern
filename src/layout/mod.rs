@@ -16,11 +16,15 @@ use crate::commands::{
     PreviousTab, RenameTab, ResetFontSize, Search, SelectTheme, SplitDown, SplitDownWithProfile,
     SplitRight, SplitRightWithProfile, ToggleSftp, ZoomPane,
 };
+use crate::commands::{OpenFiles, OpenFilesInNewTab, SwitchFilesTarget};
 use crate::config::{self, Config, Profile, ProfileKind, SftpSide, TabBarSide};
+use crate::files::browser::{self, Browser, BrowserEvent, BrowserSettings, Source};
+use crate::files::local;
+use crate::files::pane::{FilesEvent, FilesPane, Target};
 use crate::secrets;
-use crate::session::{self, SavedLeaf, SavedNode, SavedTab, Session, WindowSize};
+use crate::session::{self, SavedFiles, SavedLeaf, SavedNode, SavedTab, Session, WindowSize};
 use crate::settings::{self, Pick, SettingsEvent, SettingsView, change::Change};
-use crate::sftp::{self, SftpEvent, SftpSettings, SftpView};
+use crate::sftp;
 use crate::ssh;
 use crate::terminal::pty::{self, Command, GridSize};
 use crate::terminal::{
@@ -100,7 +104,7 @@ pub fn init(cx: &mut App) {
         CancelRename,
         Some(RENAME_CONTEXT),
     )]);
-    sftp::view::init(cx);
+    browser::init(cx);
 }
 
 /// Dragging the SFTP sidebar's inner edge to resize it (spec 0008).
@@ -110,7 +114,7 @@ struct DraggedSftpEdge;
 /// An SSH pane's SFTP sidebar, and whether it's open. It outlives being
 /// closed: the session goes on until the pane closes (spec 0008, Model).
 struct Sidebar {
-    view: Entity<SftpView>,
+    view: Entity<Browser>,
     open: bool,
     _events: Subscription,
 }
@@ -170,6 +174,12 @@ struct Rename {
     input: Entity<InputState>,
 }
 
+/// A files pane of the split tree (spec 0013), and its events.
+struct FilesLeaf {
+    pane: Entity<FilesPane>,
+    _events: Subscription,
+}
+
 /// A pane of the window's first frame, its program started before the
 /// window existed (spec 0001).
 pub struct BootPane {
@@ -186,6 +196,9 @@ pub struct BootPane {
 pub struct Boot {
     tabs: Tabs,
     panes: Vec<(LeafId, BootPane)>,
+    /// The shown tab's files panes, which start nothing before the first
+    /// frame (spec 0013, Startup impact).
+    files: Vec<(LeafId, SavedFiles)>,
     /// The other tabs' panes, started when their tab is first shown.
     pending: HashMap<LeafId, SavedLeaf>,
     /// A session that couldn't be restored, to set aside after the first
@@ -200,6 +213,7 @@ impl Boot {
         Self {
             tabs,
             panes: vec![(leaf, pane)],
+            files: Vec::new(),
             pending: HashMap::new(),
             bad_session: None,
         }
@@ -215,8 +229,9 @@ impl Boot {
     }
 
     /// The tabs of `session` (spec 0003, flow 6). `start` makes a pane for
-    /// each leaf of the shown tab, given its share of the window's `area`
-    /// in pixels; the others wait. `None` for a session without tabs.
+    /// each terminal leaf of the shown tab, given its share of the window's
+    /// `area` in pixels; its files leaves wait for the window, the other
+    /// tabs' leaves for their tab. `None` for a session without tabs.
     pub fn restore(
         session: &Session,
         area: (f32, f32),
@@ -237,6 +252,7 @@ impl Boot {
         let shown = tabs.active_index();
         let rects = tabs.active().root.rects(Rect::UNIT);
         let mut panes = Vec::new();
+        let mut files = Vec::new();
         let mut pending = HashMap::new();
         let zoomed = tabs.active().zoomed;
         for (ix, saved) in session.tabs.iter().enumerate() {
@@ -250,6 +266,10 @@ impl Boot {
                         ..leaf.clone()
                     };
                     pending.insert(leaf.id, leaf);
+                    continue;
+                }
+                if let Some(saved) = &leaf.files {
+                    files.push((leaf.id, saved.clone()));
                     continue;
                 }
                 let rect = match zoomed {
@@ -269,9 +289,31 @@ impl Boot {
         Some(Self {
             tabs,
             panes,
+            files,
             pending,
             bad_session: None,
         })
+    }
+}
+
+/// What a restored files pane shows (spec 0013, Saved): its SSH profile
+/// if that's still one, disconnected, else Local at home, with a notice.
+pub fn restored_files(
+    config: &Config,
+    saved: &SavedFiles,
+    notices: &mut Vec<String>,
+) -> (Target, Option<String>) {
+    match &saved.target {
+        None => (Target::Local, saved.folder.clone()),
+        Some(id) => match config.profile(id).map(|profile| profile.kind) {
+            Some(ProfileKind::Ssh(_)) => (Target::Ssh(id.clone()), saved.folder.clone()),
+            _ => {
+                notices.push(format!(
+                    "A restored files pane's host `{id}` no longer exists, so it shows Local."
+                ));
+                (Target::Local, None)
+            }
+        },
     }
 }
 
@@ -366,6 +408,9 @@ pub struct Workspace {
     /// The SFTP sidebars of SSH panes, by pane (spec 0008). Only the
     /// active pane's shows, if it's open.
     sftp: HashMap<LeafId, Sidebar>,
+    /// The files panes, by leaf (spec 0013); every other leaf is a
+    /// terminal pane.
+    files: HashMap<LeafId, FilesLeaf>,
     /// The sidebars' width, one for the window, until Tern quits.
     sftp_width: f32,
     /// A close the user chose "Upload and close" for, waiting on the
@@ -394,6 +439,7 @@ impl Workspace {
         let Boot {
             tabs,
             panes,
+            files,
             pending,
             bad_session,
         } = boot;
@@ -435,6 +481,7 @@ impl Workspace {
             update_timer: None,
             update_asked: false,
             sftp: HashMap::new(),
+            files: HashMap::new(),
             sftp_width: SFTP_WIDTH,
             closing: None,
             window_may_close: false,
@@ -465,6 +512,12 @@ impl Workspace {
             } = pane;
             workspace.add_pane(leaf, start, launch, profile, theme, window, cx);
             workspace.restore_title(leaf, title.as_deref(), cx);
+        }
+        for (leaf, saved) in files {
+            let mut notices = Vec::new();
+            let (target, folder) = restored_files(&workspace.config, &saved, &mut notices);
+            workspace.notices.extend(notices);
+            workspace.add_files(leaf, target, folder, false, window, cx);
         }
         workspace.focus_active(window, cx);
         if workspace.session_path.is_some() {
@@ -510,6 +563,204 @@ impl Workspace {
         self.pane_subscriptions.insert(leaf, subscription);
     }
 
+    /// Puts a files pane on `target` at `folder` in `leaf` (spec 0013).
+    /// Without `connect` it waits: see [`FilesPane::new`].
+    fn add_files(
+        &mut self,
+        leaf: LeafId,
+        target: Target,
+        folder: Option<String>,
+        connect: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let config = &self.config;
+        let pane = cx.new(|cx| FilesPane::new(target, folder, connect, config, window, cx));
+        let events = cx.subscribe_in(&pane, window, move |this, _, event, window, cx| {
+            this.files_event(leaf, event, window, cx);
+        });
+        self.files.insert(
+            leaf,
+            FilesLeaf {
+                pane,
+                _events: events,
+            },
+        );
+    }
+
+    fn files_event(
+        &mut self,
+        leaf: LeafId,
+        event: &FilesEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            // A tab with a terminal waits for its output (spec 0001).
+            FilesEvent::FirstFrame => {
+                if self.panes.is_empty() {
+                    self.first_frame(window, cx);
+                }
+            }
+            FilesEvent::Focused => {
+                if self.tabs.focus(leaf) {
+                    cx.notify();
+                }
+            }
+            FilesEvent::TitleChanged => {
+                self.save_soon(window, cx);
+                cx.notify();
+            }
+            FilesEvent::DialogChanged => {
+                if leaf == self.tabs.active().focused
+                    && self.palette.is_none()
+                    && self.rename.is_none()
+                    && self.settings.is_none()
+                {
+                    self.focus_active(window, cx);
+                }
+                cx.notify();
+            }
+            FilesEvent::Notice(notice) => show_notice(notice.clone(), window, cx),
+            FilesEvent::NoKeychain => {
+                if !std::mem::replace(&mut self.keychain_missing, true) {
+                    show_notice(secrets::UNAVAILABLE.into(), window, cx);
+                }
+            }
+            FilesEvent::Settled => self.finish_closing(window, cx),
+            FilesEvent::Run(file) => self.run_file(leaf, file, window, cx),
+        }
+    }
+
+    /// Splits files pane `leaf` to the right with a local pane running
+    /// `file` in its folder, so its output and exit show (spec 0013, flow
+    /// 4). Without room, it says so and runs nothing.
+    fn run_file(&mut self, leaf: LeafId, file: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.tabs.active().root.contains(leaf) {
+            return;
+        }
+        self.tabs.focus(leaf);
+        if !self.has_room(Axis::Row, window) {
+            show_notice(
+                "There's no room beside the files pane to run it".into(),
+                window,
+                cx,
+            );
+            return;
+        }
+        let name = file.file_name().map_or_else(
+            || file.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let launch = Launch {
+            command: local::run_command(file),
+            cwd: file.parent().map(Path::to_path_buf),
+            timing: Arc::clone(&self.timing),
+        };
+        let theme = self.theme;
+        let viewport = window.viewport_size();
+        let grid = GridSize::fit(
+            (f32::from(viewport.width), f32::from(viewport.height)),
+            self.font.estimated_cell(),
+        );
+        // Saved as the default profile in the file's folder: a restore
+        // opens a shell there, never runs the file again.
+        let profile = PaneProfile {
+            id: self.config.default_profile().id,
+            name,
+            theme: None,
+            ssh: false,
+            stays: true,
+        };
+        let new = self.tabs.split(Axis::Row);
+        self.add_pane(new, Start::Now(grid), launch, profile, theme, window, cx);
+        self.show_active(window, cx);
+    }
+
+    /// Opens a files pane (spec 0013, flow 1): the tab's own if it has one;
+    /// else beside the focused pane, on its target: an SSH pane's host, a
+    /// local pane's folder. Without room, it says so.
+    fn open_files(&mut self, _: &OpenFiles, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.tabs.active();
+        if let Some(leaf) = tab
+            .root
+            .leaves()
+            .into_iter()
+            .find(|leaf| self.files.contains_key(leaf))
+        {
+            self.tabs.focus(leaf);
+            self.focus_active(window, cx);
+            cx.notify();
+            return;
+        }
+        let focused = tab.focused;
+        let (target, folder) = match self.panes.get(&focused) {
+            Some(pane) => {
+                let pane = pane.read(cx);
+                let profile = pane.profile();
+                if profile.ssh {
+                    (Target::Ssh(profile.id.clone()), None)
+                } else {
+                    let folder = pane.cwd().and_then(|cwd| cwd.to_str().map(str::to_owned));
+                    (Target::Local, folder)
+                }
+            }
+            None => return self.open_files_in_new_tab(&OpenFilesInNewTab, window, cx),
+        };
+        if !self.has_room(Axis::Row, window) {
+            show_notice("There's no room for a files pane here".into(), window, cx);
+            return;
+        }
+        let leaf = self.tabs.split(Axis::Row);
+        self.add_files(leaf, target, folder, true, window, cx);
+        self.show_active(window, cx);
+    }
+
+    /// Lists the focused files pane's targets in the palette, so the
+    /// keyboard switches them as the header's dropdown does (spec 0013,
+    /// flow 2).
+    fn switch_files_target(
+        &mut self,
+        _: &SwitchFilesTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(files) = self.files.get(&self.tabs.active().focused) else {
+            return;
+        };
+        let entries = files
+            .pane
+            .read(cx)
+            .choices()
+            .into_iter()
+            .map(|choice| Entry::Files {
+                host: ssh::Host {
+                    id: String::new(),
+                    label: choice.label.to_string(),
+                    group: choice.group,
+                    destination: String::new(),
+                },
+                pick: choice.pick,
+                current: choice.current,
+            })
+            .collect();
+        self.show_palette(None, window, cx, |window, cx| {
+            Palette::new(entries, "Show Local or a host", None, window, cx)
+        });
+    }
+
+    /// A tab holding one files pane on Local at home (spec 0013, flow 1).
+    fn open_files_in_new_tab(
+        &mut self,
+        _: &OpenFilesInNewTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let leaf = self.tabs.new_tab();
+        self.add_files(leaf, Target::Local, None, true, window, cx);
+        self.show_active(window, cx);
+    }
+
     /// Shows a restored pane's last title until its program sets one.
     fn restore_title(&self, leaf: LeafId, title: Option<&str>, cx: &mut Context<Self>) {
         if let (Some(pane), Some(_)) = (self.panes.get(&leaf), title) {
@@ -525,6 +776,19 @@ impl Workspace {
             let Some(saved) = self.pending.remove(&leaf) else {
                 continue;
             };
+            // Shown now, after the first frame: Local lists its folder.
+            if let Some(files) = &saved.files {
+                let mut notices = Vec::new();
+                let (target, folder) = restored_files(&self.config, files, &mut notices);
+                for notice in notices {
+                    show_notice(notice, window, cx);
+                }
+                self.add_files(leaf, target, folder, false, window, cx);
+                if let Some(files) = self.files.get(&leaf) {
+                    files.pane.update(cx, |pane, cx| pane.start(window, cx));
+                }
+                continue;
+            }
             let mut notices = Vec::new();
             let profile = restored_profile(&self.config, &saved.profile, &mut notices);
             for notice in notices {
@@ -636,6 +900,16 @@ impl Workspace {
         if let Some(saved) = self.pending.get(&leaf) {
             return saved.clone();
         }
+        if let Some(files) = self.files.get(&leaf) {
+            let (target, folder) = files.pane.read(cx).saved(cx);
+            return SavedLeaf {
+                id: leaf,
+                profile: self.config.default_profile().id,
+                cwd: None,
+                title: None,
+                files: Some(SavedFiles { target, folder }),
+            };
+        }
         let (profile, cwd, title) = match self.panes.get(&leaf) {
             Some(pane) => {
                 let pane = pane.read(cx);
@@ -649,6 +923,7 @@ impl Workspace {
             profile,
             cwd,
             title,
+            files: None,
         }
     }
 
@@ -788,6 +1063,11 @@ impl Workspace {
             show_notice(notice, window, cx);
         }
         self.set_aside_bad_session();
+        // A restored files pane lists Local now (spec 0013, Startup
+        // impact).
+        for files in self.files.values() {
+            files.pane.update(cx, |pane, cx| pane.start(window, cx));
+        }
         self.start_reloads(window, cx);
         self.follow_update_check(window, cx);
         // Edit copies a crashed run left (spec 0008, Model), off the UI
@@ -922,9 +1202,17 @@ impl Workspace {
     /// pane.
     fn apply_settings(&mut self, cx: &mut Context<Self>) {
         theme::apply_to_widgets(&self.theme, cx);
-        let sftp = SftpSettings::of(&self.config);
+        let settings = BrowserSettings::of(&self.config);
         for sidebar in self.sftp.values() {
-            sidebar.view.update(cx, |view, _| view.set_settings(sftp));
+            sidebar
+                .view
+                .update(cx, |view, _| view.set_settings(settings));
+        }
+        for files in self.files.values() {
+            let config = &self.config;
+            files
+                .pane
+                .update(cx, |pane, cx| pane.set_config(config, cx));
         }
         for pane in self.panes.values() {
             let name = pane.read(cx).profile().theme.clone();
@@ -1197,6 +1485,15 @@ impl Workspace {
                 self.apply_settings(cx);
             }
             PaletteEvent::Change(change) => self.write_change(change.clone(), window, cx),
+            PaletteEvent::Files(pick) => {
+                let focused = self.tabs.active().focused;
+                if let Some(files) = self.files.get(&focused) {
+                    let pick = pick.clone();
+                    files
+                        .pane
+                        .update(cx, |pane, cx| pane.pick(pick, window, cx));
+                }
+            }
             PaletteEvent::ChooseTheme(name) => {
                 if let Some(open) = &mut self.palette {
                     open.saved_theme = None;
@@ -1264,6 +1561,7 @@ impl Workspace {
                 .is_some_and(|pane| pane.read(cx).has_selection()),
             "pane.splitRight" | "pane.splitRightWithProfile" => self.has_room(Axis::Row, window),
             "pane.splitDown" | "pane.splitDownWithProfile" => self.has_room(Axis::Column, window),
+            "files.switchTarget" => self.files.contains_key(&tab.focused),
             "font.increase" => size < *FONT_SIZES.end(),
             "font.decrease" => size > *FONT_SIZES.start(),
             "font.reset" => self.zoom != 0.0,
@@ -1490,28 +1788,29 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let Some(pane) = self.panes.get(&leaf).cloned() else {
-            return;
-        };
-        if pane.read(cx).ssh_target().is_none() {
+        let pane = self.panes.get(&leaf).cloned();
+        let Some(pane) = pane.filter(|pane| pane.read(cx).ssh_target().is_some()) else {
             show_notice("SFTP needs an SSH pane".into(), window, cx);
             return;
-        }
-        let settings = SftpSettings::of(&self.config);
-        let view = cx.new(|cx| SftpView::new(&pane, settings, window, cx));
+        };
+        let settings = BrowserSettings::of(&self.config);
+        let source = Source::Pane(pane.downgrade());
+        let view = cx.new(|cx| Browser::new(source, None, true, settings, window, cx));
         let events = cx.subscribe_in(
             &view,
             window,
             move |this, _, event, window, cx| match event {
-                SftpEvent::Close => {
+                BrowserEvent::Close => {
                     if let Some(sidebar) = this.sftp.get_mut(&leaf) {
                         sidebar.open = false;
                     }
                     this.focus_active(window, cx);
                     cx.notify();
                 }
-                SftpEvent::Notice(notice) => show_notice(notice.clone(), window, cx),
-                SftpEvent::Settled => this.finish_closing(window, cx),
+                BrowserEvent::Notice(notice) => show_notice(notice.clone(), window, cx),
+                BrowserEvent::Settled => this.finish_closing(window, cx),
+                // A remote file never runs.
+                BrowserEvent::Run(_) => {}
             },
         );
         self.sftp.insert(
@@ -1548,11 +1847,16 @@ impl Workspace {
     /// The SFTP edits `closing` would delete: each one's name, and whether
     /// its changes aren't on the host.
     fn edits_of(&self, closing: Closing, cx: &App) -> Vec<(SharedString, bool)> {
-        self.closing_leaves(closing)
+        let leaves = self.closing_leaves(closing);
+        let sidebars = leaves
             .iter()
             .filter_map(|leaf| self.sftp.get(leaf))
-            .flat_map(|sidebar| sidebar.view.read(cx).open_edits())
-            .collect()
+            .flat_map(|sidebar| sidebar.view.read(cx).open_edits());
+        let files = leaves
+            .iter()
+            .filter_map(|leaf| self.files.get(leaf))
+            .flat_map(|files| files.pane.read(cx).open_edits(cx));
+        sidebars.chain(files).collect()
     }
 
     /// Closes a pane, a tab or the window, asking first when that would
@@ -1667,6 +1971,9 @@ impl Workspace {
                     if let Some(sidebar) = self.sftp.get(&leaf) {
                         sidebar.view.update(cx, |view, cx| view.upload_unsent(cx));
                     }
+                    if let Some(files) = self.files.get(&leaf) {
+                        files.pane.update(cx, |pane, cx| pane.upload_unsent(cx));
+                    }
                 }
                 self.finish_closing(window, cx);
             }
@@ -1682,18 +1989,21 @@ impl Workspace {
         };
         let mut sent = true;
         for leaf in self.closing_leaves(closing) {
-            if let Some(sidebar) = self.sftp.get(&leaf) {
-                match sidebar.view.read(cx).settled() {
-                    None => return,
-                    Some(all) => sent &= all,
-                }
+            let settled = match (self.sftp.get(&leaf), self.files.get(&leaf)) {
+                (Some(sidebar), _) => sidebar.view.read(cx).settled(),
+                (_, Some(files)) => files.pane.read(cx).settled(cx),
+                (None, None) => continue,
+            };
+            match settled {
+                None => return,
+                Some(all) => sent &= all,
             }
         }
         self.closing = None;
         if sent {
             self.close_now(closing, window, cx);
         } else {
-            let notice = "Not closed: an SFTP edit didn't upload; its sidebar says why";
+            let notice = "Not closed: an SFTP edit didn't upload; its file browser says why";
             show_notice(notice.into(), window, cx);
         }
     }
@@ -1768,8 +2078,15 @@ impl Workspace {
             window.focus(&handle, cx);
             return;
         }
-        if let Some(pane) = self.panes.get(&self.tabs.active().focused) {
+        let focused = self.tabs.active().focused;
+        if let Some(pane) = self.panes.get(&focused) {
             let handle = pane.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+        } else if let Some(handle) = self
+            .files
+            .get(&focused)
+            .and_then(|files| files.pane.read(cx).focus_handle(cx))
+        {
             window.focus(&handle, cx);
         }
     }
@@ -1778,8 +2095,10 @@ impl Workspace {
     /// never started.
     fn stop_pane(&mut self, leaf: LeafId, cx: &mut Context<Self>) {
         self.pending.remove(&leaf);
-        // Its SFTP session ends with it, and its ssh with the session.
+        // Its SFTP session ends with it, and its ssh with the session; a
+        // files pane's sessions end the same way.
         self.sftp.remove(&leaf);
+        self.files.remove(&leaf);
         self.pane_subscriptions.remove(&leaf);
         if let Some(pane) = self.panes.remove(&leaf) {
             pane.update(cx, |pane, _| pane.shutdown());
@@ -1832,10 +2151,16 @@ impl Workspace {
     /// A pane's title: its program's, else the name of its profile. A
     /// restored pane that hasn't started shows what it was saved with.
     fn pane_title(&self, leaf: LeafId, cx: &App) -> SharedString {
+        if let Some(files) = self.files.get(&leaf) {
+            return files.pane.read(cx).title(cx).into();
+        }
         let Some(pane) = self.panes.get(&leaf) else {
             let Some(saved) = self.pending.get(&leaf) else {
                 return SharedString::default();
             };
+            if saved.files.is_some() {
+                return "Files".into();
+            }
             let profile = self.config.profile(&saved.profile);
             let name = profile
                 .as_ref()
@@ -1890,7 +2215,13 @@ impl Workspace {
                 let pane = pane.read(cx);
                 (Some(pane.profile().id.clone()), pane.cwd())
             }
-            None => (None, None),
+            // Beside a files pane, a shell starts in the local folder shown.
+            None => (
+                None,
+                self.files
+                    .get(&source)
+                    .and_then(|files| files.pane.read(cx).local_folder(cx)),
+            ),
         };
         let (profile, cwd) = match picked {
             Some(profile) => {
@@ -2110,8 +2441,10 @@ impl Workspace {
     /// A pane, which tabs and panes are dropped on (spec 0007). In a split
     /// tab that isn't zoomed, it has the grab handle it's dragged by.
     fn render_leaf(&self, leaf: LeafId, cx: &mut Context<Self>) -> AnyElement {
-        let Some(pane) = self.panes.get(&leaf) else {
-            return div().size_full().into_any_element();
+        let pane = match (self.panes.get(&leaf), self.files.get(&leaf)) {
+            (Some(pane), _) => pane.clone().into_any_element(),
+            (None, Some(files)) => files.pane.clone().into_any_element(),
+            (None, None) => return div().size_full().into_any_element(),
         };
         let tab = self.tabs.active();
         let group = SharedString::from(format!("pane-{leaf}"));
@@ -2143,7 +2476,7 @@ impl Workspace {
             .group(group)
             .relative()
             .size_full()
-            .child(pane.clone())
+            .child(pane)
             .children(handle)
             .children(mark)
             .on_drag_move(cx.listener(
@@ -2920,6 +3253,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::connect_to_host))
             .on_action(cx.listener(Self::forget_password))
             .on_action(cx.listener(Self::toggle_sftp))
+            .on_action(cx.listener(Self::open_files))
+            .on_action(cx.listener(Self::open_files_in_new_tab))
+            .on_action(cx.listener(Self::switch_files_target))
             .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
                 this.close(Closing::Window, window, cx);
             }))
@@ -2972,7 +3308,7 @@ impl Render for Workspace {
 mod tests {
     use super::*;
     use crate::config::tests::TempDir;
-    use crate::session::tests::{leaf, split, tab};
+    use crate::session::tests::{files_leaf, leaf, split, tab};
     use std::collections::BTreeMap;
     use std::time::Instant;
 
@@ -3115,5 +3451,82 @@ mod tests {
         notices.clear();
         assert_eq!(restored_profile(&config, "vim", &mut notices).id, "vim");
         assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Spec 0013, Startup impact and AC9: a files pane in the shown tab
+    /// starts nothing before the first frame; it waits for the window with
+    /// what it saved, beside the tab's terminal, which starts. A files
+    /// pane in another tab waits for its tab like any pane.
+    #[test]
+    fn at_boot_a_files_pane_starts_nothing_and_waits_as_saved() {
+        let shown = tab(
+            split(
+                Axis::Row,
+                0.5,
+                leaf(1, "shell", Some("/tmp"), None),
+                files_leaf(2, None, Some("/home/me/notes")),
+            ),
+            2,
+        );
+        let other = tab(files_leaf(3, Some("prod"), Some("/srv")), 3);
+        let session = Session::new(None, vec![shown, other], 0);
+        let mut started = Vec::new();
+        let boot = Boot::restore(&session, (1200.0, 800.0), |saved, _| {
+            started.push(saved.id);
+            idle_pane(saved)
+        })
+        .expect("a session with tabs");
+        assert_eq!(started, [1]);
+        let boot_panes: Vec<LeafId> = boot.panes.iter().map(|(leaf, _)| *leaf).collect();
+        assert_eq!(boot_panes, [1]);
+        let local = SavedFiles {
+            target: None,
+            folder: Some("/home/me/notes".into()),
+        };
+        assert_eq!(boot.files, [(2, local)]);
+        let waiting: Vec<LeafId> = boot.pending.keys().copied().collect();
+        assert_eq!(waiting, [3]);
+        assert_eq!(
+            boot.pending[&3].files,
+            Some(SavedFiles {
+                target: Some("prod".into()),
+                folder: Some("/srv".into()),
+            })
+        );
+    }
+
+    /// Spec 0013, Saved: a restored files pane shows Local at its folder,
+    /// or its SSH profile at its folder (disconnected, so no connection);
+    /// a profile that no longer exists shows Local at home, with one
+    /// notice naming it.
+    #[test]
+    fn a_restored_files_pane_whose_host_is_gone_shows_local_at_home_with_a_notice() {
+        let config = config::parse(concat!(
+            "profiles:\n",
+            "  prod:\n",
+            "    type: ssh\n",
+            "    host: prod.example.com\n",
+        ))
+        .config;
+        let saved = |target: Option<&str>| SavedFiles {
+            target: target.map(str::to_owned),
+            folder: Some("/srv".into()),
+        };
+        let mut notices = Vec::new();
+        assert_eq!(
+            restored_files(&config, &saved(None), &mut notices),
+            (Target::Local, Some("/srv".into()))
+        );
+        assert_eq!(
+            restored_files(&config, &saved(Some("prod")), &mut notices),
+            (Target::Ssh("prod".into()), Some("/srv".into()))
+        );
+        assert!(notices.is_empty(), "{notices:?}");
+        assert_eq!(
+            restored_files(&config, &saved(Some("old-host")), &mut notices),
+            (Target::Local, None)
+        );
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("old-host"), "{}", notices[0]);
     }
 }

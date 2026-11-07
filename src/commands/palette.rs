@@ -6,6 +6,7 @@
 //! list's own substring filter.
 
 use super::{AppCommand, fuzzy};
+use crate::files::pane::Pick;
 use crate::layout::tree::Axis;
 use crate::settings::change::Change;
 use crate::ssh::Host;
@@ -36,6 +37,13 @@ pub enum Entry {
     /// Splits the focused pane along `axis` with the host or local profile
     /// (spec 0007, flow 6).
     SplitWith { host: Host, axis: Axis },
+    /// A line of the focused files pane's target switcher (spec 0013):
+    /// `host` names and groups it; `current` is the target shown.
+    Files {
+        host: Host,
+        pick: Pick,
+        current: bool,
+    },
     /// A value for a setting the settings screen picks from a list (spec
     /// 0009); `current` is the one the file has.
     Setting {
@@ -52,17 +60,19 @@ impl Entry {
             Entry::Profile { title, .. } => title,
             Entry::Setting { title, .. } => title,
             Entry::Theme { name, .. } => name,
-            Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. } => {
-                &host.label
-            }
+            Entry::Host(host)
+            | Entry::ForgetHost(host)
+            | Entry::SplitWith { host, .. }
+            | Entry::Files { host, .. } => &host.label,
         }
     }
 
     fn host(&self) -> Option<&Host> {
         match self {
-            Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. } => {
-                Some(host)
-            }
+            Entry::Host(host)
+            | Entry::ForgetHost(host)
+            | Entry::SplitWith { host, .. }
+            | Entry::Files { host, .. } => Some(host),
             _ => None,
         }
     }
@@ -102,6 +112,9 @@ impl Entry {
             Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. } => {
                 CommandItem::new().label(host.label.clone())
             }
+            Entry::Files { host, current, .. } => CommandItem::new()
+                .label(host.label.clone())
+                .checked(*current),
         }
     }
 }
@@ -122,6 +135,8 @@ pub enum PaletteEvent {
     ChooseTheme(String),
     /// Write a setting picked from a list (spec 0009).
     Change(Change),
+    /// Act on the focused files pane's targets (spec 0013).
+    Files(Pick),
     /// Done: after running an entry, or `cancelled` by Esc.
     Closed {
         cancelled: bool,
@@ -236,6 +251,7 @@ impl Palette {
             }),
             Some(Entry::Theme { name, .. }) => cx.emit(PaletteEvent::ChooseTheme(name.clone())),
             Some(Entry::Setting { change, .. }) => cx.emit(PaletteEvent::Change(change.clone())),
+            Some(Entry::Files { pick, .. }) => cx.emit(PaletteEvent::Files(pick.clone())),
             // A command has run through its action already.
             Some(Entry::Command { .. }) | None => {}
         }
