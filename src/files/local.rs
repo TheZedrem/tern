@@ -393,6 +393,7 @@ fn desktop_entry(id: &str) -> Option<String> {
 }
 
 /// The `Exec` value of a desktop entry's `[Desktop Entry]` group.
+#[cfg(not(windows))]
 fn exec_line(entry: &str) -> Option<String> {
     let mut main = false;
     for line in entry.lines().map(str::trim) {
@@ -409,6 +410,7 @@ fn exec_line(entry: &str) -> Option<String> {
 /// or URL field code, or appended when it has none; other field codes
 /// go. Quoting as the desktop entry spec has it, simplified: double
 /// quotes group, a backslash escapes the next character.
+#[cfg(not(windows))]
 fn exec_words(exec: &str, file: &Path) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
@@ -466,6 +468,7 @@ fn exec_words(exec: &str, file: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::config::tests::TempDir;
 
     /// Spec 0013, flow 3: on Linux the path field takes `~`, relative and
@@ -536,6 +539,7 @@ mod tests {
 
     /// The text editor's `Exec` line: the file goes where its field code
     /// is, other field codes go, quotes group.
+    #[cfg(not(windows))]
     #[test]
     fn an_exec_line_takes_the_file_in_place_of_its_field_code() {
         let file = Path::new("/tmp/a b.sh");
