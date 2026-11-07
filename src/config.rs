@@ -10,6 +10,7 @@
 
 use crate::theme::ThemeSource;
 use futures::channel::mpsc::UnboundedSender;
+use notify::event::ModifyKind;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use serde::Deserialize;
 use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, Visitor};
@@ -871,14 +872,20 @@ impl Watcher {
 
 /// Whether `event` touches the config directory, `config.yaml`, a theme
 /// file or what one of them links to. Reads don't count, or loading the
-/// config would trigger a reload.
+/// config would trigger a reload. Nor does the directory's own change of
+/// contents or times: Windows reports one late for any file written in it,
+/// and the files that matter are reported on their own.
 fn affects_config(event: &notify::Event, dir: &Path, links: &[PathBuf]) -> bool {
     if matches!(event.kind, EventKind::Access(_)) {
         return false;
     }
+    let renamed_or_made = !matches!(
+        event.kind,
+        EventKind::Modify(ModifyKind::Any | ModifyKind::Data(_) | ModifyKind::Metadata(_))
+    );
     let themes = dir.join("themes");
     event.paths.iter().any(|path| {
-        path == dir
+        (path == dir && renamed_or_made)
             || path == &dir.join("config.yaml")
             || links.contains(path)
             || (path.parent() == Some(&themes) && path.extension().is_some_and(|ext| ext == "yaml"))

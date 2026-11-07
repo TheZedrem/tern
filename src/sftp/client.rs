@@ -752,7 +752,9 @@ mod tests {
             }
             let args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3"]
                 .into_iter()
-                .chain(["-s", "127.0.0.1", "sftp"])
+                // Port 1: no SSH server answers there, even on a CI runner
+                // that runs one on 22.
+                .chain(["-p", "1", "-s", "127.0.0.1", "sftp"])
                 .map(String::from)
                 .collect();
             let (_client, mut events) = Client::connect(Command {

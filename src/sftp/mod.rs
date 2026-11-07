@@ -393,7 +393,14 @@ mod tests {
     #[test]
     fn every_hostile_name_lands_directly_inside_its_folder() {
         let folder = Path::new("/home/alice/Downloads");
-        for windows in [false, true] {
+        // Windows reads an unescaped `C:\x` as a whole path, so the Unix
+        // escaping is checked only where it's used.
+        let modes: &[bool] = if cfg!(windows) {
+            &[true]
+        } else {
+            &[false, true]
+        };
+        for &windows in modes {
             for name in HOSTILE {
                 let path = local_path(folder, name, windows)
                     .unwrap_or_else(|| panic!("{name:?} refused ({windows})"));
