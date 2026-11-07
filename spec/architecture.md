@@ -44,8 +44,9 @@ specs or tasks until they're promoted to one.
 - **Docker / Compose plugin.** A plugin that shows running containers in a
   sidebar, possibly with controls to attach, view logs and restart. Needs
   the plugin system first.
-- **S3 and SMB.** Browse and transfer files in S3 buckets and SMB shares,
-  like the SFTP sidebar. Probably a plugin rather than built in.
+- **S3 and SMB.** Browse and transfer files in S3 buckets and SMB shares
+  as plugins that add a backend to the file browser the SFTP sidebar is
+  being generalized into (T-042). Needs the plugin system first.
 
 ## Platforms
 
