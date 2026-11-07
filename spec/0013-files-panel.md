@@ -1,8 +1,8 @@
 ---
 status: draft        # draft | approved | implemented
 phase: 2
-tasks: [T-042, T-033, T-041, T-043]
-related: [spec 0008, spec 0006, spec 0003, spec 0002, spec 0009, OQ-026, threat model 0003]
+tasks: [T-042, T-033, T-041, T-043, T-044]
+related: [spec 0008, spec 0006, spec 0003, spec 0002, spec 0009, OQ-026 ✅, threat model 0003]
 ---
 
 # Spec: Files panel
@@ -48,6 +48,7 @@ both are the same browser.
 
 - *Later*: copying between targets: dragging from a Local row onto a
   remote folder uploads, the other way downloads
+- *Later (planned)*: a local delete moves to the OS's trash (the freedesktop trash, the Recycle Bin) instead of deleting for good, so a slip can be undone; needs the `trash` crate (T-044)
 - *Later*: S3, SMB and other targets from plugins (architecture §Roadmap,
   Considered); they need the plugin system first
 - Detaching either surface into a split pane: stays T-032 in spec 0008
@@ -132,8 +133,8 @@ both are the same browser.
    panel says why.
 5. **Change a local file:** rename and new folder ask for a name, which
    must be one path component; delete asks for a confirmation naming
-   what goes. Whether delete goes to the OS's trash is OQ-026; until it's
-   answered, delete is permanent, after that confirmation. Delete removes
+   what goes, the same confirmation as on SFTP, saying it can't be undone.
+   Delete is permanent (OQ-026 ✅; the trash is T-044). It removes
    files, links (never followed) and empty folders; a folder with anything
    in it isn't deleted, as on SFTP.
 6. **SFTP target:** spec 0008's flows 2–7, with the tree's rules for
@@ -159,8 +160,7 @@ Changing `files_panel` moves an open panel on reload. `sftp_click` and
 Local listings use `std::fs` on both platforms; Windows paths show with
 `\` and drive letters. Opening is GPUI's `open_with_system` as in spec
 0008, and the same per-platform list of types that run decides what
-isn't opened. SFTP targets need nothing beyond spec 0008. No new crates
-unless OQ-026 picks the trash.
+isn't opened. SFTP targets need nothing beyond spec 0008. No new crates.
 
 ### Admin area
 
@@ -207,4 +207,5 @@ Trust boundaries:
 
 ## Open questions
 
-- OQ-026: should a local delete go to the OS's trash?
+- OQ-026 is resolved: a local delete is permanent, after the same
+  confirmation as on SFTP; the trash is planned (T-044).
