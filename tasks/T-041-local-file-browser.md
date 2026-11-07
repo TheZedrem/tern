@@ -2,12 +2,12 @@
 status: later
 blocked-by: [T-042]
 ---
-# T-041: Local file browser
+# T-041: Local target for the file browser
 
-On a local pane, `sftp.toggle` opens the same sidebar on the local
-filesystem instead of saying there's nothing to open: browse, open,
-rename, delete and new folder, starting in the pane's cwd. It's a local
-backend of the generic file browser (T-042). Planned by the owner
-(2026-11-07); needs spec 0008 extended first. Area: src.
+The Local target: browse the local disk on a background thread, open a
+file in the OS's default app (never a type the OS runs), rename, new
+folder and delete after a confirmation (OQ-026 decides the trash).
+Windows drives in the path field. Planned by the owner (2026-11-07).
+Area: src.
 
-Spec: ../spec/0008-sftp-panel.md
+Spec: ../spec/0013-files-panel.md

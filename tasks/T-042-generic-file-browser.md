@@ -2,14 +2,12 @@
 status: later
 blocked-by: []
 ---
-# T-042: Generalize the SFTP sidebar into a file browser
+# T-042: One file browser for the SFTP sidebar and the files panel
 
-The sidebar becomes a file browser over a backend: what it lists, opens,
-transfers and edits goes through one backend interface, and SFTP is the
-first backend. That's what lets a local backend (T-041) and later S3 or
-SMB backends from plugins (architecture §Roadmap, Considered) reuse the
-same sidebar, header, transfers and edit flow. The UI and behavior of
-spec 0008 don't change. Planned by the owner (2026-11-07); needs spec 0008
-and the code layout in `spec/architecture.md` extended first. Area: src.
+Move the SFTP sidebar's view into `src/files/` as a browser drawn over a
+target (`Local | Sftp`), with SFTP the only target at first, and add
+`files/` to the code layout in `spec/architecture.md`. The SFTP sidebar
+behaves exactly as spec 0008 says before and after. Planned by the owner
+(2026-11-07). Area: src.
 
-Spec: ../spec/0008-sftp-panel.md
+Spec: ../spec/0013-files-panel.md

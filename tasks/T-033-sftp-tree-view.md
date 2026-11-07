@@ -1,11 +1,11 @@
 ---
 status: later
-blocked-by: [T-023]
+blocked-by: [T-042]
 ---
-# T-033: SFTP tree view
+# T-033: Tree view in the file browser
 
-A tree view of folders in the SFTP sidebar next to (or instead of) the flat
-listing. Planned by the owner (2026-11-06); needs spec 0008 extended first.
-Area: src.
+Folders expand and collapse in place, listed on expand, in the file
+browser that both the SFTP sidebar and the files panel draw. Planned by
+the owner (2026-11-06). Area: src.
 
-Spec: ../spec/0008-sftp-panel.md
+Spec: ../spec/0013-files-panel.md
