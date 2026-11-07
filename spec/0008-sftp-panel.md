@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 2
-tasks: [T-024, T-023, T-035, T-036, T-011, T-032, T-033, T-034, T-037, T-038]
+tasks: [T-024, T-023, T-035, T-036, T-011, T-032, T-033, T-034, T-037, T-038, T-041]
 related: [spec 0003, spec 0005, spec 0006, spec 0009, OQ-001 ✅, OQ-019 ✅, OQ-023 ✅, threat model 0001, threat model 0003]
 ---
 
@@ -42,11 +42,12 @@ manager), and the sidebar asks for passwords the way the terminal does.
 
 - *Later (planned)*: `sftp_sidebar: split`, where the file view is a pane of the split tree that splits, moves and closes like a terminal (spec 0007), and a Detach button in the sidebar's header that turns the sidebar into that pane. The model below keeps a connection apart from where it's drawn, so neither needs a rewrite (T-032)
 - *Later (planned)*: a tree view of folders (T-033)
+- *Later (planned)*: a local file browser: on a local pane, the same sidebar over the local filesystem, starting in the pane's cwd (T-041)
 - *Later (planned)*: suggestions in the path field: a dropdown of matching folders as the user types, fuzzy-matched like the listing filter, with Tab to complete (T-038)
 - *Later (planned)*: a follow-terminal mode, where the listing follows each `cd` the pane's shell reports, and an opt-in per profile that sets up those reports on bash servers after login, as MobaXterm's "Follow SSH path" does, for servers that don't send OSC 7 themselves (T-034)
 - *Later (planned)*: a fuzzy filter over the current folder's listing, best matches first with the matched characters highlighted; no recursive search on the server (T-037)
 - Dragging files out into the file manager: never for remote files (OQ-019 ✅); Download to… covers it. *Later*: drag-out of files that are already local (T-027)
-- Folder transfers (a dropped folder is refused with a notice), permissions, a choice of editor per file type, a local file browser for local panes, sync, resuming broken transfers: *Later*
+- Folder transfers (a dropped folder is refused with a notice), permissions, a choice of editor per file type, sync, resuming broken transfers: *Later*
 - SCP or an SSH stack of our own: never (architecture §Stack)
 
 ## Design
