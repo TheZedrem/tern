@@ -286,8 +286,41 @@ fn same_token(a: &Token, b: &Token) -> bool {
 
 /// Whether the helper hung up (ssh ended it) or broke the protocol by
 /// sending more after its request.
+#[cfg(unix)]
 fn helper_gone(mut stream: &Stream) -> bool {
     !matches!(stream.read(&mut [0; 1]), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+}
+
+#[cfg(windows)]
+fn helper_gone(stream: &Stream) -> bool {
+    !matches!(pending(stream), Ok(0))
+}
+
+/// How many bytes the helper sent that aren't read yet, or an error once it
+/// hung up. Windows has to peek: a nonblocking named pipe answers a read
+/// with nothing to read like one after the helper hung up (`ERROR_NO_DATA`,
+/// which arrives as end of file), so a waiting helper looked gone.
+#[cfg(windows)]
+fn pending(stream: &Stream) -> io::Result<usize> {
+    use std::os::windows::io::{AsHandle, AsRawHandle};
+    let Stream::NamedPipe(pipe) = stream;
+    let mut available = 0;
+    // SAFETY: a live pipe handle, and the one out pointer is a local; no
+    // buffer is passed, so nothing is read.
+    let peeked = unsafe {
+        windows_sys::Win32::System::Pipes::PeekNamedPipe(
+            pipe.as_handle().as_raw_handle(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            &mut available,
+            std::ptr::null_mut(),
+        )
+    };
+    if peeked == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(available as usize)
 }
 
 fn reply(mut stream: &Stream, answer: &[u8]) -> io::Result<()> {
@@ -334,9 +367,15 @@ struct Deadline<'a> {
 impl Read for Deadline<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
-            match self.stream.read(buf) {
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                read => return read,
+            #[cfg(windows)]
+            let ready = pending(self.stream)? > 0;
+            #[cfg(unix)]
+            let ready = true;
+            if ready {
+                match self.stream.read(buf) {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    read => return read,
+                }
             }
             if Instant::now() >= self.until {
                 return Err(io::ErrorKind::TimedOut.into());
@@ -1495,5 +1534,63 @@ mod tests {
             let output = format!("{}\n{}", stdout.all(), stderr.all());
             assert!(!output.contains(PASSPHRASE), "ssh printed the passphrase");
         }
+    }
+
+    /// The Windows pipe with the built binary as the helper (spec 0006,
+    /// flow 4): a prompt stays up while the user takes their time, and the
+    /// answer reaches the helper's stdout. A nonblocking pipe once read as
+    /// hung up, which closed every dialog after one poll.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_helper_waits_for_the_answer() {
+        use futures::FutureExt;
+        use std::process::{Command, Stdio};
+        let binary = std::env::current_exe()
+            .expect("the test binary's path")
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("a target directory")
+            .join("tern.exe");
+        assert!(
+            binary.is_file(),
+            "no {}: `cargo test` builds it",
+            binary.display()
+        );
+        let (endpoint, listener) = Endpoint::open().expect("open the pipe");
+        let server = Server::serve(endpoint, listener, String::new());
+        let mut connection = server.connect().expect("a connection");
+        let helper = Command::new(binary)
+            .arg("Are you sure you want to continue connecting (yes/no/[fingerprint])? ")
+            .envs(connection.env.iter().map(|(key, value)| (key, value)))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start the helper");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut prompt = loop {
+            if let Ok(prompt) = connection.prompts.try_recv() {
+                break prompt;
+            }
+            assert!(Instant::now() < deadline, "no prompt came");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(prompt.kind, PromptKind::YesNo);
+        // Several of the server's polls.
+        std::thread::sleep(POLL * 5);
+        assert!(
+            prompt.ended().now_or_never().is_none(),
+            "the prompt ended unanswered"
+        );
+
+        prompt.answer("yes");
+        let output = helper.wait_with_output().expect("the helper ends");
+        assert!(output.status.success(), "helper: {:?}", output.status);
+        assert_eq!(
+            output.stdout,
+            b"yes
+"
+        );
     }
 }
