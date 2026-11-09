@@ -51,7 +51,10 @@ interface that explains itself.
 - [x] SFTP sidebar (left or right, opened per SSH pane, `Ctrl+Shift+S`): browse folders with a path field ([spec 0008](spec/0008-sftp-panel.md), [T-023](tasks/resolved/T-023-sftp-panel.md))
 - [x] SFTP downloads, uploads (also dropped from the file manager), rename, delete, new folder ([T-035](tasks/resolved/T-035-sftp-transfers.md))
 - [x] Editing remote files in a local app from the SFTP sidebar, saves uploaded on a click, on save or on focus ([T-036](tasks/resolved/T-036-sftp-edits.md))
-- [x] Files pane (`Ctrl+Shift+B`): the local disk or any saved host as a tree, as a pane of the split tree; the SFTP sidebar shows the same tree ([spec 0013](spec/0013-files-panel.md))
+- [x] Files pane (`Ctrl+Shift+B`): the local disk or any saved host as a tree, as a pane of the split tree; the SFTP sidebar is the same file browser ([spec 0013](spec/0013-files-panel.md))
+- [ ] The sidebar on local panes too, showing the local disk ([T-049](tasks/T-049-local-sidebar.md))
+- [ ] File permissions in the file browser: view and change mode, owner and group ([T-048](tasks/T-048-file-permissions.md))
+- [ ] Fuzzy filter and path suggestions in the file browser ([T-037](tasks/T-037-sftp-fuzzy-filter.md), [T-038](tasks/T-038-sftp-path-suggestions.md))
 - [ ] Local deletes go to the OS's trash ([T-044](tasks/T-044-local-delete-to-trash.md))
 - [ ] Dragging files out of the SFTP panel into the file manager ([T-027](tasks/T-027-sftp-drag-out-local-files.md))
 
@@ -64,15 +67,18 @@ interface that explains itself.
 - [ ] CI for Linux and Windows ([T-007](tasks/T-007-ci-pipeline.md))
 - [ ] Verified on Windows 11 ([T-011](tasks/T-011-verify-t010-on-windows.md))
 
-**Later** (on the [roadmap](spec/architecture.md#roadmap), not yet planned in detail)
+**Planned for 1.0** (on the [roadmap](spec/architecture.md#roadmap), not yet planned in detail)
 
 - [ ] Suggestions from command history as you type, like Windows Terminal and Warp
 - [ ] Theme editor in the app, with a live preview
+- [ ] Plugin system, with an extensible sidebar (SSH hosts and plugins) and themes installable as plugins
+- [ ] Plugin registries: browse, install and update plugins in the app
 - [ ] SSH port forwarding (local, remote and dynamic) on a profile
-- [ ] Custom profiles that launch a command (e.g. a coding agent) in the current cwd, or a picked folder from an SSH session
-- [ ] macOS as a supported platform: verified, in CI and packaged (it only compiles today)
-- [ ] Plugin system (considered, not committed to)
-- [ ] Signed macOS builds (considered, not committed to)
+- [ ] Custom profiles that launch a command (e.g. a coding agent) in the current cwd, or a picked folder from an SSH session; any profile can ask for its working directory on launch
+
+**Considered** (not committed to)
+
+- [ ] Full macOS support: verified, in CI, packaged and signed. Today macOS only builds and installs from source via `packaging/macos/install.sh`
 
 **Possible plugins** (considered, not committed to; they need the plugin system first)
 

@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 2
-tasks: [T-024, T-023, T-035, T-036, T-011, T-032, T-033, T-034, T-037, T-038]
+tasks: [T-024, T-023, T-035, T-036, T-011, T-032, T-033, T-034, T-049]
 related: [spec 0013, spec 0003, spec 0005, spec 0006, spec 0009, OQ-001 ✅, OQ-019 ✅, OQ-023 ✅, threat model 0001, threat model 0003]
 ---
 
@@ -9,7 +9,9 @@ related: [spec 0013, spec 0003, spec 0005, spec 0006, spec 0009, OQ-001 ✅, OQ-
 
 Pins the file sidebar for SSH panes: browsing, editing, downloading and
 uploading over the host's own `ssh`, with the same config, keys and prompts
-as its terminal.
+as its terminal. The sidebar draws the one file browser of
+[spec 0013](0013-files-panel.md), which owns every browser feature; this
+spec owns the SFTP target and where the sidebar sits.
 
 ## Problem & goal
 
@@ -41,12 +43,11 @@ manager), and the sidebar asks for passwords the way the terminal does.
 **Out of scope:**
 
 - *Later (planned)*: `sftp_sidebar: split`, where the file view is a pane of the split tree that splits, moves and closes like a terminal (spec 0007), and a Detach button in the sidebar's header that turns the sidebar into that pane. The model below keeps a connection apart from where it's drawn, so neither needs a rewrite (T-032); that pane is the files pane of [spec 0013](0013-files-panel.md)
-- A local file browser: that is the files pane's Local target, not this sidebar ([spec 0013](0013-files-panel.md))
-- *Later (planned)*: suggestions in the path field: a dropdown of matching folders as the user types, fuzzy-matched like the listing filter, with Tab to complete (T-038)
+- *Later (planned)*: the sidebar on a local pane, showing the browser's Local target ([spec 0013](0013-files-panel.md), T-049)
+- Browser features for every target, such as the fuzzy filter (T-037), path suggestions (T-038) and permissions (T-048): [spec 0013](0013-files-panel.md)
 - *Later (planned)*: a follow-terminal mode, where the listing follows each `cd` the pane's shell reports, and an opt-in per profile that sets up those reports on bash servers after login, as MobaXterm's "Follow SSH path" does, for servers that don't send OSC 7 themselves (T-034)
-- *Later (planned)*: a fuzzy filter over the current folder's listing, best matches first with the matched characters highlighted; no recursive search on the server (T-037)
 - Dragging files out into the file manager: never for remote files (OQ-019 ✅); Download to… covers it. *Later*: drag-out of files that are already local (T-027)
-- Folder transfers (a dropped folder is refused with a notice), permissions, a choice of editor per file type, sync, resuming broken transfers: *Later*
+- Folder transfers (a dropped folder is refused with a notice), a choice of editor per file type, sync, resuming broken transfers: *Later*
 - SCP or an SSH stack of our own: never (architecture §Stack)
 
 ## Design
@@ -63,7 +64,7 @@ manager), and the sidebar asks for passwords the way the terminal does.
   draws that pane's **SFTP session**; focus moving into the sidebar
   doesn't change which pane is active. Switching to a pane without the
   flag hides the sidebar; switching back shows it again. A local pane
-  never has one. The sidebar sits on the `sftp_sidebar` side, inside the
+  has none yet; T-049 gives it one over the Local target (spec 0013). The sidebar sits on the `sftp_sidebar` side, inside the
   tab list when the tabs are on the same side (`tab_bar: left | right`):
   tabs, then sidebar, then panes. Dragging its inner edge resizes it
   (200 px up to half the window); the width is one per window and lasts

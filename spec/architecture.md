@@ -18,35 +18,58 @@ local, single-user app: no accounts, no backend, no telemetry.
 | Phase | Scope | Specs |
 |---|---|---|
 | 1 — Core terminal | Local shell and local profiles, tabs + splits, shortcuts, clipboard, scrollback, search, command palette, YAML config + themes, session restore | 0001–0005, 0007, 0009 |
-| 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, SFTP panel, files panel (local disk or any host, as a tree), secrets in the OS keychain; opt-in update check | 0006, 0008, 0010, 0011, 0013, 0014 |
+| 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, connect via system `ssh` in a PTY, one file browser over the local disk or any host, drawn as a sidebar next to any pane or as a files pane (with file permissions: view and change mode, owner and group), secrets in the OS keychain; opt-in update check | 0006, 0008, 0010, 0011, 0013, 0014 |
 | 3 — Command history | Detect the commands the user runs and suggest past ones inline as they type, like Windows Terminal and Warp | — |
-| 4 — Theme editor | Edit themes in the app with a live preview, saved as `themes/*.yaml` files (spec 0005) | — |
-| 5 — Port forwarding | Local, remote and dynamic SSH forwards on a profile, passed to the system `ssh` as `-L`/`-R`/`-D` (deferred in spec 0006) | — |
-| 6 — Command profiles | Custom profiles that run a command (e.g. a coding agent like `claude` or `codex`) instead of the shell, launched in the focused pane's cwd; from an SSH pane there's no local cwd, so a folder picker asks for one | — |
-| 7 — macOS | Promote macOS from compile-only to a required platform: verified in the running app (PTY, `Cmd` shortcuts, Keychain, paths), in CI, and packaged | — |
+| 4 — Theming | Edit themes in the app with a live preview, saved as `themes/*.yaml` files (spec 0005) | — |
+| 5 — Plugins | A plugin system: runtime, API and per-plugin permissions; an extensible app sidebar with the SSH hosts as its first built-in panel and plugins adding their own; themes installable as plugins | — |
+| 6 — Plugin store | Plugin registries the user configures; browse, install and update plugins in the app, with an opt-in update check like spec 0011's | — |
+| 7 — Port forwarding | Local, remote and dynamic SSH forwards on a profile, passed to the system `ssh` as `-L`/`-R`/`-D` (deferred in spec 0006) | — |
+| 8 — Command profiles | Custom profiles that run a command (e.g. a coding agent like `claude` or `codex`) instead of the shell, launched in the focused pane's cwd; from an SSH pane there's no local cwd, so a folder picker asks for one. Any profile can also be set to ask for its working directory on launch | — |
+
+**1.0 is Phases 1–8.**
 
 Only phases that have started get specs and tasks; later phases stay one
 row here. Phase 2 started before Phase 1 finished (owner's call,
 2026-11-04), so its tasks wait for the Phase 1 tasks they build on.
 
+**Constraints for the plugin phases.** Their specs must settle these;
+until then they're recorded here so earlier work doesn't paint them into
+a corner.
+
+- **Theme plugins are data, not code.** The active theme is needed for the
+  first frame, so a theme plugin is YAML the boot path reads directly. Code
+  plugins load after the first frame, never before it.
+- **No native-code plugins.** Rust has no stable ABI and a dylib runs with
+  every right the app has. The runtime (WASM or an embedded script
+  language) is an open question for the Phase 5 spec, and its crate needs
+  the owner's approval.
+- **Permissions are granted by the user, per plugin.** Network, file
+  system and reading terminal output are each declared by the plugin and
+  granted by the user, so the ground rules below still hold. Phase 5 gets
+  its own STRIDE threat model.
+- **The store only goes online when the user asks.** Browsing and
+  installing are user-started; update checks are opt-in. Downloads are
+  verified against a hash in the registry index.
+
 **Considered.** Ideas that aren't committed to a phase yet. They get no
 specs or tasks until they're promoted to one.
 
-- **Plugin system.** Let users and third parties extend Tern.
-- **Signed macOS builds.** Code signing and notarization for the Phase 7
-  packages. Needs a paid Apple Developer account.
+- **Full macOS support.** Promote macOS from compile-only to a required
+  platform: verified in the running app (PTY, `Cmd` shortcuts, Keychain,
+  paths), in CI, and packaged. Signed and notarized builds would need a paid
+  Apple Developer account.
 - **AI assistant plugin.** A plugin, not built into Tern, that helps with
   errors, commands and general CLI use by delegating to an agent harness
   the user already runs (e.g. Claude Code, Codex), the way T3 Code does.
-  Tern runs no model and holds no API keys. Needs the plugin system first.
-  Terminal output carries secrets, so only what the user picks per request
-  is handed to the harness.
+  Tern runs no model and holds no API keys. Needs Phase 5. Terminal output
+  carries secrets, so only what the user picks per request is handed to
+  the harness.
 - **Docker / Compose plugin.** A plugin that shows running containers in a
   sidebar, possibly with controls to attach, view logs and restart. Needs
-  the plugin system first.
+  Phase 5.
 - **S3 and SMB.** Browse and transfer files in S3 buckets and SMB shares
-  as plugins that add a target to the file browser of the SFTP sidebar and
-  the files pane (spec 0013). Needs the plugin system first.
+  as plugins that add a target to the file browser (spec 0013). Needs
+  Phase 5.
 
 ## Platforms
 
@@ -59,7 +82,7 @@ of them alive.
 |---|---|---|
 | Linux, Wayland session | Required | Any compositor with `xdg-shell`. Needs a Vulkan driver (Mesa or NVIDIA) |
 | Windows 11 | Required | DirectX 11, ConPTY |
-| macOS | Compile-only | No CI builds, no signing, no blocking on it. Becomes required in Phase 7 |
+| macOS | Compile-only | Built and installed from source with `packaging/macos/install.sh`. No CI builds, no packages, no signing, no blocking on it. Full support is only considered (see Roadmap) |
 | X11 or XWayland sessions, Windows 10 and older | Not supported | In an X11 session Tern exits with a clear message (spec 0001) |
 
 ## Stack
@@ -99,8 +122,8 @@ frame needs. Everything else is a module under `src/`:
 - `layout/` — tabs, title bar, split tree, session restore
 - `commands/` — actions, keymap, palette
 - `ssh/` — hosts, the ssh command, askpass (spec 0006)
-- `files/` — the file browser over a target (Local or SFTP) as a tree, and the files pane (spec 0013)
-- `sftp/` — SFTP connections, transfers and edit copies, which the browser draws in an SSH pane's sidebar or a files pane (spec 0008)
+- `files/` — the one file browser: its view, tree and every feature on it, the Local target, and the two places it is drawn, the sidebar and the files pane (spec 0013)
+- `sftp/` — the SFTP target: connections, transfers and edit copies (spec 0008)
 - `config.rs`, `theme.rs`, `session.rs` — files on disk
 - `secrets.rs` — the OS keychain
 - `update.rs` — the opt-in release check (spec 0011)
@@ -126,6 +149,16 @@ Load-bearing rules that code elsewhere depends on, plus the price we knowingly p
   *Cost:* API churn arrives in bulk at each bump, one third-party publisher
   sits in the supply chain, and the release build's final link takes about
   twice as long.
+- **One file browser, many targets [load-bearing].** The sidebar and the
+  files pane draw the same browser, and the browser runs over a target:
+  Local or SFTP today, plugin targets later (Phase 5). Every browser
+  feature (tree, filter, path suggestions, permissions, transfers, edits)
+  is written once in `files/` against the targets' operations; a target
+  only supplies operations and says which it supports, and what it
+  doesn't support isn't offered. No feature has code per surface or per
+  target, so a plugin target gets each feature without work of its own.
+  *Cost:* a feature that one target can't do well (e.g. permissions on a
+  Windows disk) needs a capability flag instead of a quick special case.
 - **One palette for terminal and widgets.** The resolved Tern theme is
   written into `gpui-component`'s theme at load and on every reload, so
   widgets never fall back to the library's own colors (spec 0005).

@@ -1,18 +1,20 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 2
-tasks: [T-042, T-033, T-041, T-043, T-044, T-045]
+tasks: [T-042, T-033, T-041, T-043, T-044, T-045, T-037, T-038, T-048, T-049]
 related: [spec 0008, spec 0007, spec 0006, spec 0003, spec 0002, spec 0009, T-022, OQ-026 ✅, OQ-027, OQ-028, threat model 0003]
 ---
 
-# Spec: Files pane
+# Spec: File browser
 
-Pins a files pane that browses the local disk or any saved SSH host, as a
-pane of the split tree with everything a terminal pane can do, and the
-one file browser behind both it and the SFTP sidebar of spec 0008. The
-browser shows a tree of folders. The SFTP sidebar keeps its behavior and
-gets the tree; spec 0008 stays the source for SFTP sessions, edit copies,
-transfers and remote names.
+Pins the one file browser, which browses the local disk or any saved SSH
+host as a tree of folders, and the files pane, which draws it as a pane
+of the split tree with everything a terminal pane can do. The sidebar of
+spec 0008 draws the same browser. This spec owns every browser feature,
+for every target and both surfaces (architecture §Key decisions, "One
+file browser, many targets"); spec 0008 stays the source for the SFTP
+target (sessions, connection, edit copies, transfers, remote names) and
+for the sidebar's placement.
 
 ## Problem & goal
 
@@ -61,7 +63,11 @@ SFTP sidebar alike, because both are the same browser.
   Considered); they need the plugin system first
 - Detaching the SFTP sidebar into a files pane with its session: T-032
   in spec 0008, which now targets this pane
-- Folder transfers, permissions, sync: as spec 0008
+- Folder transfers, sync: as spec 0008
+- *Later (planned)*: a fuzzy filter over the loaded tree, best matches first with the matched characters highlighted; no recursive search on disk or on the server (T-037)
+- *Later (planned)*: suggestions in the path field: a dropdown of matching folders as the user types, fuzzy-matched like the filter, with Tab to complete (T-038)
+- *Later (planned)*: permissions: view and change a file's mode, owner and group, on every target that supports them; a Windows disk has ACLs instead, and what it offers is decided when this is specified (T-048)
+- *Later (planned)*: the sidebar (`Ctrl+Shift+S`) on a local pane too, showing the Local target from the folder the pane's shell is in (T-049)
 - Local file operations beyond rename, delete and new folder (copy, move,
   properties): the OS's file manager does those
 
@@ -87,7 +93,9 @@ SFTP sidebar alike, because both are the same browser.
   neither has listing or tree code of its own.
 - **Target [load-bearing]:** an enum, `Local | Sftp(profile)`, not a
   trait: two targets don't earn an abstraction, and the plugin system
-  decides how a plugin adds one. Operations the target doesn't support
+  decides how a plugin adds one. Every browser feature is written once
+  over the targets' operations, never per target or per surface, so a
+  plugin target gets it too. Operations the target doesn't support
   (Local: download, upload, drops, edit copies) aren't offered, not
   greyed out.
 - **Session:** per target, the root folder, the tree's expanded folders,
