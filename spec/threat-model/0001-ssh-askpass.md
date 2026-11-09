@@ -12,7 +12,7 @@ related: [spec 0006, architecture §Security 1 and 3, T-014, OQ-016]
 How spec 0006 gets a password or passphrase from the OS keychain (or the
 user) into the system `ssh` without it touching the PTY, an argument, the
 environment or a log. T-014 built it to spec 0006, which carries every
-mitigation below; T-011 checks the Windows half.
+mitigation below; T-050 checks the Windows half.
 
 Tern starts `ssh` with `SSH_ASKPASS` set to its own binary and
 `SSH_ASKPASS_REQUIRE=force`. When ssh needs an answer it runs that binary
@@ -78,8 +78,8 @@ the mitigation is new.
 
 | ID | STRIDE | Threat | Affected element | Impact | Likelihood | Mitigation | Status |
 |---|---|---|---|---|---|---|---|
-| TM-askpass-01 | Spoofing | A process of another OS user connects to the askpass endpoint to fetch stored passwords or to answer prompts. | TB3 endpoint | H | L | Unix: the socket lives in a per-run directory created with mode 0700 under `$XDG_RUNTIME_DIR`, and the server drops any peer whose `SO_PEERCRED` uid isn't the app's; without `$XDG_RUNTIME_DIR` there is no askpass and ssh asks in the terminal as today. Windows: the pipe's DACL grants access only to its owner, the user who created it (`D:P(A;;GA;;;OW)`). In `src/ssh/askpass.rs`. | mitigated on Unix (T-014); Windows checked in T-011 |
-| TM-askpass-02 | Spoofing | A squatter creates the endpoint first and plays the app: the helper sends it the prompt and token, and it answers a host-key question "yes" or feeds a wrong password. Windows pipe names are one namespace for all users. | TB3, helper side | H | M | The endpoint name carries 128 random bits per app run; Windows creates the pipe with `FILE_FLAG_FIRST_PIPE_INSTANCE` and fails rather than share it; the helper checks that the endpoint's server process is the app PID from its environment (`SO_PEERCRED` on Unix, `GetNamedPipeServerProcessId` on Windows) before it sends anything, else exits 1. In the helper entry point in `src/ssh/askpass.rs`. | mitigated on Unix (T-014); Windows checked in T-011 |
+| TM-askpass-01 | Spoofing | A process of another OS user connects to the askpass endpoint to fetch stored passwords or to answer prompts. | TB3 endpoint | H | L | Unix: the socket lives in a per-run directory created with mode 0700 under `$XDG_RUNTIME_DIR`, and the server drops any peer whose `SO_PEERCRED` uid isn't the app's; without `$XDG_RUNTIME_DIR` there is no askpass and ssh asks in the terminal as today. Windows: the pipe's DACL grants access only to its owner, the user who created it (`D:P(A;;GA;;;OW)`). In `src/ssh/askpass.rs`. | mitigated on Unix (T-014); Windows checked in T-050 |
+| TM-askpass-02 | Spoofing | A squatter creates the endpoint first and plays the app: the helper sends it the prompt and token, and it answers a host-key question "yes" or feeds a wrong password. Windows pipe names are one namespace for all users. | TB3, helper side | H | M | The endpoint name carries 128 random bits per app run; Windows creates the pipe with `FILE_FLAG_FIRST_PIPE_INSTANCE` and fails rather than share it; the helper checks that the endpoint's server process is the app PID from its environment (`SO_PEERCRED` on Unix, `GetNamedPipeServerProcessId` on Windows) before it sends anything, else exits 1. In the helper entry point in `src/ssh/askpass.rs`. | mitigated on Unix (T-014); Windows checked in T-050 |
 | TM-askpass-03 | Spoofing | A local process guesses or replays a token to make the app fill in a password for a fake prompt. | TB3 protocol | H | L | A fresh 128-bit token from `getrandom` per connection, compared in constant time, dropped when that connection's ssh exits; each stored secret is offered once per connection. Reading a live token from `/proc/<ssh pid>/environ` takes code running as the user: TM-askpass-14. | mitigated (T-014) |
 | TM-askpass-04 | Spoofing | A server or jump host words a keyboard-interactive prompt so the app fills in the password stored for another target. | TB1 → TB2 prompt text | H | L | Auto-fill only when the whole prompt equals one of the connection's own patterns, built from `ssh -G` at connect time: `<user>@<host>'s password: `, `(<user>@<host>) ` plus a server text of `password:` (any case, optional spaces), and `Enter passphrase for key '<file>': ` for one of its `identityfile`s; `<host>` is `hostkeyalias` if set, else `hostname`, as ssh writes it. ssh writes the prefix itself, so a jump host's prompts name the jump host and get a dialog. Spec 0006 flow 4. | mitigated (T-014) |
 | TM-askpass-05 | Spoofing | The remote prints a fake Tern password prompt into the terminal, and the user types the secret into the PTY. | TB5, PTY → user | M | M | Tern never asks for a secret in the grid: prompts are dialogs in app chrome over the pane, naming the connection, which nothing in the grid can open, read or fill (architecture §Security 1). A user typing into a fake prompt anyway is a risk every terminal shares. | accepted (OQ-016) |
@@ -108,7 +108,7 @@ TB5 in -05, -07, -08; TB6 in -12, -14, -19, -20.
 - [x] T-014 — builds the askpass path to spec 0006 as updated by this model
   (covers TM-askpass-01, -02, -03, -04, -06, -07, -08, -10, -11, -12, -13
   with `zeroize`, -15, -16, -17, -18, -19, -20, and -14's warning)
-- [ ] T-011 — checks the Windows half on Windows 11: the pipe's DACL,
+- [ ] T-050 — checks the Windows half on Windows 11: the pipe's DACL,
   `FILE_FLAG_FIRST_PIPE_INSTANCE` and the server-PID check (covers
   TM-askpass-01, -02)
 

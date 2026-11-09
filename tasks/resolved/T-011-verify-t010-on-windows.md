@@ -1,5 +1,5 @@
 ---
-status: next
+status: now
 blocked-by: []
 ---
 # T-011: Verify the scaffold, tabs and splits on Windows 11
@@ -56,3 +56,11 @@ Spec: ../spec/0005-config-and-themes.md (paths, watcher, PATHEXT)
 Spec: ../spec/0006-ssh-hosts.md (ssh.exe, reconnect, missing client)
 Spec: ../spec/0007-drag-and-drop-splits.md (drag and drop, ConPTY repaint)
 Spec: ../spec/0010-import-hosts.md (report on the console, MobaXterm paths)
+
+Resolved (2026-11-09): the owner installed with
+`packaging/windows/install.ps1` and daily-drove Tern on Windows 11; the
+terminal, tabs, splits, config, SSH and SFTP work. The startup bench of
+every release on Windows is in [docs/ttfp.md](../../docs/ttfp.md). The
+security checks of the threat models (askpass pipe DACL and squatting,
+SFTP file names and Zone.Identifier) need a deliberate test rather than
+daily use and moved to T-050; the files pane stays with T-045.
