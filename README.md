@@ -80,17 +80,20 @@ interface that explains itself.
 - [ ] Docker / Compose: running containers in a sidebar, with controls to attach, view logs and restart
 - [ ] S3 and SMB: buckets and shares in a file sidebar, like the SFTP one (probably a plugin, maybe built in)
 
-## Install from source (Linux, macOS)
+## Install from source
 
 With a Rust toolchain and the [prerequisites](docs/development.md#prerequisites):
 
 ```sh
 packaging/linux/install.sh   # Linux
 packaging/macos/install.sh   # macOS
+pwsh -File packaging/windows/install.ps1   # Windows 11
 ```
 
 It builds the release binary and links it as `~/.local/bin/tern`. On macOS
-it also puts a `Tern.app` (signed ad-hoc, not with an Apple Developer ID) in `~/Applications`. Re-run it after
+it also puts a `Tern.app` (signed ad-hoc, not with an Apple Developer ID) in `~/Applications`.
+On Windows it copies `tern.exe` into `%USERPROFILE%\.local\bin` and adds a
+Start menu shortcut; close Tern before re-running it. Re-run it after
 pulling to update.
 
 ## Links
