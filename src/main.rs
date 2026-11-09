@@ -34,6 +34,10 @@ use terminal::FontSettings;
 use terminal::pty::{self, Command, GridSize};
 use timing::{Mark, Timing};
 
+/// Tern's identity to the desktop: the Wayland app_id, matching the
+/// desktop entry, and the Windows AppUserModelID (OQ-021).
+const APP_ID: &str = "de.zedrem.tern";
+
 /// The window's size in logical pixels when no session remembers one.
 const WINDOW_SIZE: (f32, f32) = (1000.0, 640.0);
 
@@ -206,6 +210,10 @@ fn main() {
         })
         .detach();
 
+        // Windows takes the AppUserModelID per process, not from the
+        // window's app_id, and the MSI's shortcut carries the same one so a
+        // pinned icon groups with the window (spec 0012). No-op elsewhere.
+        cx.set_app_identity(APP_ID, "Tern");
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
@@ -220,7 +228,7 @@ fn main() {
                 title: Some("Tern".into()),
                 ..Default::default()
             }),
-            app_id: Some("de.zedrem.tern".into()),
+            app_id: Some(APP_ID.into()),
             // Dev only: draw our own title bar even where the compositor
             // would draw one, to check the GNOME path (spec 0003, flow 8).
             window_decorations: std::env::var_os("TERN_CLIENT_DECORATIONS")

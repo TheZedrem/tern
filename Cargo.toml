@@ -52,6 +52,10 @@ widestring = "1"
 # PeekNamedPipe, to wait on askpass helpers without a read.
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Pipes"] }
 
+[target.'cfg(windows)'.build-dependencies]
+# build.rs embeds the icon and version info in tern.exe (spec 0012).
+winresource = { version = "0.1.34", default-features = false }
+
 [profile.release]
 codegen-units = 1
 lto = true

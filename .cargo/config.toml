@@ -1,0 +1,4 @@
+# Link the C runtime statically on Windows, so tern.exe and its MSI need no
+# Visual C++ redistributable (spec 0012). A RUSTFLAGS variable replaces this.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -15,4 +15,7 @@ Set the process identity through GPUI's `App::set_app_identity` before
 opening the window, then check that launching both the shortcut and the
 installed exe groups under the pinned button (spec 0012 AC8).
 
+Fixed 2026-11-09: `main.rs` calls `set_app_identity` before the window
+opens. Checking the grouping needs an install, so it moved to T-052.
+
 Spec: ../spec/0012-windows-installer.md

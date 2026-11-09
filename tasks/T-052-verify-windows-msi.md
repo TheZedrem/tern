@@ -11,8 +11,11 @@ These checks need an install, so CI and T-039 didn't cover them:
 - `--bench-startup 3 | Out-Host` prints.
 - It starts without the VC++ redistributable (e.g. Windows Sandbox).
 - N+1 upgrades N with config kept, and N over N+1 is refused.
+- A failed or cancelled N+1 upgrade leaves N and its shortcut in place
+  (T-054).
 - Uninstall leaves `%APPDATA%\tern\`.
-- A pinned icon groups with the window.
+- A pinned icon groups with the window, both when launched from the
+  shortcut and when `tern.exe` is run directly (T-053).
 - Windows 10 is refused.
 
 Also type in a `cmd`, PowerShell and `ssh` pane of the GUI-subsystem

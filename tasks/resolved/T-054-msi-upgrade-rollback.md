@@ -15,4 +15,7 @@ Schedule removal after `InstallInitialize` so it participates in rollback.
 On a disposable Windows installation, verify both a successful N-to-N+1
 upgrade and a failed upgrade that restores N and its shortcut.
 
+Fixed 2026-11-09: `Schedule="afterInstallInitialize"`. The upgrade
+checks need an install, so they moved to T-052.
+
 Spec: ../spec/0012-windows-installer.md
