@@ -28,7 +28,7 @@ in place, and uninstalling removes everything the MSI installed.
 
 - A Windows-ready `tern.exe`: GUI subsystem, embedded icon and version info, static C runtime
 - `packaging/windows/tern.wxs`, built with WiX Toolset v7
-- A `windows` job in `release.yml` that attaches the MSI to the release
+- CI builds the MSI on every push; `release.yml` attaches it to the release
 - A local build command in `docs/development.md`
 
 **Out of scope:**
@@ -97,14 +97,14 @@ in place, and uninstalling removes everything the MSI installed.
 
 ### Flows
 
-1. **Release:** a `v*` tag runs `checks` (ci.yml). Once it passes, the
-   `linux` job creates the release with its packages. Then `windows` (on
-   `windows-2025`, `needs: [checks, linux]`) builds `--release`, runs
-   `wix build` and adds the MSI with `gh release upload`. One job creates
-   the release and the other only uploads, so they can't race on it.
-2. **Failure:** a failed `wix build` fails the job. The Linux packages are
-   already published by then, so a failed Windows build leaves a release
-   without an MSI. Re-running the job adds it; nothing is deleted.
+1. **Release:** every push to `main` runs ci.yml, whose Windows job
+   builds `--release`, runs `wix build` and keeps the MSI as an artifact.
+   A `v*` tag on that commit waits for the run to pass, then one job
+   creates the release with the Linux packages and the MSI, renamed to
+   `tern-<version>-x64.msi`. Nothing is built twice.
+2. **Failure:** a failed `wix build` fails CI, so the commit is never
+   released. A tag whose CI run failed, or that has none, creates no
+   release; re-run CI, then the release workflow.
 3. **Install:** the user double-clicks the MSI → SmartScreen warns while
    it's unsigned → "More info → Run anyway" → no UAC → Start menu has
    Tern.

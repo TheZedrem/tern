@@ -1,16 +1,16 @@
 # CI (T-007, OQ-004): format, lint, test and release-build on Linux and
-# Windows, plus the MSI on Windows. TTFP isn't gated here, since shared runners are too noisy; the
-# bench stays local (spec 0001). Only GitHub's own actions are used,
-# pinned to commit SHAs. Runs on every push to main and every pull
-# request, and is called by release.yml, which packages only once these
-# checks pass.
+# Windows, plus the MSI on Windows. TTFP isn't gated here, since shared
+# runners are too noisy; the bench stays local (spec 0001). Only GitHub's
+# own actions are used, pinned to commit SHAs. Runs on every push to main
+# and every pull request. A push to main keeps the release binary and the
+# MSI as artifacts, which release.yml packages when that commit is tagged,
+# so a release builds nothing twice.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
-  workflow_call:
 
 permissions:
   contents: read
@@ -64,5 +64,25 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           dotnet tool install --global wix --version 7.0.1
-          & "$env:USERPROFILE\.dotnet\tools\wix.exe" build -arch x64 -acceptEula wix7 packaging/windows/tern.wxs -o target/packages/tern-ci-x64.msi
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" build -arch x64 -acceptEula wix7 packaging/windows/tern.wxs -o target/packages/tern-x64.msi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # What release.yml packages. Only pushes to main are released, so
+      # pull requests keep nothing. A week is enough to tag a pushed commit;
+      # after that, re-running this workflow for it brings them back.
+      - name: Keep the release binary
+        if: github.event_name == 'push' && runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tern-linux
+          path: target/release/tern
+          retention-days: 7
+          if-no-files-found: error
+      - name: Keep the MSI
+        if: github.event_name == 'push' && runner.os == 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tern-windows
+          path: target/packages/tern-x64.msi
+          retention-days: 7
+          if-no-files-found: error

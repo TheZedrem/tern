@@ -72,9 +72,11 @@ files and every extra thousand lines costs every later task.
 ## CI
 
 GitHub Actions on Linux and Windows runners (`.github/workflows/ci.yml`):
-fmt, clippy, tests and a release build on every push to `main`, every pull
-request and as the first stage of a `v*` tag's release, where
-`release.yml` builds packages only once the checks pass. Actions are
+fmt, clippy, tests, a release build and the MSI on every push to `main`
+and every pull request. A push to `main` keeps the Linux binary and the
+MSI as artifacts for a week. A `v*` tag doesn't run the checks again:
+`release.yml` waits for that commit's CI run and packages its artifacts,
+so push the commit to `main` with or before its tag. Actions are
 pinned to commit SHAs. CI doesn't replace the local checks before a
 commit; it catches what only fails on the other OS.
 

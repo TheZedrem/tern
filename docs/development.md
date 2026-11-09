@@ -78,9 +78,10 @@ session.
 
 ## Linux packages
 
-A `v*` tag matching `Cargo.toml`'s version builds the `.deb`, `.rpm` and
-AppImage in CI (`.github/workflows/release.yml`) once the CI checks pass,
-and attaches them to a GitHub release. To build them locally after `cargo build --release`:
+A `v*` tag matching `Cargo.toml`'s version packages the `.deb`, `.rpm` and
+AppImage in CI (`.github/workflows/release.yml`) from the binary its
+commit's CI run built, once that run passed, and attaches them to a
+GitHub release ([CI](conventions.md#ci)). To build them locally after `cargo build --release`:
 
 ```sh
 cargo install --locked cargo-deb cargo-generate-rpm   # once
@@ -108,8 +109,8 @@ magick assets/icon.png -define icon:auto-resize=256,128,64,48,32,24,16 assets/ic
 
 ## Windows installer
 
-The same tag also builds `tern-<version>-x64.msi` on a Windows runner and
-adds it to the release ([spec 0012](../spec/0012-windows-installer.md)).
+CI builds the MSI on every push, and a tag adds that one to the release
+as `tern-<version>-x64.msi` ([spec 0012](../spec/0012-windows-installer.md)).
 It's a per-user install, so it needs no admin rights. Release builds link
 the C runtime statically (`.cargo/config.toml`), so the MSI ships
 `tern.exe` alone. To build it locally after `cargo build --release`:

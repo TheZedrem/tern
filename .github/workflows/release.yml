@@ -1,7 +1,9 @@
-# Release packages: a `v*` tag builds the .deb, .rpm and AppImage (T-026)
-# and the Windows MSI (spec 0012) and attaches them to a GitHub release,
-# after the CI checks (ci.yml) pass on Linux and Windows. The Linux ones
-# are built on ubuntu-24.04, so they need glibc 2.39 or newer.
+# Release packages: a `v*` tag attaches the .deb, .rpm and AppImage
+# (T-026) and the Windows MSI (spec 0012) to a GitHub release. Nothing is
+# built or re-checked here: the tagged commit's push to main ran ci.yml,
+# which checked it and kept its release binary and MSI. This waits for
+# that run and packages from it. The binary is built on ubuntu-24.04, so
+# the Linux packages need glibc 2.39 or newer.
 name: Release
 
 on:
@@ -10,16 +12,37 @@ on:
 
 permissions:
   contents: write
-
-env:
-  CARGO_TERM_COLOR: always
+  actions: read
 
 jobs:
-  checks:
-    uses: ./.github/workflows/ci.yml
+  # Push the commit to main before or with its tag. A commit main never
+  # had has no CI run, so its tag fails here, and so does a failed or
+  # cancelled run: re-run CI for the commit, then this workflow.
+  ci:
+    runs-on: ubuntu-24.04
+    outputs:
+      run-id: ${{ steps.wait.outputs.run-id }}
+    steps:
+      - name: Wait for the tagged commit's CI run
+        id: wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 20); do
+            id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" \
+              --event push --branch main --limit 1 --json databaseId --jq '.[0].databaseId')
+            [ -n "$id" ] && break
+            sleep 15
+          done
+          if [ -z "$id" ]; then
+            echo "::error::No CI run for $GITHUB_SHA on main. Push the commit to main first."
+            exit 1
+          fi
+          echo "run-id=$id" >> "$GITHUB_OUTPUT"
+          gh run watch "$id" -R "$GITHUB_REPOSITORY" --exit-status --interval 30 > /dev/null
 
-  linux:
-    needs: checks
+  release:
+    needs: ci
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,50 +52,39 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
           test "$GITHUB_REF_NAME" = "v$version"
 
-      - name: Install Rust and the packaging tools
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tern-linux
+          path: target/release
+          run-id: ${{ needs.ci.outputs.run-id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tern-windows
+          path: target/packages
+          run-id: ${{ needs.ci.outputs.run-id }}
+          github-token: ${{ github.token }}
+
+      - name: Install the packaging tools
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libfontconfig-dev
           cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
           curl -sSfLo appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
           echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" | sha256sum -c
           chmod +x appimagetool
 
-      - run: cargo build --locked --release
+      # Artifacts don't keep the executable bit.
+      - run: chmod +x target/release/tern
       - run: cargo deb --no-build
       - run: cargo generate-rpm
       # The runner has no FUSE, so appimagetool runs extracted.
       - run: APPIMAGE_EXTRACT_AND_RUN=1 packaging/linux/appimage.sh ./appimagetool
+      - run: mv target/packages/tern-x64.msi "target/packages/tern-${GITHUB_REF_NAME#v}-x64.msi"
 
       - name: Attach the packages to a release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
-            target/debian/*.deb target/generate-rpm/*.rpm target/packages/*.AppImage
-
-  # Windows MSI (spec 0012). `linux` creates the release and this job only
-  # adds to it, so they can't race. A failure leaves the release without an
-  # MSI; re-running this job adds it.
-  windows:
-    needs: [checks, linux]
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust and WiX
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          dotnet tool install --global wix --version 7.0.1
-          "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
-
-      - run: cargo build --locked --release
-      # -acceptEula: the project accepts WiX v7's EULA (OQ-024).
-      - run: wix build -arch x64 -acceptEula wix7 packaging/windows/tern.wxs -o "target/packages/tern-$($env:GITHUB_REF_NAME.TrimStart('v'))-x64.msi"
-
-      - name: Attach the MSI to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload $env:GITHUB_REF_NAME (Get-Item target/packages/*.msi)
+            target/debian/*.deb target/generate-rpm/*.rpm target/packages/*.AppImage target/packages/*.msi
