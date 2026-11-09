@@ -21,6 +21,7 @@ hardware.
 | v0.2.0 | 332.3 ms | 267.0 ms | 277.5 ms | 243.9 ms | 2026-11-09 |
 | v0.3.0 | 298.4 ms | 282.8 ms | 286.3 ms | 258.8 ms | 2026-11-09 |
 | v0.4.0 | 300.5 ms | 289.4 ms | 316.8 ms | 265.9 ms | 2026-11-09 |
+| v0.4.1 | 290.5 ms | 275.8 ms | 280.7 ms | 258.3 ms | 2026-11-09 |
 
 Measured afterwards from the release tags, one after another in the same
 session. On Windows, opening the window takes about 90 % of the time;
