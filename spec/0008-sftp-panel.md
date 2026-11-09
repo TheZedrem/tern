@@ -47,7 +47,8 @@ manager), and the sidebar asks for passwords the way the terminal does.
 - Browser features for every target, such as the fuzzy filter (T-037), path suggestions (T-038) and permissions (T-048): [spec 0013](0013-files-panel.md)
 - *Later (planned)*: a follow-terminal mode, where the listing follows each `cd` the pane's shell reports, and an opt-in per profile that sets up those reports on bash servers after login, as MobaXterm's "Follow SSH path" does, for servers that don't send OSC 7 themselves (T-034)
 - Dragging files out into the file manager: never for remote files (OQ-019 ✅); Download to… covers it. *Later*: drag-out of files that are already local (T-027)
-- Folder transfers (a dropped folder is refused with a notice), a choice of editor per file type, sync, resuming broken transfers: *Later*
+- Folder transfers (a dropped folder is refused with a notice), sync, resuming broken transfers: *Later*
+- *Later (planned)*: an `editor` setting that overrides the OS's default app for edit copies, maybe per file type (T-056)
 - SCP or an SSH stack of our own: never (architecture §Stack)
 
 ## Design
