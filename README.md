@@ -1,119 +1,131 @@
-<img src="assets/icon.svg" alt="Tern icon" width="128" height="128">
+<div align="center">
+
+<img src="assets/icon.svg" alt="Tern icon" width="112" height="112">
 
 # Tern
 
-A fast terminal emulator with built-in SSH/SFTP. Tabby's feature set, with
-a prompt in under 500 ms. Pure Rust: GPUI, Zed's UI framework, for the
-window and `alacritty_terminal` for the terminal. Runs on Linux (Wayland)
+**A terminal with built-in SSH and SFTP that shows a prompt in about 330 ms.**
+
+Tabby's feature set at the speed of a native terminal. Pure Rust on
+[GPUI](https://www.gpui.rs) and `alacritty_terminal`, for Linux (Wayland)
 and Windows 11.
 
-**Status:** The core terminal works: tabs, splits, vertical tabs, the
-command palette, YAML config with a settings screen, themes and session
-restore, booting to a prompt in about 330 ms. SSH profiles, the host
-picker, stored passwords and host import from MobaXterm and Tabby are in,
-as are an opt-in daily check for new releases on GitHub and Linux
-packages. The SFTP sidebar (`Ctrl+Shift+S` on an SSH pane) browses a
-host's folders, downloads, uploads (also by drag and drop), renames,
-deletes, and edits remote files in your own app, uploading your saves.
-The files pane (`Ctrl+Shift+B`) browses the local disk or any saved host
-as a tree beside your terminals; package repositories come next. A Tauri/WebKitGTK version was
-built and measured first (1.07 s) and dropped; see OQ-009, OQ-010 and
-OQ-013.
+[![CI](https://github.com/TheZedrem/tern/actions/workflows/ci.yml/badge.svg)](https://github.com/TheZedrem/tern/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/TheZedrem/tern)](https://github.com/TheZedrem/tern/releases/latest)
+[![License: EUPL-1.2](https://img.shields.io/badge/license-EUPL--1.2-blue)](LICENSE)
+
+[Install](#install) · [Features](#features) · [Keys](#keys) · [Roadmap](#roadmap) · [Contributing](#contributing)
+
+</div>
 
 ## Why Tern
 
-My main problem with Tabby is speed: Electron slows it down, so a quick SSH
-session becomes a wait. MobaXterm is faster, but it's unintuitive and in
-places hard to use and understand. PuTTY is great for SSH, but it has no
-local shell and no built-in SFTP. Tern aims for both: native speed and an
-interface that explains itself.
+Tabby has the right features, but Electron makes it slow, so a quick SSH
+session turns into a wait. MobaXterm is fast, but it's hard to learn and
+confusing in places. PuTTY handles SSH well, but it has no local shell and
+no SFTP. Tern aims for all of it: native speed, and an interface you don't
+need a manual for.
+
+Speed is the main requirement: every feature loads after the first frame,
+and every release is benchmarked ([TTFP history](docs/ttfp.md)). An
+earlier Tauri version took 1.07 s to start and was dropped.
 
 ## Features
 
 **Terminal**
 
-- [x] Boots to a prompt in about 330 ms, with a TTFP badge in dev builds ([spec 0001](spec/0001-startup-performance.md))
-- [x] Terminal pane: rendering, input and IME, resize, scrollback, search, clickable links, copy/paste and the Linux primary selection ([spec 0002](spec/0002-terminal-pane.md))
-- [x] Tabs, vertical tabs and split panes ([spec 0003](spec/0003-tabs-splits-and-session-restore.md))
-- [x] Dragging tabs and panes into and out of splits ([spec 0007](spec/0007-drag-and-drop-splits.md))
-- [x] Session restore ([spec 0003](spec/0003-tabs-splits-and-session-restore.md))
-- [x] Command palette and rebindable keybindings that leave `Ctrl`/`Alt` to the shell ([spec 0004](spec/0004-commands-keybindings-palette.md))
-- [x] YAML config with hot reload, profiles and themes ([spec 0005](spec/0005-config-and-themes.md))
-- [x] Settings screen ([spec 0009](spec/0009-settings-screen.md))
-- [ ] Tracking the shell's working directory via OSC 7, with opt-in shell snippets ([T-022](tasks/T-022-osc7-cwd-tracking.md))
+- Tabs, vertical tabs and split panes, rearranged by drag and drop
+- Session restore: tabs, splits and the window come back as you left them
+- Search, clickable links, IME input, copy on select and the Linux primary selection
+- A command palette, and shortcuts that never take `Ctrl`/`Alt` keys from the shell
+- YAML config that reloads live, profiles and themes, and a settings screen for all of it
 
-**SSH / SFTP**
+**SSH and SFTP**
 
-- [x] SSH profiles and hosts from `~/.ssh/config`, connecting through the system `ssh` ([spec 0006](spec/0006-ssh-hosts.md))
-- [x] Host picker with groups and filtering
-- [x] ssh prompts answered in the app, passwords remembered in the OS keychain on request
-- [x] Importing hosts from MobaXterm and Tabby: one click on the settings screen's Import tab, or `tern --import-hosts` ([spec 0010](spec/0010-import-hosts.md), [spec 0014](spec/0014-import-tab.md))
-- [x] SFTP sidebar (left or right, opened per SSH pane, `Ctrl+Shift+S`): browse folders with a path field ([spec 0008](spec/0008-sftp-panel.md), [T-023](tasks/resolved/T-023-sftp-panel.md))
-- [x] SFTP downloads, uploads (also dropped from the file manager), rename, delete, new folder ([T-035](tasks/resolved/T-035-sftp-transfers.md))
-- [x] Editing remote files in a local app from the SFTP sidebar, saves uploaded on a click, on save or on focus ([T-036](tasks/resolved/T-036-sftp-edits.md))
-- [x] Files pane (`Ctrl+Shift+B`): the local disk or any saved host as a tree, as a pane of the split tree; the SFTP sidebar is the same file browser ([spec 0013](spec/0013-files-panel.md))
-- [ ] The sidebar on local panes too, showing the local disk ([T-049](tasks/T-049-local-sidebar.md))
-- [ ] File permissions in the file browser: view and change mode, owner and group ([T-048](tasks/T-048-file-permissions.md))
-- [ ] Fuzzy filter and path suggestions in the file browser ([T-037](tasks/T-037-sftp-fuzzy-filter.md), [T-038](tasks/T-038-sftp-path-suggestions.md))
-- [ ] Local deletes go to the OS's trash ([T-044](tasks/T-044-local-delete-to-trash.md))
-- [ ] Dragging files out of the SFTP panel into the file manager ([T-027](tasks/T-027-sftp-drag-out-local-files.md))
+- Hosts from `~/.ssh/config` and SSH profiles, connected through your system's `ssh`
+- A host picker with groups and filtering
+- ssh's prompts answered in the app, with passwords kept in the OS keychain if you choose
+- Import hosts from MobaXterm and Tabby in one click
+- An SFTP sidebar on every SSH pane: browse, download, upload (drag and drop too), rename and delete
+- Edit remote files in your own editor; saves are uploaded on a click, on save or on focus
+- A files pane that shows the local disk or any saved host as a tree next to your terminals
 
-**Distribution**
+**Privacy**
 
-- [x] Opt-in daily check for new releases on GitHub ([spec 0011](spec/0011-update-check.md))
-- [x] `.deb`, `.rpm` and AppImage packages
-- [ ] Packages checked on their distros ([T-030](tasks/T-030-check-linux-packages.md))
-- [ ] Signed dnf and apt repositories on GitHub Pages ([T-031](tasks/T-031-package-repositories.md))
-- [ ] CI for Linux and Windows ([T-007](tasks/T-007-ci-pipeline.md))
-- [ ] Verified on Windows 11 ([T-011](tasks/T-011-verify-t010-on-windows.md))
+- No telemetry and no network traffic at startup. The release check is opt-in.
+- Secrets go only in the OS keychain, and scrollback never touches the disk.
 
-**Planned for 1.0** (on the [roadmap](spec/architecture.md#roadmap), not yet planned in detail)
+## Install
 
-- [ ] Suggestions from command history as you type, like Windows Terminal and Warp
-- [ ] Theme editor in the app, with a live preview
-- [ ] Plugin system, with an extensible sidebar (SSH hosts and plugins) and themes installable as plugins
-- [ ] Plugin registries: browse, install and update plugins in the app
-- [ ] SSH port forwarding (local, remote and dynamic) on a profile
-- [ ] Custom profiles that launch a command (e.g. a coding agent) in the current cwd, or a picked folder from an SSH session; any profile can ask for its working directory on launch
+**Linux:** `.deb`, `.rpm` and AppImage packages are on the
+[releases page](https://github.com/TheZedrem/tern/releases/latest). They
+need glibc 2.39 or newer and a Wayland session.
 
-**Considered** (not committed to)
-
-- [ ] Full macOS support: verified, in CI, packaged and signed. Today macOS only builds and installs from source via `packaging/macos/install.sh`
-
-**Possible plugins** (considered, not committed to; they need the plugin system first)
-
-- [ ] AI assistant: hands errors, commands and CLI questions to an agent harness you already run (e.g. Claude Code, Codex), like T3 Code does. Tern runs no model itself
-- [ ] Docker / Compose: running containers in a sidebar, with controls to attach, view logs and restart
-- [ ] S3 and SMB: buckets and shares in a file sidebar, like the SFTP one (probably a plugin, maybe built in)
-
-## Install from source
-
-With a Rust toolchain and the [prerequisites](docs/development.md#prerequisites):
+**From source** (Linux, Windows 11, macOS), with a Rust toolchain and the
+[prerequisites](docs/development.md#prerequisites):
 
 ```sh
-packaging/linux/install.sh   # Linux
-packaging/macos/install.sh   # macOS
+packaging/linux/install.sh                 # Linux
 pwsh -File packaging/windows/install.ps1   # Windows 11
+packaging/macos/install.sh                 # macOS (builds, not officially supported)
 ```
 
-It builds the release binary and links it as `~/.local/bin/tern`. On macOS
-it also puts a `Tern.app` (signed ad-hoc, not with an Apple Developer ID) in `~/Applications`.
-On Windows it copies `tern.exe` into `%USERPROFILE%\.local\bin` and adds a
-Start menu shortcut; close Tern before re-running it. Re-run it after
-pulling to update.
+The script builds a release binary and adds `tern` to `~/.local/bin`
+(`%USERPROFILE%\.local\bin` on Windows) plus a desktop or Start menu
+entry. To update, pull and run it again. On Windows, close Tern first.
 
-## Links
+## Keys
 
-- What we're building and why: [`spec/architecture.md`](spec/architecture.md)
-- Backlog: [`tasks/`](tasks/)
-- Dev setup: [`docs/development.md`](docs/development.md)
-- Working agreement for humans and agents: [`AGENTS.md`](AGENTS.md)
+App shortcuts use `Ctrl+Shift`, so plain `Ctrl` and `Alt` keys go to the
+shell. You can rebind all of them in the settings or in `config.yaml`.
+
+| Keys | Action |
+|---|---|
+| `Ctrl+Shift+P` | Command palette |
+| `Ctrl+Shift+T` / `Ctrl+Shift+H` | New tab with a profile / connect to a host |
+| `Ctrl+Shift+D` / `Ctrl+Shift+E` | Split right / split down |
+| `Ctrl+Shift+W` | Close the pane |
+| `Alt+1`–`9`, `Alt+←↑→↓` | Go to a tab, or to the next pane in that direction |
+| `Ctrl+Shift+F` | Search the scrollback |
+| `Ctrl+Shift+S` | SFTP sidebar of an SSH pane |
+| `Ctrl+Shift+B` / `Ctrl+Shift+O` | Files pane / switch its host |
+
+## Roadmap
+
+**Next**
+
+- Following the shell's working directory (OSC 7) ([T-022](tasks/T-022-osc7-cwd-tracking.md))
+- In the file browser: fuzzy filter, path suggestions, permissions, deleting to the trash, a local sidebar, dragging files out ([tasks](tasks/))
+- A Windows installer, and signed apt and dnf repositories ([T-039](tasks/T-039-windows-installer.md), [T-031](tasks/T-031-package-repositories.md))
+
+**Toward 1.0** ([roadmap](spec/architecture.md#roadmap))
+
+- **Plugins:** an extensible sidebar, themes as plugins, and plugin registries you browse in the app
+- SSH port forwarding (local, remote and dynamic) on a profile
+- Suggestions from your command history as you type
+- A theme editor with a live preview
+- Profiles that run a command (a coding agent, say) in the current folder or a folder you pick
+
+Tern builds in the terminal, SSH and SFTP because nearly everyone needs
+them. More specialized tools will be plugins, so you add only what you
+use. Some ideas: Docker and Compose containers in a sidebar, S3 buckets
+and SMB shares in the file browser, and an AI assistant that hands errors
+to an agent you already run (Claude Code, Codex). Full macOS support is
+being considered.
 
 ## Contributing
 
-Suggestions and feature requests are welcome as
+Bug reports and feature requests are welcome as
 [GitHub issues](https://github.com/TheZedrem/tern/issues). Tern is a
 personal project, so a request isn't a promise that it gets built.
 
-Forks and pull requests are welcome too, as long as they keep Tern fast and
-easy to use and add something genuinely useful.
+Pull requests are welcome too, as long as they keep Tern fast and easy to
+use. Tern is built spec-first: read [`AGENTS.md`](AGENTS.md) for the
+working agreement, [`spec/architecture.md`](spec/architecture.md) for
+the design, and [`docs/development.md`](docs/development.md) to set up a
+dev environment.
+
+## License
+
+[EUPL-1.2](LICENSE). The bundled Lilex font is under the
+[SIL Open Font License](assets/fonts/lilex/OFL.txt).
