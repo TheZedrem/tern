@@ -18,10 +18,16 @@ hardware.
 |---|---|---|---|---|---|
 | v0.1.0 | 276.5 ms | 270.6 ms | 284.6 ms | 253.8 ms | 2026-11-09 |
 | v0.1.1 | 291.4 ms | 275.4 ms | 289.7 ms | 250.0 ms | 2026-11-09 |
+| v0.2.0 | 332.3 ms | 267.0 ms | 277.5 ms | 243.9 ms | 2026-11-09 |
+| v0.3.0 | 298.4 ms | 282.8 ms | 286.3 ms | 258.8 ms | 2026-11-09 |
+| v0.4.0 | 300.5 ms | 289.4 ms | 316.8 ms | 265.9 ms | 2026-11-09 |
 
-Measured afterwards from the release tags. On Windows, opening the window
-takes about 90 % of the time; config, PTY spawn and the shell's first byte
-all finish while it opens.
+Measured afterwards from the release tags, one after another in the same
+session. On Windows, opening the window takes about 90 % of the time;
+config, PTY spawn and the shell's first byte all finish while it opens.
+From v0.2.0 to v0.4.0 the warm median grew by 22 ms, all of it in
+"window ready": the files pane and settings import arrived in that range.
+That's well inside the budget, but it's the trend to watch.
 
 ## Linux (owner's Fedora machine, Wayland)
 
