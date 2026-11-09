@@ -119,9 +119,22 @@ elsewhere; link.
 | `src/` | The crate. `main.rs` is the boot path; modules per `spec/architecture.md` §Code layout |
 | `spikes/` | Throwaway prototypes, only on `spike/*` branches; `main` keeps the verdicts |
 
+## Filing is the default
+
+Don't implement anything unless the owner says so: an explicit "implement
+it", a task named to build, or "implement next task". Any other request,
+however it's phrased ("right click to paste", "roadmap: …", a bare
+feature idea), means **file it**: a task in `tasks/`, plus a new spec or
+an amendment to one with the `write-spec` skill where the behavior isn't
+pinned yet. Then stop and summarize what was filed.
+
+Nothing without a spec, or an amendment to one, gets implemented. A task
+whose behavior no spec pins waits for that spec first.
+
 ## Loop protocol
 
-One task per loop. Never start work that isn't in `tasks/`.
+One task per loop, and only when the owner asked for implementation
+(see above). Never start work that isn't in `tasks/`.
 
 1. **Pick a task:** an unblocked `status: now` task, unless the human named one.
 2. **Read** the specs it links, plus `spec/architecture.md` for anything touching the stack. A linked spec still in `status: draft` needs the owner's approval first (see Specs).
