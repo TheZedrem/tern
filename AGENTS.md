@@ -12,6 +12,14 @@ It's pure Rust on GPUI, Zed's GPU UI framework, with `gpui-component` for
 widgets and `alacritty_terminal` for the terminal itself, for developers
 who open a terminal fifty times a day and notice every 100 ms.
 
+The tool lives or dies by what it supports. The terminal, SSH and SFTP are
+built in because nearly everyone needs them; anything more niche (Docker,
+S3, an AI assistant) is a plugin, so each user adds what they need without
+it costing everyone else boot time or complexity (architecture §Roadmap,
+phases 5 and 6). Build features against extension points (a file-browser
+target, a sidebar panel), not as special cases, so a plugin can do the
+same later.
+
 ## What we can never compromise on
 
 - **A prompt in under 500 ms.** Slow boot is why this product exists. A
@@ -69,6 +77,13 @@ defaults. If one fights the task, say so and ask.
 8. **ConPTY is not a Unix PTY.** Windows rewrites output and redraws on
    resize. Resize, cursor and exit behavior must be checked on Windows, not
    inferred from Linux.
+9. **Growing a god object.** `Workspace`, `Browser`, `TerminalPane` and
+   `SettingsView` host features; they don't own them. Appending another
+   feature's methods to one of them, or pushing any file past about 800
+   lines of non-test code, is how `layout/mod.rs` reached 3,300 lines
+   (T-051). Put a new feature in its own module, split a file that crosses
+   the line in the same change, and say so in the summary
+   ([conventions](docs/conventions.md#file-size-and-ownership)).
 
 ## Operations
 
@@ -184,4 +199,6 @@ Each spec's **Security & privacy** section says which of them it touches.
 Summary; full text in [`docs/conventions.md`](docs/conventions.md):
 Conventional Commits straight to `main`; cargo with a committed lockfile;
 `cargo fmt` and `clippy` clean; no `unwrap` outside tests and the boot
-path's "cannot continue" cases.
+path's "cannot continue" cases; files stay under about 800 lines of
+non-test code, split by responsibility; a release records its TTFP in
+`docs/ttfp.md`.

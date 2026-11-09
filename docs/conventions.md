@@ -49,9 +49,37 @@ verdict.
   define and a profile type are enums. serde maps them to the strings in
   `config.yaml`.
 
+## File size and ownership
+
+A file should be small enough to read whole, because agents read whole
+files and every extra thousand lines costs every later task.
+
+- **About 800 lines of non-test code is the ceiling.** A change that
+  pushes a file past it splits the file in the same change, or in a
+  `refactor` commit right before it. Tests in `#[cfg(test)]` don't count.
+- **Split by responsibility, not by size.** A file holds one area
+  (closing, session saving, drag and drop), never `misc.rs` or `part2.rs`.
+- **One type's `impl` can span files.** A child module sees its parent's
+  private fields, so a view's methods for one feature go in
+  `<module>/<feature>.rs` as their own `impl` block. Nothing becomes `pub`
+  just to move.
+- **A new feature gets its own module, not new methods on a host view.**
+  `Workspace`, `Browser`, `TerminalPane` and `SettingsView` wire features
+  together; the feature's state and logic live in its own module, ideally
+  as its own GPUI entity that the host owns and renders.
+- **Tests stay next to the code they test** and move with it.
+
 ## CI
 
-GitHub Actions on Linux and Windows runners (`.github/workflows/ci.yml`),
-run only as the first stage of a `v*` tag's release: `release.yml` builds
-packages once the checks pass. Commits to `main` don't run CI, so fmt,
-clippy and tests run locally before every commit.
+GitHub Actions on Linux and Windows runners (`.github/workflows/ci.yml`):
+fmt, clippy, tests and a release build on every push to `main`, every pull
+request and as the first stage of a `v*` tag's release, where
+`release.yml` builds packages only once the checks pass. Actions are
+pinned to commit SHAs. CI doesn't replace the local checks before a
+commit; it catches what only fails on the other OS.
+
+## Releases
+
+Before tagging a release, run `--bench-startup 10` on the release build
+and add the numbers to [`ttfp.md`](ttfp.md), so drift across releases is
+visible and not just per commit.
