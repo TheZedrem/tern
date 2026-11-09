@@ -107,6 +107,7 @@ fn main() {
     let area = restored
         .as_ref()
         .and_then(|session| session.window)
+        .and_then(session::WindowSize::usable)
         .map_or(WINDOW_SIZE, |window| (window.width, window.height));
     // Resolved now, so the first frame has its colors. `system` is `dark`
     // until the OS is asked, after the first frame (spec 0005).
@@ -211,6 +212,10 @@ fn main() {
                 size(px(area.0), px(area.1)),
                 cx,
             ))),
+            window_min_size: Some(size(
+                px(session::WindowSize::MIN.width),
+                px(session::WindowSize::MIN.height),
+            )),
             titlebar: Some(TitlebarOptions {
                 title: Some("Tern".into()),
                 ..Default::default()

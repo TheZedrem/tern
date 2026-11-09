@@ -82,7 +82,9 @@ title, else the profile's display name.
    Toggling again restores the layout.
 5. **Save:** debounced at 1 s after any layout, title, cwd or window-size
    change, plus a final save on quit. A save failure shows a notice
-   (architecture §Cross-cutting rules) and never blocks.
+   (architecture §Cross-cutting rules) and never blocks. The window is at
+   least 400 × 240; a smaller size the platform reports (a minimized
+   window on Windows) is neither saved nor restored.
 6. **Restore:** the active tab's leaves spawn at boot. Other tabs render as
    tab-bar entries only, and their leaves spawn on first activation. A
    missing cwd falls back to the home directory. A leaf whose profile no

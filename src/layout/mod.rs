@@ -476,7 +476,7 @@ impl Workspace {
             drop_target: None,
             pending,
             session_path,
-            window_size: Some(window_size(window)),
+            window_size: window_size(window).usable(),
             save_task: None,
             save_failed: false,
             bad_session,
@@ -524,8 +524,11 @@ impl Workspace {
         workspace.focus_active(window, cx);
         if workspace.session_path.is_some() {
             cx.observe_window_bounds(window, |this, window, cx| {
-                this.window_size = Some(window_size(window));
-                this.save_soon(window, cx);
+                // Minimizing reports a size too; keep the last real one.
+                if let Some(size) = window_size(window).usable() {
+                    this.window_size = Some(size);
+                    this.save_soon(window, cx);
+                }
             })
             .detach();
             // Closing the window releases the workspace: the last chance

@@ -30,6 +30,21 @@ pub struct WindowSize {
     pub height: f32,
 }
 
+impl WindowSize {
+    /// The smallest window, in logical pixels. Anything smaller that the
+    /// platform reports is bogus, like the 120 × 0 a minimized window once
+    /// left on Windows, and is neither saved nor restored.
+    pub const MIN: Self = Self {
+        width: 400.0,
+        height: 240.0,
+    };
+
+    /// This size, if a window can have it.
+    pub fn usable(self) -> Option<Self> {
+        (self.width >= Self::MIN.width && self.height >= Self::MIN.height).then_some(self)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedTab {
     /// The user's name for the tab.
@@ -250,6 +265,15 @@ pub(crate) mod tests {
     use crate::config::tests::TempDir;
     use std::collections::BTreeSet;
     use std::fs;
+
+    #[test]
+    fn a_window_smaller_than_the_minimum_is_not_usable() {
+        let size = |width, height| WindowSize { width, height };
+        assert_eq!(size(120.0, 0.0).usable(), None);
+        assert_eq!(size(1000.0, 100.0).usable(), None);
+        assert_eq!(WindowSize::MIN.usable(), Some(WindowSize::MIN));
+        assert_eq!(size(1000.0, 640.0).usable(), Some(size(1000.0, 640.0)));
+    }
 
     /// A saved pane. Shared with the tests of the modules that restore one.
     pub(crate) fn leaf(
