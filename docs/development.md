@@ -35,6 +35,10 @@ for numbers you can compare. With `TERN_BENCH_SESSION=<session.json>`
 the bench restores that session instead of starting one pane, to measure a
 restored layout (spec 0003, AC7).
 
+On Windows a release `tern.exe` is a GUI program, so PowerShell returns
+the prompt without waiting for it and its output lands after the prompt.
+Pipe it to wait: `target\release\tern.exe --bench-startup 10 | Out-Host`.
+
 Sessions are saved in `~/.local/share/tern/session.json` (Linux). To
 try one without touching yours, point `XDG_DATA_HOME` elsewhere.
 
@@ -50,7 +54,11 @@ To run this checkout as `tern` from anywhere, `packaging/linux/install.sh`
 `${XDG_BIN_HOME:-~/.local/bin}`. The Linux script also installs the desktop
 entry and icon into `~/.local/share`, so launchers and taskbars show Tern's
 icon. The macOS script also writes an ad-hoc
-signed `~/Applications/Tern.app` with a copy of the binary. Re-run it after
+signed `~/Applications/Tern.app` with a copy of the binary. On Windows,
+`pwsh -File packaging/windows/install.ps1` copies `tern.exe` into
+`%USERPROFILE%\.local\bin` (a copy, since symlinks need Developer Mode) and
+adds a Start menu shortcut, with an icon it writes to `%LOCALAPPDATA%\tern`.
+The copy is locked while it runs, so close that Tern first. Re-run it after
 pulling to update.
 
 ## Tests

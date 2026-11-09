@@ -3,6 +3,10 @@
 //! Everything else waits for the first frame. Anything added here needs a
 //! TTFP measurement in its commit.
 
+// Release builds are GUI programs on Windows, so launching Tern opens no
+// console window next to its own (spec 0012). Debug builds keep theirs.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod bench;
 mod commands;
 mod config;
@@ -47,17 +51,25 @@ fn main() {
     let start = Instant::now();
 
     let mode = Mode::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
+        attach_console();
         eprintln!("tern: {error}");
         std::process::exit(2);
     });
     match &mode {
-        Mode::Runner { runs } => std::process::exit(bench::run(*runs)),
-        Mode::Import { file, dry_run } => std::process::exit(import::run(file, *dry_run)),
+        Mode::Runner { runs } => {
+            attach_console();
+            std::process::exit(bench::run(*runs))
+        }
+        Mode::Import { file, dry_run } => {
+            attach_console();
+            std::process::exit(import::run(file, *dry_run))
+        }
         Mode::Normal | Mode::Once => {}
     }
     let bench = mode == Mode::Once;
 
     if let Err(message) = check_display(std::env::var_os("WAYLAND_DISPLAY").as_deref()) {
+        attach_console();
         eprintln!("{message}");
         std::process::exit(1);
     }
@@ -229,10 +241,25 @@ fn main() {
             cx.new(|cx| gpui_component::Root::new(workspace, window, cx))
         });
         if let Err(error) = opened {
+            attach_console();
             eprintln!("tern: could not open a window: {error:#}");
             std::process::exit(1);
         }
     });
+}
+
+/// A GUI-subsystem tern.exe has no console, so CLI output and boot errors
+/// attach to the terminal it was started from, if any, before printing.
+/// A normal launch never attaches: Ctrl+C in that terminal would then
+/// close Tern too. Redirected output keeps its handles.
+fn attach_console() {
+    #[cfg(windows)]
+    // SAFETY: no pointers; it fails harmlessly without a parent console.
+    unsafe {
+        windows_sys::Win32::System::Console::AttachConsole(
+            windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
+        );
+    }
 }
 
 /// On Linux, a Wayland session is required. Without one GPUI would start

@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 2
 tasks: [T-040, T-039]
 related: [spec 0001, spec 0011, T-026, OQ-024, OQ-025]
@@ -54,7 +54,10 @@ in place, and uninstalling removes everything the MSI installed.
   console opens from the Start menu. The CLI flags (`--bench-startup` and
   boot errors) attach to the parent console with
   `AttachConsole(ATTACH_PARENT_PROCESS)` when there is one, so the bench
-  still prints from a terminal. Debug builds keep the console.
+  still prints from a terminal. Debug builds keep the console. A normal
+  launch never attaches, or Ctrl+C in the launching `cmd` would close
+  Tern. PowerShell doesn't wait for a GUI program, so the bench is piped
+  there (`| Out-Host`) to print before the next prompt.
 - **C runtime:** linked statically (`+crt-static`), so the MSI ships one
   file and needs no VC++ redistributable [load-bearing].
 - **Resources:** `build.rs` embeds the icon and the version info
@@ -146,7 +149,7 @@ Trust boundaries:
 1. A `v*` tag whose checks pass produces a release with `tern-<version>-x64.msi` next to the Linux packages; a failed check produces neither.
 2. Installing the MSI as a standard user shows no UAC prompt and puts a "Tern" shortcut with Tern's icon in the Start menu.
 3. Launching from the shortcut opens Tern's window to a prompt and no console window.
-4. `tern.exe --bench-startup 3`, run from PowerShell, prints its TTFP lines to that PowerShell.
+4. `tern.exe --bench-startup 3 | Out-Host`, run from PowerShell, prints its TTFP lines to that PowerShell.
 5. On a clean Windows 11 without the VC++ redistributable, the installed Tern starts.
 6. Installing version N+1 over N leaves one entry in Settings → Apps, at N+1, and keeps `config.yaml` and `session.json`; installing N over N+1 is refused.
 7. Uninstalling removes the install folder and the shortcut, and leaves `%APPDATA%\tern\` untouched.
