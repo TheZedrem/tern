@@ -1,10 +1,15 @@
 # CI (T-007, OQ-004): format, lint, test and release-build on Linux and
 # Windows. TTFP isn't gated here, since shared runners are too noisy; the
-# bench stays local (spec 0001). Only GitHub's own actions are used.
-# Called by release.yml, which packages only once these checks pass.
+# bench stays local (spec 0001). Only GitHub's own actions are used,
+# pinned to commit SHAs. Runs on every push to main and every pull
+# request, and is called by release.yml, which packages only once these
+# checks pass.
 name: CI
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_call:
 
 permissions:
@@ -26,7 +31,7 @@ jobs:
         os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
         run: |
@@ -39,7 +44,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libfontconfig-dev
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry

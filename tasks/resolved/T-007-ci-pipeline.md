@@ -1,5 +1,5 @@
 ---
-status: later
+status: now
 blocked-by: []
 ---
 # T-007: CI pipeline for Linux and Windows
@@ -16,3 +16,8 @@ Windows one is the first Windows build at all, T-011), and pin the
 actions to commit SHAs.
 
 Spec: ../spec/architecture.md
+
+Resolved (2026-11-09): the release workflow has run ci.yml green on both
+runners since 0.3.0. ci.yml now also runs on every push to `main` and on
+every pull request, and `actions/checkout` and `actions/cache` are pinned
+to commit SHAs (v7.0.1 and v6.1.0) in both workflows.
