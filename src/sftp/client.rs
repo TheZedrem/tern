@@ -230,10 +230,7 @@ fn spawn(command: &Command) -> std::io::Result<Child> {
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        ssh.creation_flags(CREATE_NO_WINDOW);
-    }
+    ssh.creation_flags(crate::ssh::CREATE_NO_WINDOW);
     ssh.spawn()
 }
 

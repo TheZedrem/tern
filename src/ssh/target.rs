@@ -30,13 +30,14 @@ impl Target {
     /// What `ssh -G` says the connection with these arguments resolves to.
     /// `None` if it can't say; then nothing is filled in automatically.
     pub fn resolve(args: &[String]) -> Option<Self> {
-        let output = Command::new(PROGRAM)
-            .arg("-G")
+        let mut ssh = Command::new(PROGRAM);
+        ssh.arg("-G")
             .args(args)
             .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(&mut ssh, super::CREATE_NO_WINDOW);
+        let output = ssh.output().ok()?;
         let config = String::from_utf8(output.stdout)
             .ok()
             .filter(|_| output.status.success())?;

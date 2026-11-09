@@ -16,6 +16,12 @@ use target::Target;
 /// The program Tern connects with: the OpenSSH client on `PATH`.
 pub const PROGRAM: &str = "ssh";
 
+/// What ssh runs with when Tern starts it outside a pane on Windows: no
+/// console window. tern.exe is a GUI program with no console to share, so
+/// Windows would open one for ssh, which flashes up and vanishes.
+#[cfg(windows)]
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// The group of profiles that name none.
 const PROFILE_GROUP: &str = "Hosts";
 /// The group of the hosts from `~/.ssh/config`.
