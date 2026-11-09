@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-010, T-011, T-002, T-022]
+tasks: [T-010, T-011, T-002, T-022, T-055]
 related: [spec 0005, OQ-003 ✅, OQ-008 ✅, OQ-011 ✅]
 ---
 
@@ -85,10 +85,13 @@ mapping from keys to bytes. Pane IDs are `u32`, unique per app run.
    visible row per frame, and memory is bounded by `scrollback`.
 4. **Copy/paste:** `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C/V` on macOS)
    through GPUI's clipboard. With default bindings `Ctrl+C` reaches the
-   shell. Paste is bracketed when the program asked for it. On Linux every
-   selection also becomes the primary selection, and middle-click pastes
-   it. Copy-on-select is a config option, default off. Mouse selection is
-   `alacritty_terminal`'s (simple, word on double-click, line on triple).
+   shell. Paste is bracketed when the program asked for it. A right click
+   focuses the pane and pastes the clipboard into it, as Windows Terminal
+   and PuTTY do, on every platform; the pane has no context menu. On Linux
+   every selection also becomes the primary selection, and middle-click
+   pastes it. Copy-on-select is a config option, default off. Mouse
+   selection is `alacritty_terminal`'s (simple, word on double-click, line
+   on triple).
 5. **Scrollback:** `config.scrollback` lines, default 10 000. Mouse wheel
    and `Shift+PageUp/PageDown` scroll; any input snaps back to the bottom.
 6. **Search:** `Ctrl+Shift+F` opens an inline search bar. It supports
@@ -144,7 +147,7 @@ only there.
 1. Resizing the window while `vim` is open redraws vim at the new size with no stale rows or wrapping artifacts (Linux and Windows 11).
 2. `cat` of a 50 MB text file finishes without freezing the UI (tab switching stays responsive during it), the last line shown matches the file's last line, and memory doesn't grow by more than the scrollback.
 3. Multi-byte UTF-8 split across read chunks renders correctly, and CJK and emoji render through installed fallback fonts.
-4. `Ctrl+C` interrupts `sleep 100`. `Ctrl+Shift+C` copies the selection, `Ctrl+Shift+V` pastes it as one bracketed paste when the program enabled it, and on Linux middle-click pastes the last selection.
+4. `Ctrl+C` interrupts `sleep 100`. `Ctrl+Shift+C` copies the selection, `Ctrl+Shift+V` and a right click paste it as one bracketed paste when the program enabled it, and on Linux middle-click pastes the last selection.
 5. Search finds a term 5 000 lines up in scrollback, highlights it, and `Esc` returns focus to the shell.
 6. A configured nonexistent shell shows an error in the pane instead of a blank pane or a crash. `exit 0` closes the pane under the default config, and `exit 3` leaves it open showing code 3.
 7. Quitting the app leaves no child shell processes running.

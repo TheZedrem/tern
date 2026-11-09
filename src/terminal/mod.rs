@@ -1228,6 +1228,15 @@ impl TerminalPane {
         self.mouse_up(event, window, cx);
     }
 
+    /// A right click focuses the pane and pastes the clipboard into it, as
+    /// Windows Terminal and PuTTY do (spec 0002, flow 4). The pane has no
+    /// context menu, so the button is free.
+    fn right_click(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle(cx), cx);
+        cx.emit(PaneEvent::Focused);
+        TerminalPane::paste(self, cx);
+    }
+
     /// Middle-click pastes the primary selection (Linux).
     fn middle_click(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         #[cfg(target_os = "linux")]
@@ -1640,6 +1649,7 @@ impl Render for TerminalPane {
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::middle_click))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::right_click))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up_out))
