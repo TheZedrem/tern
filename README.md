@@ -61,6 +61,11 @@ earlier Tauri version took 1.07 s to start and was dropped.
 [releases page](https://github.com/TheZedrem/tern/releases/latest). They
 need glibc 2.39 or newer and a Wayland session.
 
+**Windows 11:** releases after 0.4.0 carry `tern-<version>-x64.msi`.
+It installs for your user only, so it needs no admin rights, and a newer
+MSI upgrades it in place. It's unsigned for now, so SmartScreen warns
+before you run it.
+
 **From source** (Linux, Windows 11, macOS), with a Rust toolchain and the
 [prerequisites](docs/development.md#prerequisites):
 
@@ -96,7 +101,7 @@ shell. You can rebind all of them in the settings or in `config.yaml`.
 
 - Following the shell's working directory (OSC 7) ([T-022](tasks/T-022-osc7-cwd-tracking.md))
 - In the file browser: fuzzy filter, path suggestions, permissions, deleting to the trash, a local sidebar, dragging files out ([tasks](tasks/))
-- A Windows installer, and signed apt and dnf repositories ([T-039](tasks/T-039-windows-installer.md), [T-031](tasks/T-031-package-repositories.md))
+- Signed apt and dnf repositories ([T-031](tasks/T-031-package-repositories.md))
 
 **Toward 1.0** ([roadmap](spec/architecture.md#roadmap))
 

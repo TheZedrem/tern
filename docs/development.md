@@ -14,7 +14,8 @@ How to get a working dev setup. Day-to-day commands are in
   The Wayland client and the Vulkan loader are loaded at runtime.
   - **Fedora:** `sudo dnf install libxkbcommon-devel fontconfig-devel vulkan-loader mesa-vulkan-drivers`
   - **Debian/Ubuntu:** `sudo apt install libxkbcommon-dev libfontconfig-dev libvulkan1 mesa-vulkan-drivers`
-- **Windows 11:** the MSVC toolchain (Visual Studio Build Tools).
+- **Windows 11:** the MSVC toolchain (Visual Studio Build Tools). Only
+  for the MSI: the .NET SDK, for WiX (see [Windows installer](#windows-installer)).
 - **macOS:** Xcode Command Line Tools (compile-only platform). GPUI
   compiles its shaders with `xcrun metal` at build time, which only full
   Xcode ships (`xcodebuild -downloadComponent MetalToolchain`). Without it,
@@ -100,4 +101,26 @@ source `assets/icon.svg`. After changing the SVG, re-render it:
 
 ```sh
 magick -background none -density 192 assets/icon.svg -resize 512x512 -depth 8 assets/icon.png
+magick assets/icon.png -define icon:auto-resize=256,128,64,48,32,24,16 assets/icon.ico
 ```
+
+`assets/icon.ico` is the Windows icon `build.rs` embeds in `tern.exe`.
+
+## Windows installer
+
+The same tag also builds `tern-<version>-x64.msi` on a Windows runner and
+adds it to the release ([spec 0012](../spec/0012-windows-installer.md)).
+It's a per-user install, so it needs no admin rights. Release builds link
+the C runtime statically (`.cargo/config.toml`), so the MSI ships
+`tern.exe` alone. To build it locally after `cargo build --release`:
+
+```powershell
+dotnet tool install --global wix --version 7.0.1   # once
+wix build -arch x64 -acceptEula wix7 packaging/windows/tern.wxs -o target/packages/tern-<version>-x64.msi
+```
+
+`-acceptEula wix7` accepts WiX v7's EULA for this build (OQ-024). The
+MSI's version is `tern.exe`'s, which comes from `Cargo.toml`, so it has to
+be plain `x.y.z`. `wix msi validate -acceptEula wix7 <msi>` runs the ICE
+checks. Expect two warnings: ICE69, because the shortcut and the exe are
+in separate components, and ICE91, because the MSI is per-user only.

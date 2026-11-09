@@ -1,6 +1,6 @@
 ---
 status: later
-blocked-by: [T-040, OQ-024]
+blocked-by: []
 ---
 # T-039: Windows MSI installer
 
@@ -13,5 +13,8 @@ MSI upgrades it in place. Area: meta.
   the MSI to the release `linux` created.
 - Once spec 0012 is approved: add a "Windows packages" row to
   `spec/architecture.md` §Stack.
+
+Built and ICE-validated locally with `wix` 7.0.1 (2026-11-09); the
+install checks are T-052.
 
 Spec: ../spec/0012-windows-installer.md

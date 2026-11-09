@@ -1,0 +1,64 @@
+<!--
+  Tern's MSI (spec 0012): a per-user install of tern.exe into
+  %LOCALAPPDATA%\Programs\Tern plus a Start menu shortcut, no UAC prompt.
+  Built from the release tern.exe; docs/development.md has the commands
+  and release.yml builds it for every tag. The version comes from tern.exe's version info, which build.rs takes
+  from Cargo.toml, so there's one place to bump it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- The UpgradeCode is fixed for the product's lifetime: a new one makes
+       Windows install a second Tern next to the old one [load-bearing]. -->
+  <Package Name="Tern"
+           Manufacturer="Andreas Zeidler"
+           Version="!(bind.FileVersion.TernExe)"
+           UpgradeCode="C03A9729-B0DE-4204-8B88-AF1B7B757ECC"
+           Scope="perUser">
+    <!-- Removing the old version inside the install transaction lets a
+         failed or cancelled upgrade roll back to it, instead of leaving
+         no Tern at all. -->
+    <MajorUpgrade Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of Tern is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Windows reports 10.0 for both 10 and 11, so the build number tells
+         them apart: 22000 is Windows 11's first. -->
+    <Property Id="WINDOWS_BUILD">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+                      Name="CurrentBuildNumber" Type="raw" />
+    </Property>
+    <Launch Condition="Installed OR WINDOWS_BUILD &gt;= 22000"
+            Message="Tern needs Windows 11." />
+
+    <Icon Id="tern.ico" SourceFile="$(sys.SOURCEFILEDIR)..\..\assets\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="tern.ico" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Tern" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Windows Installer wants a per-user component's key path in HKCU,
+         not a file, and the profile folders it creates removed by hand.
+         RemoveFolder leaves Programs alone while other apps are in it.
+         A file plus a registry key path needs a fixed Guid; never change it. -->
+    <Component Id="TernExe" Directory="INSTALLFOLDER" Guid="286DCB5B-DBCD-482B-BE30-D4FB0E5E0415">
+      <File Id="TernExe" Source="$(sys.SOURCEFILEDIR)..\..\target\release\tern.exe" />
+      <RegistryValue Root="HKCU" Key="Software\Tern" Name="Installed"
+                     Type="integer" Value="1" KeyPath="yes" />
+      <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+      <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+    </Component>
+
+    <!-- The AppUserModelID matches the window's (OQ-021), so a pinned
+         taskbar icon and the running window share one button. -->
+    <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder">
+      <Shortcut Id="TernShortcut" Name="Tern" Description="A fast terminal with built-in SSH and SFTP"
+                Target="[#TernExe]">
+        <ShortcutProperty Key="System.AppUserModel.ID" Value="de.zedrem.tern" />
+      </Shortcut>
+      <RegistryValue Root="HKCU" Key="Software\Tern" Name="StartMenuShortcut"
+                     Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+  </Package>
+</Wix>

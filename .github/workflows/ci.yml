@@ -1,5 +1,5 @@
 # CI (T-007, OQ-004): format, lint, test and release-build on Linux and
-# Windows. TTFP isn't gated here, since shared runners are too noisy; the
+# Windows, plus the MSI on Windows. TTFP isn't gated here, since shared runners are too noisy; the
 # bench stays local (spec 0001). Only GitHub's own actions are used,
 # pinned to commit SHAs. Runs on every push to main and every pull
 # request, and is called by release.yml, which packages only once these
@@ -57,3 +57,12 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo build --locked --release
+
+      # Builds the MSI from that exe, so a broken tern.wxs fails here and
+      # not first on a release tag (spec 0012). The EULA: OQ-024.
+      - name: Build the MSI
+        if: runner.os == 'Windows'
+        run: |
+          dotnet tool install --global wix --version 7.0.1
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" build -arch x64 -acceptEula wix7 packaging/windows/tern.wxs -o target/packages/tern-ci-x64.msi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 2
-tasks: [T-040, T-039]
+tasks: [T-040, T-039, T-052]
 related: [spec 0001, spec 0011, T-026, OQ-024, OQ-025]
 ---
 
@@ -62,9 +62,10 @@ in place, and uninstalling removes everything the MSI installed.
   file and needs no VC++ redistributable [load-bearing].
 - **Resources:** `build.rs` embeds the icon and the version info
   (`ProductName` Tern, `FileVersion` from `CARGO_PKG_VERSION`) only when
-  the target is Windows. Linux builds don't run it. This needs a build-only
-  crate (`winresource` or `embed-resource`), which the owner approves at
-  review.
+  the target is Windows. Linux builds don't run it. The build-only crate
+  is `winresource` (owner's call, 2026-11-09), a Windows-only build
+  dependency. `FileDescription` is "Tern" too, since Task Manager shows it
+  as the process name.
 - **Installer tool:** WiX Toolset v7 as a pinned .NET tool (`wix`) with
   one hand-written `.wxs`. There's no `cargo-wix`, because it targets WiX
   v3, which is end-of-life. The EULA is accepted per build with
@@ -76,11 +77,18 @@ in place, and uninstalling removes everything the MSI installed.
   `C03A9729-B0DE-4204-8B88-AF1B7B757ECC`, fixed for the product's
   lifetime. Changing it means Windows installs a second copy next to the
   old one instead of replacing it. Each release is a major upgrade
-  (`<MajorUpgrade>`): a new `ProductCode` and version from `Cargo.toml`.
+  (`<MajorUpgrade>`, scheduled after `InstallInitialize` so a failed
+  upgrade rolls back to the old version): a new `ProductCode`, and the version bound from
+  `tern.exe`'s version info, which `build.rs` takes from `Cargo.toml`.
   Installing an older version over a newer one is refused with a message.
 - **Contents:** `tern.exe` and a Start menu shortcut named "Tern" with
-  the AppUserModelID `de.zedrem.tern` (OQ-021), so pinned taskbar icons
-  group with the running window. That's all. Uninstall removes both.
+  the AppUserModelID `de.zedrem.tern` (OQ-021). Tern sets the same ID on
+  its process at boot (`set_app_identity`), because GPUI's Windows backend
+  ignores the window's `app_id`. With both, pinned taskbar icons group with
+  the running window. Windows Installer requires a per-user
+  component's key path to be an HKCU value, so each of the two components
+  also writes one marker value under `HKCU\Software\Tern`. That's all.
+  Uninstall removes all of it.
 - **Launch condition:** the MSI refuses Windows builds below 22000, so
   Windows 10 gets a clear message instead of a half-working install.
 - **User data:** config, session, the update-check state and keychain
@@ -132,8 +140,9 @@ None: Tern is a local, single-user app with no admin area.
 | None | — | The MSI installs files only; it stores and sends nothing | — | — |
 
 Ground rules touched: none. The installer makes no network call and writes
-only the install folder, the shortcut and the uninstall registry entry
-Windows Installer creates.
+only the install folder, the shortcut, two marker values under
+`HKCU\Software\Tern` and the uninstall registry entry Windows Installer
+creates.
 
 Trust boundaries:
 

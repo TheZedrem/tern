@@ -1,7 +1,7 @@
-# Linux packages (T-026): a `v*` tag builds the .deb, .rpm and AppImage
-# from one release binary and attaches them to a GitHub release, after the
-# CI checks (ci.yml) pass on Linux and Windows. Built on
-# ubuntu-24.04, so every package needs glibc 2.39 or newer.
+# Release packages: a `v*` tag builds the .deb, .rpm and AppImage (T-026)
+# and the Windows MSI (spec 0012) and attaches them to a GitHub release,
+# after the CI checks (ci.yml) pass on Linux and Windows. The Linux ones
+# are built on ubuntu-24.04, so they need glibc 2.39 or newer.
 name: Release
 
 on:
@@ -51,3 +51,28 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
             target/debian/*.deb target/generate-rpm/*.rpm target/packages/*.AppImage
+
+  # Windows MSI (spec 0012). `linux` creates the release and this job only
+  # adds to it, so they can't race. A failure leaves the release without an
+  # MSI; re-running this job adds it.
+  windows:
+    needs: [checks, linux]
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust and WiX
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          dotnet tool install --global wix --version 7.0.1
+          "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+
+      - run: cargo build --locked --release
+      # -acceptEula: the project accepts WiX v7's EULA (OQ-024).
+      - run: wix build -arch x64 -acceptEula wix7 packaging/windows/tern.wxs -o "target/packages/tern-$($env:GITHUB_REF_NAME.TrimStart('v'))-x64.msi"
+
+      - name: Attach the MSI to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload $env:GITHUB_REF_NAME (Get-Item target/packages/*.msi)
