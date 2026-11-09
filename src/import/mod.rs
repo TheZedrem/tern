@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Files over this many bytes are refused, unread (spec 0010, flow 2).
 const MAX_BYTES: u64 = 10 * 1024 * 1024;
@@ -238,6 +238,69 @@ impl Plan {
     }
 }
 
+/// An app whose hosts the Import tab offers, with where it keeps them
+/// (spec 0014, Model).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    MobaXterm,
+    Tabby,
+}
+
+impl Source {
+    pub const ALL: [Source; 2] = [Source::MobaXterm, Source::Tabby];
+
+    /// The name the app goes by, which is also what [`Parsed::format`]
+    /// says for its files.
+    pub fn title(self) -> &'static str {
+        match self {
+            Source::MobaXterm => "MobaXterm",
+            Source::Tabby => "Tabby",
+        }
+    }
+
+    /// Where the installed app keeps its sessions: under the user's config
+    /// directory. `None` where it doesn't run: MobaXterm is Windows-only.
+    pub fn default_path(self) -> Option<PathBuf> {
+        let dir = dirs::config_dir()?;
+        match self {
+            Source::MobaXterm if cfg!(windows) => Some(dir.join("MobaXterm").join("MobaXterm.ini")),
+            Source::MobaXterm => None,
+            Source::Tabby => Some(dir.join("tabby").join("config.yaml")),
+        }
+    }
+}
+
+/// What an import does, in counts, as the Import tab shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Outcome {
+    /// The format the file turned out to be, whatever card it came from.
+    pub format: &'static str,
+    pub new: usize,
+    /// The distinct groups of the new hosts.
+    pub groups: usize,
+    pub duplicates: usize,
+    pub skipped: usize,
+}
+
+impl Outcome {
+    fn of(parsed: &Parsed, plan: &Plan) -> Self {
+        let mut groups: Vec<&str> = plan
+            .imported
+            .iter()
+            .filter_map(|(_, host)| host.group.as_deref())
+            .collect();
+        groups.sort_unstable();
+        groups.dedup();
+        Self {
+            format: parsed.format,
+            new: plan.imported.len(),
+            groups: groups.len(),
+            duplicates: plan.duplicates.len(),
+            skipped: parsed.skipped.len(),
+        }
+    }
+}
+
 /// Runs the import of `file` and prints its report. Returns the exit code.
 pub fn run(file: &Path, dry_run: bool) -> i32 {
     match import(file, dry_run) {
@@ -253,6 +316,22 @@ pub fn run(file: &Path, dry_run: bool) -> i32 {
 }
 
 fn import(file: &Path, dry_run: bool) -> Result<String, String> {
+    let (parsed, plan, path) = execute(file, dry_run)?;
+    Ok(report(&parsed, &plan, &path, dry_run))
+}
+
+/// Imports `file` (or, with `dry_run`, plans it against the config as it
+/// is) and says what that does, in counts: the settings screen's Import
+/// tab (spec 0014). The same code as the CLI's, so both write the same.
+pub fn outcome(file: &Path, dry_run: bool) -> Result<Outcome, String> {
+    let (parsed, plan, _) = execute(file, dry_run)?;
+    Ok(Outcome::of(&parsed, &plan))
+}
+
+/// Reads and parses `file`, plans it against `config.yaml` and, unless
+/// `dry_run`, writes it there. Returns what was found, the plan, and the
+/// config's path.
+fn execute(file: &Path, dry_run: bool) -> Result<(Parsed, Plan, PathBuf), String> {
     let parsed = parse(&read(file)?).ok_or_else(|| {
         format!(
             "{} is neither a MobaXterm session file nor a Tabby config.yaml",
@@ -283,7 +362,7 @@ fn import(file: &Path, dry_run: bool) -> Result<String, String> {
         })?;
         planned.into_inner()
     };
-    Ok(report(&parsed, &plan, &path, dry_run))
+    Ok((parsed, plan, path))
 }
 
 /// Reads `file`, refusing one over [`MAX_BYTES`]. MobaXterm writes
@@ -387,7 +466,6 @@ fn report(parsed: &Parsed, plan: &Plan, config: &Path, dry_run: bool) -> String 
 mod tests {
     use super::*;
     use crate::config::TEMPLATE;
-    use std::path::PathBuf;
 
     /// A MobaXterm session value: connection fields as MobaXterm 23 writes
     /// them, with `kind` (0 = SSH), host, port, user, gateway (field 8) and
@@ -811,5 +889,175 @@ font:
             !report.contains('\x1b') && !report.contains('\x07'),
             "{report:?}"
         );
+    }
+
+    /// What the Import tab would show for `text` planned into `config`.
+    fn outcome_of(text: &str, config: &str) -> Outcome {
+        let parsed = parse(text).expect("parses");
+        let plan = plan(&parsed.hosts, &config::parse(config).config, &[]);
+        Outcome::of(&parsed, &plan)
+    }
+
+    /// Spec 0014 AC1, flow 3: the card's count of a MobaXterm file with
+    /// folders. A host outside any folder is new but adds no group; the
+    /// RDP session and the one behind a jump host are skipped.
+    #[test]
+    fn the_tab_counts_new_hosts_groups_and_skips_of_a_mobaxterm_file() {
+        assert_eq!(
+            outcome_of(&mobaxterm_ini(), TEMPLATE),
+            Outcome {
+                format: "MobaXterm",
+                new: 2,
+                groups: 1,
+                duplicates: 0,
+                skipped: 2,
+            }
+        );
+    }
+
+    /// Spec 0014 flow 3: groups are counted once each, and only for hosts
+    /// that are new; a duplicate's group doesn't count.
+    #[test]
+    fn groups_are_counted_once_and_only_for_new_hosts() {
+        let in_group = |name: &str, host_name: &str, group: &str| Host {
+            group: Some(group.to_owned()),
+            ..host(name, host_name, None)
+        };
+        let hosts = [
+            in_group("a", "a.example.com", "Prod"),
+            in_group("b", "b.example.com", "Prod"),
+            in_group("c", "c.example.com", "Staging"),
+            in_group("old", "old.example.com", "Legacy"),
+            host("loose", "loose.example.com", None),
+        ];
+        let existing = "profiles:\n  old:\n    type: ssh\n    host: old.example.com\n";
+        let plan = plan(&hosts, &config::parse(existing).config, &[]);
+        let parsed = Parsed {
+            format: "MobaXterm",
+            hosts: hosts.to_vec(),
+            skipped: Vec::new(),
+        };
+        let outcome = Outcome::of(&parsed, &plan);
+        assert_eq!((outcome.new, outcome.groups), (4, 2));
+        assert_eq!(outcome.duplicates, 1);
+    }
+
+    /// Spec 0014 AC2: the Tabby card counts the SSH profiles and its local
+    /// and serial profiles as skipped.
+    #[test]
+    fn the_tab_counts_tabby_local_and_serial_profiles_as_skipped() {
+        let text = "profiles:
+  - type: local
+    name: Zsh
+    options: { command: zsh }
+  - type: serial
+    name: Console
+    options: { port: /dev/ttyUSB0, baudrate: 115200 }
+  - type: ssh
+    name: Box
+    options: { host: box.example.com }
+";
+        let outcome = outcome_of(text, TEMPLATE);
+        assert_eq!(outcome.format, Source::Tabby.title());
+        assert_eq!((outcome.new, outcome.skipped), (1, 2));
+    }
+
+    /// Spec 0014 AC3, flow 4: after an import, the card plans the same
+    /// file against the written config and finds nothing new, and a second
+    /// import leaves the text byte for byte as it was.
+    #[test]
+    fn after_an_import_the_card_finds_nothing_new() {
+        for file in [mobaxterm_ini(), TABBY.to_owned()] {
+            let parsed = parse(&file).expect("parses");
+            let first = plan(&parsed.hosts, &config::parse(TEMPLATE).config, &[]);
+            let written = first.apply(TEMPLATE).expect("applies");
+            let again = outcome_of(&file, &written);
+            assert_eq!(again.new, 0);
+            assert_eq!(again.duplicates, parsed.hosts.len());
+            assert_eq!(again.skipped, parsed.skipped.len());
+            let second = plan(&parsed.hosts, &config::parse(&written).config, &[]);
+            assert_eq!(second.apply(&written).as_deref(), Ok(written.as_str()));
+        }
+    }
+
+    /// Spec 0014 AC6, Model: the outcome names the format the file is, so
+    /// a Tabby config chosen on the MobaXterm card is told apart.
+    #[test]
+    fn a_tabby_file_says_tabby_whatever_card_it_came_from() {
+        assert_eq!(outcome_of(TABBY, TEMPLATE).format, Source::Tabby.title());
+        assert_eq!(
+            outcome_of(&mobaxterm_ini(), TEMPLATE).format,
+            Source::MobaXterm.title()
+        );
+    }
+
+    /// Spec 0014 AC5: an exported `.mxtsessions` file, in MobaXterm's
+    /// CP1252, reads and counts like the INI it came from.
+    #[test]
+    fn an_mxtsessions_export_imports_like_the_ini() {
+        let ini = mobaxterm_ini().replace("Prod\\Web", "Café");
+        let cp1252: Vec<u8> = ini
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).expect("Latin-1"))
+            .collect();
+        let export = TempFile::new("export.mxtsessions", &cp1252);
+        let text = read(&export.0).expect("reads");
+        let hosts = |text: &str| parse(text).expect("MobaXterm").hosts;
+        assert_eq!(hosts(&text), hosts(&ini));
+        assert!(
+            hosts(&text)
+                .iter()
+                .any(|h| h.group.as_deref() == Some("Café"))
+        );
+        assert_eq!(outcome_of(&text, TEMPLATE), outcome_of(&ini, TEMPLATE));
+    }
+
+    /// Spec 0014 flow 6: a config that already has a notice still gets a
+    /// count and an import; only a write that adds a notice is refused.
+    #[test]
+    fn a_config_with_notices_still_counts_and_imports() {
+        let existing = format!("default_profile: nowhere\n{TEMPLATE}");
+        assert!(!config::parse(&existing).notices.is_empty(), "no notice");
+        let parsed = parse(TABBY).expect("Tabby");
+        let plan = plan(&parsed.hosts, &config::parse(&existing).config, &[]);
+        assert_eq!(Outcome::of(&parsed, &plan).new, 2);
+        assert!(plan.apply(&existing).is_ok());
+    }
+
+    /// Spec 0014 AC8: the tab's counts and the CLI's report describe the
+    /// same plan: the same number imported and skipped, the same format.
+    #[test]
+    fn the_tab_and_the_cli_report_the_same_import() {
+        for file in [mobaxterm_ini(), TABBY.to_owned()] {
+            let parsed = parse(&file).expect("parses");
+            let plan = plan(&parsed.hosts, &config::parse(TEMPLATE).config, &[]);
+            let outcome = Outcome::of(&parsed, &plan);
+            let report = report(&parsed, &plan, Path::new("config.yaml"), false);
+            let head = format!("Imported {} hosts from {}", outcome.new, outcome.format);
+            assert!(report.starts_with(&head), "{report}");
+            let skipped: usize = report
+                .lines()
+                .filter_map(|line| line.trim().split_once(" session"))
+                .filter_map(|(n, _)| n.parse::<usize>().ok())
+                .sum();
+            assert_eq!(skipped, outcome.skipped, "{report}");
+        }
+    }
+
+    /// Spec 0014 Model: both apps are looked for under the user's config
+    /// directory; MobaXterm only where it runs.
+    #[test]
+    fn each_source_is_looked_for_at_its_default_place() {
+        let dir = dirs::config_dir().expect("a config dir");
+        assert_eq!(
+            Source::Tabby.default_path(),
+            Some(dir.join("tabby").join("config.yaml"))
+        );
+        let moba = Source::MobaXterm.default_path();
+        if cfg!(windows) {
+            assert_eq!(moba, Some(dir.join("MobaXterm").join("MobaXterm.ini")));
+        } else {
+            assert_eq!(moba, None);
+        }
     }
 }

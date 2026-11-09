@@ -47,7 +47,7 @@ interface that explains itself.
 - [x] SSH profiles and hosts from `~/.ssh/config`, connecting through the system `ssh` ([spec 0006](spec/0006-ssh-hosts.md))
 - [x] Host picker with groups and filtering
 - [x] ssh prompts answered in the app, passwords remembered in the OS keychain on request
-- [x] Importing hosts from MobaXterm and Tabby ([spec 0010](spec/0010-import-hosts.md))
+- [x] Importing hosts from MobaXterm and Tabby: one click on the settings screen's Import tab, or `tern --import-hosts` ([spec 0010](spec/0010-import-hosts.md), [spec 0014](spec/0014-import-tab.md))
 - [x] SFTP sidebar (left or right, opened per SSH pane, `Ctrl+Shift+S`): browse folders with a path field ([spec 0008](spec/0008-sftp-panel.md), [T-023](tasks/resolved/T-023-sftp-panel.md))
 - [x] SFTP downloads, uploads (also dropped from the file manager), rename, delete, new folder ([T-035](tasks/resolved/T-035-sftp-transfers.md))
 - [x] Editing remote files in a local app from the SFTP sidebar, saves uploaded on a click, on save or on focus ([T-036](tasks/resolved/T-036-sftp-edits.md))

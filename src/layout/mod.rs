@@ -1665,6 +1665,12 @@ impl Workspace {
         match event {
             SettingsEvent::Change(change) => self.write_change(change.clone(), window, cx),
             SettingsEvent::Pick(pick) => self.pick_setting(*pick, window, cx),
+            // An import may have created the config directory.
+            SettingsEvent::Written => {
+                if let Some(watcher) = &mut self.watcher {
+                    watcher.arm();
+                }
+            }
             SettingsEvent::Close => {
                 self.settings = None;
                 self.focus_active(window, cx);

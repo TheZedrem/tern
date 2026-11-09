@@ -39,7 +39,7 @@ picker at once.
 - Jump hosts, tunnels, X11 and terminal settings: not imported; the report lists what was left out (`~/.ssh/config` does jump hosts, spec 0006)
 - RDP, VNC, serial, telnet and local shell sessions: skipped
 - Syncing or re-importing: one-off, the user starts it
-- An in-app import (palette command, file dialog, GUI preview): the CLI covers a one-off at a fraction of the code; *Later* if users ask
+- An in-app import: the settings screen's Import tab, spec 0014
 - Importing duplicates or picking single hosts: the user edits `config.yaml` or the source file instead
 
 ## Design
