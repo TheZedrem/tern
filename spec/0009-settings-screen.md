@@ -27,7 +27,7 @@ can be changed from the screen, the change applies within a second, and
 **In scope:**
 
 - "Open settings" (`settings.open`) in the palette; no default key (no `Shift` combination for it works on every layout, OQ-014)
-- Sections: Font (family from the installed fonts, size, line height), Theme, Cursor, Appearance (includes `active_pane_border`, `inactive_pane_dim`; spec 0003), Behavior (`scrollback`, `close_on_exit`, `copy_on_select`, `open_links`, `restore_session`, `open_new_tab`, `default_profile`), Keybindings, Profiles
+- Sections: Font (family from the installed fonts, size, line height), Theme, Cursor, Appearance (includes `active_pane` border width, color and dim; spec 0003), Behavior (`scrollback`, `close_on_exit`, `copy_on_select`, `open_links`, `restore_session`, `open_new_tab`, `default_profile`), Keybindings, Profiles
 - Keybindings: each command with its key; record a new one, or reset it to the default
 - Profiles: add, edit, delete local and SSH profiles (spec 0005, 0006 fields)
 

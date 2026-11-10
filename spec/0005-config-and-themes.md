@@ -75,8 +75,7 @@ cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
 tab_bar: top                        # top | bottom | left | right (spec 0003)
-active_pane_border: true            # accent border on the focused pane in a split (spec 0003)
-inactive_pane_dim: 15               # percent the other panes are dimmed, 0–50, 0 = off (spec 0003)
+active_pane: { border: 2, color: null, dim: 15 }  # in a split: border px 0–6, color null → theme accent, dim % 0–50 (spec 0003)
 sftp_sidebar: right                 # left | right (spec 0008)
 sftp_click: edit                    # edit | download (spec 0008)
 sftp_upload: manual                 # manual | save | focus (spec 0008)
