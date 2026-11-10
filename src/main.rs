@@ -65,8 +65,8 @@ fn main() {
             std::process::exit(bench::run(*runs))
         }
         Mode::Import { file, dry_run } => {
-            attach_console();
-            std::process::exit(import::run(file, *dry_run))
+            let may_ask = !attach_console();
+            std::process::exit(import::run(file, *dry_run, may_ask))
         }
         Mode::Normal | Mode::Once => {}
     }
@@ -265,14 +265,21 @@ fn main() {
 /// attach to the terminal it was started from, if any, before printing.
 /// A normal launch never attaches: Ctrl+C in that terminal would then
 /// close Tern too. Redirected output keeps its handles.
-fn attach_console() {
+///
+/// Returns whether it attached to the parent's console: then the shell
+/// didn't wait for Tern and reads the same keyboard, so Tern must not read
+/// from it (spec 0015, flow 6). A console-subsystem build already has a
+/// console of its own, and the attach fails.
+fn attach_console() -> bool {
     #[cfg(windows)]
     // SAFETY: no pointers; it fails harmlessly without a parent console.
     unsafe {
         windows_sys::Win32::System::Console::AttachConsole(
             windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
-        );
+        ) != 0
     }
+    #[cfg(not(windows))]
+    false
 }
 
 /// On Linux, a Wayland session is required. Without one GPUI would start

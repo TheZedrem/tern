@@ -54,8 +54,14 @@ runtime-shaders = ["gpui_platform/runtime_shaders"]
 # What interprocess takes the askpass pipe's security descriptor as.
 widestring = "1"
 # AttachConsole, so CLI output reaches the terminal of a GUI-subsystem tern.exe;
-# PeekNamedPipe, to wait on askpass helpers without a read.
-windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Pipes"] }
+# PeekNamedPipe, to wait on askpass helpers without a read; the registry,
+# for PuTTY's and WinSCP's sessions (spec 0015, OQ-029).
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+] }
 
 [target.'cfg(windows)'.build-dependencies]
 # build.rs embeds the icon and version info in tern.exe (spec 0012).

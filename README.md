@@ -45,7 +45,9 @@ earlier Tauri version took 1.07 s to start and was dropped.
 - Hosts from `~/.ssh/config` and SSH profiles, connected through your system's `ssh`
 - A host picker with groups and filtering
 - ssh's prompts answered in the app, with passwords kept in the OS keychain if you choose
-- Import hosts from MobaXterm and Tabby in one click
+- Import hosts from MobaXterm, Tabby, PuTTY and WinSCP in one click. PuTTY's
+  `.ppk` keys need converting with `puttygen` first, and Pageant users must
+  turn on Pageant's OpenSSH pipe for `ssh` to use it
 - An SFTP sidebar on every SSH pane: browse, download, upload (drag and drop too), rename and delete
 - Edit remote files in your own editor; saves are uploaded on a click, on save or on focus
 - A files pane that shows the local disk or any saved host as a tree next to your terminals

@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: implemented  # draft | approved | implemented
 phase: 2
 tasks: [T-059, T-060]
 related: [spec 0010, spec 0014, spec 0006, OQ-029]
@@ -23,6 +23,8 @@ Done means: Settings → Import on Windows shows a PuTTY and a WinSCP card
 with the count of new hosts read straight from the registry, one click
 imports them as spec 0010 does, and `tern --import-hosts` takes their
 `.reg` exports, `WinSCP.ini`, and PuTTY's `~/.putty/sessions` on Linux.
+PuTTY sessions often save no user (PuTTY asks "login as:" when it
+connects), so the import asks for one, for all hosts at once or per host.
 
 ## Scope
 
@@ -32,6 +34,7 @@ imports them as spec 0010 does, and `tern --import-hosts` takes their
 - WinSCP: its sites in the registry, a `.reg` export of them, and `WinSCP.ini`; SFTP and SCP sites only, folders kept as groups
 - Two cards on the Import tab, after Tabby, with spec 0014's states and flows
 - `--import-hosts` accepting these files (and the `sessions` directory), told apart by content
+- Asking for the user of hosts that have none, on the card and in the CLI
 
 **Out of scope:**
 
@@ -79,19 +82,32 @@ imports them as spec 0010 does, and `tern --import-hosts` takes their
   hosts with the hint `puttygen <key> -O private-openssh -o <key>.pem`.
   The key file itself is never opened [load-bearing].
 
+- **Hosts without a user:** a PuTTY or WinSCP host with no `UserName`
+  is asked for one (not MobaXterm or Tabby: their files always say who).
+  The answer is a user *for all* plus one *per host*; a host's own entry
+  wins, a blank one takes the "for all" entry, and with both blank the
+  host is imported without a user, as before. Users are set before the
+  plan, so duplicates are judged on the user that's written. An entered
+  user is cleaned and checked like a read one. Hosts are told apart by
+  their full site name (group and name).
+
 ### Module surface
 
 - `Source::PuTTY` and `Source::WinSCP` beside MobaXterm and Tabby, with
   their default places: on Windows the registry key (WinSCP: the registry,
   or `%APPDATA%\WinSCP.ini` if the registry has no sites); on Linux
   `~/.putty/sessions` for PuTTY, none for WinSCP.
-- `Outcome` and the CLI report gain a "without key" list.
+- `Outcome` and the CLI report gain a "without key" list; `Outcome`
+  lists the hosts asking for a user.
+- The import takes the users entered (for all, per host) beside the
+  source; the card and the CLI collect them, the import applies them.
 
 ### Flows
 
 1. **CLI:** `tern --import-hosts <file-or-dir>` reads, detects and imports
    as spec 0010, flows 1–5. A `.reg` with neither app's sessions is "not
-   a known format", exit 1. Over 10 MB, as spec 0010.
+   a known format", exit 1. One with both (an export of all of
+   `HKCU\Software`) imports PuTTY's; WinSCP's take an export of its own key. Over 10 MB, as spec 0010.
 2. **Tab opens (Windows):** the PuTTY and WinSCP cards read their registry
    keys on the background executor [load-bearing], as spec 0014 flow 1.
    No key or no sessions: "No PuTTY sessions found" with "Choose file…"
@@ -101,9 +117,23 @@ imports them as spec 0010 does, and `tern --import-hosts` takes their
 4. **Import:** spec 0014 flow 4, unchanged: re-read, re-plan against the
    config as it is now, append. The card's result adds "N without key
    (PuTTY format)" when any `.ppk` was dropped.
-5. **Overlap:** a host in both PuTTY and WinSCP imports from whichever
+5. **Users (card):** with hosts lacking a user, the card shows a "User
+   for all" input, then one input per such host (labelled with its name
+   and host) whose placeholder shows the "for all" entry. The entries
+   stay on the card until it reads another file; Import uses them.
+   Typing doesn't re-plan the count; Import re-plans as flow 4 does.
+   Past 50 such hosts the rest get no input of their own and take the
+   "for all" entry, so thousands of sessions keep the tab responsive.
+6. **Users (CLI):** with stdin a terminal, after reading and before
+   planning, the import asks on stderr "N hosts have no user. User for
+   all (blank: ask per host):" and, if that was blank, one line per host
+   ("  name (host): "). A blank answer leaves that host without a user;
+   end of input leaves the rest without. With stdin not a terminal,
+   nothing is asked [load-bearing: scripts never hang]. `--dry-run` asks
+   too, since the user decides what's a duplicate.
+7. **Overlap:** a host in both PuTTY and WinSCP imports from whichever
    card is clicked first; the second counts it as a duplicate (spec 0010).
-6. **Failure:** an unreadable key or value, or more than 10 MB of values
+8. **Failure:** an unreadable key or value, or more than 10 MB of values
    read: the card shows one error line and nothing is written. A single
    session with a bad host or port is skipped and counted, as spec 0010.
 
@@ -114,8 +144,14 @@ None: the registry and files are read only on the Import tab or by
 
 ### Platform notes
 
-- Windows 11: both cards read `HKEY_CURRENT_USER` only (OQ-029: through
-  `windows-sys`'s registry API or `reg export`). Key paths stay as written.
+- Windows 11: both cards read `HKEY_CURRENT_USER` only, through
+  `windows-sys`'s registry API (OQ-029), and only the values the parsers
+  use, by name: a `Password` value is never queried.
+- Windows 11, CLI: the release `tern.exe` is a GUI-subsystem binary that
+  attaches to its parent's console; the shell doesn't wait for it and
+  reads the same keyboard, so that build never asks for users (flow 6)
+  and imports without them. The Import tab is where Windows users set
+  them. A console-subsystem (debug) build asks as on Linux. Key paths stay as written.
   Many PuTTY users authenticate through Pageant; the system `ssh` doesn't
   talk to Pageant unless the user enables Pageant's OpenSSH pipe, so a
   host imported without key may ask for a password. Docs say so; Tern
@@ -129,6 +165,7 @@ None: the registry and files are read only on the Import tab or by
 
 | Data | Where | Purpose | Legal basis | Retention |
 |---|---|---|---|---|
+| Users typed for hosts without one | On the card while it's open; written to `config.yaml` with the host | The import the user starts | As below | As any profile |
 | Hosts, users, key paths, folder names | Read from the registry or the chosen file; written to `config.yaml`; shown as counts | The import the user starts | The user's own device; no one else processes it | As any profile (spec 0005) |
 
 Trust boundaries as spec 0010: the registry and the file are untrusted
@@ -145,11 +182,12 @@ are never opened. Nothing leaves the machine.
 3. WinSCP sites `Prod/Web/app1` (SFTP) and `ftp-box` (FTP) import `app1` in group `Prod / Web` and skip `ftp-box` as not SSH; the same from the registry, a `.reg` export and `WinSCP.ini`.
 4. A WinSCP site with a saved password and a PuTTY session with a `.ppk` key: no password in `config.yaml`, the output or the keychain; the PuTTY host is imported without `identity_file`, and the report names it with the `puttygen` hint.
 5. A host saved in both PuTTY and WinSCP imports once: the second card counts it as a duplicate.
-6. PuTTY's `Default Settings` session never shows up as a host or in a count; a session named `my%20box` is imported as `my box`.
-7. A session behind a PuTTY SSH proxy or a WinSCP tunnel is skipped as "behind a jump host".
+6. PuTTY's `Default Settings` session never shows up as a host or in a count; a session named `my%20box` is imported as `my box`; a session behind a PuTTY SSH proxy or a WinSCP tunnel is skipped as "behind a jump host".
+7. Three PuTTY sessions without a user: `alice` for all and `bob` for the second imports `alice`, `bob`, `alice`; everything blank imports them without `user:`; a session that saved `carol` is never asked.
 8. On Linux, a `~/.putty/sessions/` directory is found by the PuTTY card and imports its SSH sessions; the WinSCP card offers only "Choose file…".
-9. Opening the Import tab with 5,000 PuTTY sessions in the registry keeps the screen responsive, and a normal launch's TTFP is unchanged.
+9. `tern --import-hosts putty.reg` in a terminal asks for users as flow 6; with stdin piped or `/dev/null` it asks nothing and imports without users.
+10. Opening the Import tab with 5,000 PuTTY sessions in the registry keeps the screen responsive, and a normal launch's TTFP is unchanged.
 
 ## Open questions
 
-- OQ-029: read the registry through `windows-sys` (`Win32_System_Registry`, a feature of a crate Tern already has) or by spawning `reg export` into a temp file? Leaning `windows-sys`.
+- OQ-029 ✅: the registry is read through `windows-sys`'s `Win32_System_Registry` feature.

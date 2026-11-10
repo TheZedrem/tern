@@ -1,11 +1,16 @@
 //! `tern --import-hosts <file> [--dry-run]` (spec 0010): the SSH hosts
-//! of a MobaXterm or Tabby file added to `config.yaml` as `type: ssh`
-//! profiles, once, with a report on stdout. Runs instead of the app: no
-//! window, no PTY, no session. Passwords and vaults are never read into a
-//! host; the parsers have no field for them.
+//! of a MobaXterm, Tabby, PuTTY or WinSCP file (spec 0015) added to
+//! `config.yaml` as `type: ssh` profiles, once, with a report on stdout.
+//! Runs instead of the app: no window, no PTY, no session. Passwords and
+//! vaults are never read into a host; the parsers have no field for them.
 
 mod mobaxterm;
+mod putty;
+#[cfg(windows)]
+mod registry;
+mod sessions;
 mod tabby;
+mod winscp;
 
 use crate::config::{self, Config, ProfileKind};
 use crate::settings::change::{ProfileForm, new_id};
@@ -14,7 +19,7 @@ use crate::ssh;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::io::Read;
+use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Files over this many bytes are refused, unread (spec 0010, flow 2).
@@ -35,6 +40,9 @@ pub struct Host {
     pub user: Option<String>,
     pub identity_file: Option<String>,
     pub group: Option<String>,
+    /// A PuTTY-format key the session named, which OpenSSH can't read: left
+    /// out of the profile, named in the report (spec 0015, Model).
+    pub ppk: Option<String>,
 }
 
 /// Why a session of the file isn't imported.
@@ -45,6 +53,7 @@ pub enum Skip {
     Proxy,
     BadHost,
     BadPort,
+    Workspace,
 }
 
 impl fmt::Display for Skip {
@@ -55,6 +64,7 @@ impl fmt::Display for Skip {
             Skip::Proxy => "behind a proxy",
             Skip::BadHost => "no usable host",
             Skip::BadPort => "an invalid port",
+            Skip::Workspace => "a WinSCP workspace",
         })
     }
 }
@@ -66,6 +76,9 @@ pub struct Parsed {
     pub format: &'static str,
     pub hosts: Vec<Host>,
     pub skipped: Vec<Skip>,
+    /// Whether a host without a user is asked for one: PuTTY and WinSCP
+    /// often save none (spec 0015, Model).
+    pub asks_user: bool,
 }
 
 impl Parsed {
@@ -74,6 +87,40 @@ impl Parsed {
             Ok(host) => self.hosts.push(host),
             Err(skip) => self.skipped.push(skip),
         }
+    }
+
+    /// The hosts asked for a user: none of them saved one.
+    fn asking(&self) -> impl Iterator<Item = &Host> {
+        self.hosts
+            .iter()
+            .filter(|host| self.asks_user && host.user.is_none())
+    }
+}
+
+/// Users entered for hosts that saved none (spec 0015, Model): one for
+/// all, and one per host by [`Host::site`]. A host's own non-blank entry
+/// wins, else the one for all; with both blank it keeps no user.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Users {
+    pub all: String,
+    pub each: BTreeMap<String, String>,
+}
+
+impl Users {
+    /// `parsed`'s hosts with the entered users set where they ask for one.
+    fn hosts(&self, parsed: &Parsed) -> Vec<Host> {
+        let mut hosts = parsed.hosts.clone();
+        for host in hosts.iter_mut() {
+            if !(parsed.asks_user && host.user.is_none()) {
+                continue;
+            }
+            let own = self.each.get(&host.site()).map(|user| clean(user));
+            let user = own
+                .filter(|user| !user.is_empty())
+                .unwrap_or_else(|| clean(&self.all));
+            host.user = Some(user).filter(|user| !user.is_empty());
+        }
+        hosts
     }
 }
 
@@ -105,7 +152,30 @@ impl Host {
             identity_file: some(identity_file),
             group: group.and_then(some),
             host,
+            ppk: None,
         })
+    }
+
+    /// The host with a `.ppk` key moved out of `identity_file`: OpenSSH
+    /// can't read one, and the file is never opened (spec 0015, Model).
+    fn without_ppk(mut self) -> Self {
+        if self
+            .identity_file
+            .as_deref()
+            .is_some_and(|key| key.to_lowercase().ends_with(".ppk"))
+        {
+            self.ppk = self.identity_file.take();
+        }
+        self
+    }
+
+    /// What tells the hosts of one file apart: the group and the name, as
+    /// the app showed the site.
+    pub fn site(&self) -> String {
+        match &self.group {
+            Some(group) => format!("{group} / {}", self.name),
+            None => self.name.clone(),
+        }
     }
 
     /// `user@host:port`, with only what's set, as the host picker shows it.
@@ -244,10 +314,17 @@ impl Plan {
 pub enum Source {
     MobaXterm,
     Tabby,
+    PuTTY,
+    WinSCP,
 }
 
 impl Source {
-    pub const ALL: [Source; 2] = [Source::MobaXterm, Source::Tabby];
+    pub const ALL: [Source; 4] = [
+        Source::MobaXterm,
+        Source::Tabby,
+        Source::PuTTY,
+        Source::WinSCP,
+    ];
 
     /// The name the app goes by, which is also what [`Parsed::format`]
     /// says for its files.
@@ -255,17 +332,92 @@ impl Source {
         match self {
             Source::MobaXterm => "MobaXterm",
             Source::Tabby => "Tabby",
+            Source::PuTTY => "PuTTY",
+            Source::WinSCP => "WinSCP",
         }
     }
 
-    /// Where the installed app keeps its sessions: under the user's config
-    /// directory. `None` where it doesn't run: MobaXterm is Windows-only.
+    /// Where the installed app keeps its sessions in a file: under the
+    /// user's config directory, or PuTTY's `~/.putty/sessions` on Linux.
+    /// `None` where it doesn't run, or keeps them in the registry only.
     pub fn default_path(self) -> Option<PathBuf> {
         let dir = dirs::config_dir()?;
         match self {
             Source::MobaXterm if cfg!(windows) => Some(dir.join("MobaXterm").join("MobaXterm.ini")),
-            Source::MobaXterm => None,
             Source::Tabby => Some(dir.join("tabby").join("config.yaml")),
+            Source::PuTTY if cfg!(target_os = "linux") => {
+                Some(dirs::home_dir()?.join(".putty").join("sessions"))
+            }
+            // Where WinSCP writes when told to keep its sites in a file.
+            Source::WinSCP if cfg!(windows) => Some(dir.join("WinSCP.ini")),
+            Source::MobaXterm | Source::PuTTY | Source::WinSCP => None,
+        }
+    }
+
+    /// Where the installed app's sessions are, if anywhere: on Windows
+    /// PuTTY's and WinSCP's registry key when it has sessions (WinSCP's
+    /// `WinSCP.ini` otherwise), else [`Self::default_path`] if it exists.
+    /// Reads the registry and the disk: never on the UI thread.
+    pub fn find(self) -> Option<Place> {
+        #[cfg(windows)]
+        if let Some(key) = self.registry_key() {
+            // A key that can't be read is shown as the error it is.
+            let empty = registry::sessions(key)
+                .is_ok_and(|sessions| sessions.iter().all(sessions::Session::is_defaults));
+            if !empty {
+                return Some(Place::Registry(self));
+            }
+        }
+        self.default_path()
+            .filter(|path| path.exists())
+            .map(Place::File)
+    }
+
+    #[cfg(windows)]
+    fn registry_key(self) -> Option<&'static str> {
+        match self {
+            Source::PuTTY => Some(sessions::PUTTY_KEY),
+            Source::WinSCP => Some(sessions::WINSCP_KEY),
+            Source::MobaXterm | Source::Tabby => None,
+        }
+    }
+
+    /// What the card says when [`Self::find`] finds nothing.
+    pub fn missing(self) -> String {
+        match (self, self.default_path()) {
+            (Source::PuTTY, _) if cfg!(windows) => "No PuTTY sessions found.".into(),
+            (Source::WinSCP, _) if cfg!(windows) => "No WinSCP sites found.".into(),
+            (_, Some(path)) => format!("Not found at {}", path.display()),
+            (Source::MobaXterm, None) => {
+                "MobaXterm runs on Windows: choose an exported .mxtsessions file.".into()
+            }
+            (Source::WinSCP, None) => {
+                "WinSCP runs on Windows: choose a .reg export or WinSCP.ini.".into()
+            }
+            (Source::PuTTY, None) => "Choose a .reg export of PuTTY's sessions.".into(),
+            (Source::Tabby, None) => "This system has no config directory.".into(),
+        }
+    }
+}
+
+/// What an import reads: a file (or PuTTY's sessions directory), or on
+/// Windows an app's registry key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Place {
+    File(PathBuf),
+    #[cfg(windows)]
+    Registry(Source),
+}
+
+impl fmt::Display for Place {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Place::File(path) => write!(f, "{}", path.display()),
+            #[cfg(windows)]
+            Place::Registry(source) => {
+                let key = source.registry_key().unwrap_or_default();
+                write!(f, "HKEY_CURRENT_USER\\{key}")
+            }
         }
     }
 }
@@ -280,6 +432,10 @@ pub struct Outcome {
     pub groups: usize,
     pub duplicates: usize,
     pub skipped: usize,
+    /// New hosts whose `.ppk` key was left out.
+    pub without_key: usize,
+    /// The hosts asked for a user, as read (spec 0015, flow 5).
+    pub asking: Vec<Host>,
 }
 
 impl Outcome {
@@ -297,13 +453,31 @@ impl Outcome {
             groups: groups.len(),
             duplicates: plan.duplicates.len(),
             skipped: parsed.skipped.len(),
+            without_key: plan
+                .imported
+                .iter()
+                .filter(|(_, host)| host.ppk.is_some())
+                .count(),
+            asking: parsed.asking().cloned().collect(),
         }
     }
 }
 
 /// Runs the import of `file` and prints its report. Returns the exit code.
-pub fn run(file: &Path, dry_run: bool) -> i32 {
-    match import(file, dry_run) {
+/// With `may_ask` and stdin a terminal, hosts without a user are asked
+/// for one first (spec 0015, flow 6); a caller whose shell doesn't wait
+/// for it (a GUI-subsystem `tern.exe`) passes `false`.
+pub fn run(file: &Path, dry_run: bool, may_ask: bool) -> i32 {
+    let imported = load(&Place::File(file.to_owned())).and_then(|parsed| {
+        let users = if may_ask && std::io::stdin().is_terminal() {
+            ask(&parsed)
+        } else {
+            Users::default()
+        };
+        let (plan, path) = execute(&parsed, &users, dry_run)?;
+        Ok(report(&parsed, &plan, &path, dry_run))
+    });
+    match imported {
         Ok(report) => {
             print!("{report}");
             0
@@ -315,34 +489,87 @@ pub fn run(file: &Path, dry_run: bool) -> i32 {
     }
 }
 
-fn import(file: &Path, dry_run: bool) -> Result<String, String> {
-    let (parsed, plan, path) = execute(file, dry_run)?;
-    Ok(report(&parsed, &plan, &path, dry_run))
+/// Asks on stderr for the users of the hosts that have none: one for all,
+/// or, left blank, one per host. A blank answer or the end of input leaves
+/// them without.
+fn ask(parsed: &Parsed) -> Users {
+    let asking: Vec<&Host> = parsed.asking().collect();
+    let mut users = Users::default();
+    if asking.is_empty() {
+        return users;
+    }
+    let mut lines = std::io::stdin().lock().lines();
+    let mut prompt = |text: String| {
+        eprint!("{text}");
+        let _ = std::io::stderr().flush();
+        lines.next()?.ok().map(|line| line.trim().to_owned())
+    };
+    let hosts = if asking.len() == 1 {
+        "host has"
+    } else {
+        "hosts have"
+    };
+    let all = format!(
+        "{} {hosts} no user. User for all (blank: ask per host): ",
+        asking.len()
+    );
+    match prompt(all) {
+        Some(all) if !all.is_empty() => users.all = all,
+        Some(_) => {
+            for host in asking {
+                let Some(user) = prompt(format!("  {} ({}): ", host.site(), host.host)) else {
+                    break;
+                };
+                users.each.insert(host.site(), user);
+            }
+        }
+        None => {}
+    }
+    users
 }
 
-/// Imports `file` (or, with `dry_run`, plans it against the config as it
-/// is) and says what that does, in counts: the settings screen's Import
-/// tab (spec 0014). The same code as the CLI's, so both write the same.
-pub fn outcome(file: &Path, dry_run: bool) -> Result<Outcome, String> {
-    let (parsed, plan, _) = execute(file, dry_run)?;
+/// Imports what `place` holds (or, with `dry_run`, plans it against the
+/// config as it is), with `users` for the hosts that have none, and says
+/// what that does, in counts: the settings screen's Import tab (spec
+/// 0014). The same code as the CLI's, so both write the same.
+pub fn outcome(place: &Place, users: &Users, dry_run: bool) -> Result<Outcome, String> {
+    let parsed = load(place)?;
+    let (plan, _) = execute(&parsed, users, dry_run)?;
     Ok(Outcome::of(&parsed, &plan))
 }
 
-/// Reads and parses `file`, plans it against `config.yaml` and, unless
-/// `dry_run`, writes it there. Returns what was found, the plan, and the
-/// config's path.
-fn execute(file: &Path, dry_run: bool) -> Result<(Parsed, Plan, PathBuf), String> {
-    let parsed = parse(&read(file)?).ok_or_else(|| {
-        format!(
-            "{} is neither a MobaXterm session file nor a Tabby config.yaml",
-            file.display()
-        )
-    })?;
+/// Reads and parses what `place` holds, told apart by content.
+pub fn load(place: &Place) -> Result<Parsed, String> {
+    match place {
+        Place::File(path) if path.is_dir() => Ok(putty::parse(&sessions::dir(path)?)),
+        Place::File(path) => parse(&read(path)?).ok_or_else(|| {
+            format!(
+                "{} is not a MobaXterm, Tabby, PuTTY or WinSCP file",
+                path.display()
+            )
+        }),
+        #[cfg(windows)]
+        Place::Registry(source) => {
+            let key = source.registry_key().unwrap_or_default();
+            let found = registry::sessions(key)?;
+            Ok(match source {
+                Source::WinSCP => winscp::parse(&found),
+                _ => putty::parse(&found),
+            })
+        }
+    }
+}
+
+/// Plans `parsed`'s hosts, with `users` set, against `config.yaml` and,
+/// unless `dry_run`, writes them there. Returns the plan and the config's
+/// path.
+fn execute(parsed: &Parsed, users: &Users, dry_run: bool) -> Result<(Plan, PathBuf), String> {
+    let hosts = users.hosts(parsed);
     let path = config::default_path().ok_or("this system has no config directory")?;
     let aliases = ssh::config_path()
         .map(|path| ssh::config::aliases(&path).0)
         .unwrap_or_default();
-    let plan_for = |text: &str| plan(&parsed.hosts, &config::parse(text).config, &aliases);
+    let plan_for = |text: &str| plan(&hosts, &config::parse(text).config, &aliases);
     let plan = if dry_run {
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
@@ -362,11 +589,12 @@ fn execute(file: &Path, dry_run: bool) -> Result<(Parsed, Plan, PathBuf), String
         })?;
         planned.into_inner()
     };
-    Ok((parsed, plan, path))
+    Ok((plan, path))
 }
 
-/// Reads `file`, refusing one over [`MAX_BYTES`]. MobaXterm writes
-/// CP1252, so text that isn't UTF-8 is read as that.
+/// Reads `file`, refusing one over [`MAX_BYTES`]. `reg export` writes
+/// UTF-16 with a BOM; MobaXterm writes CP1252, so other text that isn't
+/// UTF-8 is read as that.
 fn read(file: &Path) -> Result<String, String> {
     let fail = |e: std::io::Error| format!("{}: {e}", file.display());
     let mut bytes = Vec::new();
@@ -377,6 +605,15 @@ fn read(file: &Path) -> Result<String, String> {
         .map_err(fail)?;
     if bytes.len() as u64 > MAX_BYTES {
         return Err(format!("{} is over 10 MB", file.display()));
+    }
+    if let Some(utf16) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        let units: Vec<u16> = utf16
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| u16::from_le_bytes(pair))
+            .collect();
+        return Ok(String::from_utf16_lossy(&units));
     }
     let text = String::from_utf8(bytes).unwrap_or_else(|e| cp1252(e.as_bytes()));
     Ok(match text.strip_prefix('\u{feff}') {
@@ -402,11 +639,23 @@ fn cp1252(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// The hosts of `text`, told apart by content: `[Bookmarks…]` sections
-/// are MobaXterm, `profiles:` entries with a `type:` are Tabby. `None` for
+/// The hosts of `text`, told apart by content: a `.reg` export is PuTTY's
+/// or WinSCP's by the key its sessions are under (`None` with neither),
+/// `[Sessions\…]` sections are WinSCP.ini, `[Bookmarks…]` sections
+/// MobaXterm, `profiles:` entries with a `type:` Tabby. `None` for
 /// anything else.
 pub fn parse(text: &str) -> Option<Parsed> {
-    if mobaxterm::detect(text) {
+    if let Some(found) = sessions::reg(text, sessions::PUTTY_KEY) {
+        if !found.is_empty() {
+            return Some(putty::parse(&found));
+        }
+        return sessions::reg(text, sessions::WINSCP_KEY)
+            .filter(|found| !found.is_empty())
+            .map(|found| winscp::parse(&found));
+    }
+    if let Some(found) = sessions::ini(text) {
+        Some(winscp::parse(&found))
+    } else if mobaxterm::detect(text) {
         Some(mobaxterm::parse(text))
     } else {
         tabby::parse(text)
@@ -444,6 +693,27 @@ fn report(parsed: &Parsed, plan: &Plan, config: &Path, dry_run: bool) -> String 
         out.push_str("Already there, not imported:\n");
         for (host, of) in &plan.duplicates {
             out.push_str(&line(host, format!("  ({of})")));
+        }
+    }
+    let ppk: Vec<_> = plan
+        .imported
+        .iter()
+        .filter_map(|(_, host)| Some((host, host.ppk.as_deref()?)))
+        .collect();
+    if !ppk.is_empty() {
+        out.push_str(
+            "Without key (PuTTY format, which ssh can't read; convert it, \
+             then set the key on the profile):\n",
+        );
+        for (host, key) in ppk {
+            let pem = match key.len().checked_sub(4) {
+                Some(stem) if key.is_char_boundary(stem) => format!("{}.pem", &key[..stem]),
+                _ => format!("{key}.pem"),
+            };
+            out.push_str(&line(
+                host,
+                format!("  puttygen \"{key}\" -O private-openssh -o \"{pem}\""),
+            ));
         }
     }
     let mut skipped = BTreeMap::<Skip, usize>::new();
@@ -484,6 +754,7 @@ mod tests {
             user: user.map(str::to_owned),
             identity_file: None,
             group: None,
+            ppk: None,
         }
     }
 
@@ -589,6 +860,7 @@ vault:
                     user: Some("deploy".into()),
                     identity_file: Some("~\\.ssh\\id_rsa".into()),
                     group: Some("Prod / Web".into()),
+                    ppk: None,
                 },
             ]
         );
@@ -642,6 +914,7 @@ vault:
                     user: Some("postgres".into()),
                     identity_file: Some("/home/someone/.ssh/id_db".into()),
                     group: Some("Databases".into()),
+                    ppk: None,
                 },
                 Host {
                     group: Some("Legacy Name".into()),
@@ -911,6 +1184,8 @@ font:
                 groups: 1,
                 duplicates: 0,
                 skipped: 2,
+                without_key: 0,
+                asking: Vec::new(),
             }
         );
     }
@@ -936,6 +1211,7 @@ font:
             format: "MobaXterm",
             hosts: hosts.to_vec(),
             skipped: Vec::new(),
+            asks_user: false,
         };
         let outcome = Outcome::of(&parsed, &plan);
         assert_eq!((outcome.new, outcome.groups), (4, 2));
@@ -1058,6 +1334,520 @@ font:
             assert_eq!(moba, Some(dir.join("MobaXterm").join("MobaXterm.ini")));
         } else {
             assert_eq!(moba, None);
+        }
+    }
+
+    // Spec 0015: PuTTY and WinSCP.
+
+    /// Where PuTTY keeps its sessions, as `reg export` names the key.
+    const PUTTY: &str = r"Software\SimonTatham\PuTTY\Sessions";
+    /// Where WinSCP keeps its sites, as `reg export` names the key.
+    const WINSCP: &str = r"Software\Martin Prikryl\WinSCP 2\Sessions";
+
+    /// A `.reg` export of `key` as `reg export` writes it: the header, the
+    /// parent key, then one key per session with its value lines, CRLF.
+    fn reg_export(key: &str, sessions: &[(&str, &str)]) -> String {
+        let mut out = format!(
+            "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\{key}]\r\n\r\n"
+        );
+        for (name, values) in sessions {
+            out.push_str(&format!("[HKEY_CURRENT_USER\\{key}\\{name}]\r\n"));
+            for line in values.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                out.push_str(line);
+                out.push_str("\r\n");
+            }
+            out.push_str("\r\n");
+        }
+        out
+    }
+
+    /// `text` as `reg export` writes it to disk: UTF-16LE with a BOM.
+    fn utf16(text: &str) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+        bytes
+    }
+
+    /// A PuTTY export with the template, two SSH sessions (one with a
+    /// `user@host`, one with an escaped name and a key path with
+    /// backslashes) and a telnet session.
+    fn putty_reg() -> String {
+        reg_export(
+            PUTTY,
+            &[
+                (
+                    "Default%20Settings",
+                    r#""HostName"="template.example.com"
+                       "PortNumber"=dword:00000016
+                       "Protocol"="ssh""#,
+                ),
+                (
+                    "my%20box",
+                    r#""HostName"="box.example.com"
+                       "PortNumber"=dword:00000016
+                       "UserName"="deploy"
+                       "Protocol"="ssh"
+                       "PublicKeyFile"="C:\\Users\\me\\.ssh\\id_box"
+                       "ProxyMethod"=dword:00000000"#,
+                ),
+                (
+                    "router",
+                    r#""HostName"="router.example.com"
+                       "PortNumber"=dword:00000017
+                       "Protocol"="telnet""#,
+                ),
+                (
+                    "web",
+                    r#""HostName"="admin@web.example.com"
+                       "PortNumber"=dword:000008ae
+                       "Protocol"="ssh""#,
+                ),
+            ],
+        )
+    }
+
+    /// The hosts [`putty_reg`] holds.
+    fn putty_hosts() -> Vec<Host> {
+        vec![
+            Host {
+                identity_file: Some(r"C:\Users\me\.ssh\id_box".into()),
+                ..host("my box", "box.example.com", Some("deploy"))
+            },
+            Host {
+                port: Some(2222),
+                ..host("web", "web.example.com", Some("admin"))
+            },
+        ]
+    }
+
+    /// A unique directory in the temp dir, removed with its files on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("tern-import-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("temp dir");
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Spec 0015 AC2, Model: `reg export` output (UTF-16LE with a BOM,
+    /// CRLF, `dword:` ports, `\\` escapes) loads as PuTTY with the same
+    /// hosts and skips as its UTF-8 text.
+    #[test]
+    fn a_utf16_reg_export_loads_like_its_utf8_text() {
+        let text = putty_reg();
+        let wide = TempFile::new("putty-utf16.reg", &utf16(&text));
+        let narrow = TempFile::new("putty-utf8.reg", text.as_bytes());
+        for file in [&wide, &narrow] {
+            let parsed = load(&Place::File(file.0.clone())).expect("a PuTTY export");
+            assert_eq!(parsed.format, "PuTTY");
+            assert_eq!(parsed.hosts, putty_hosts());
+            assert_eq!(parsed.skipped, [Skip::NotSsh]);
+        }
+    }
+
+    /// Spec 0015 AC1, AC6: the template session is neither a host nor a
+    /// skip, so the card counts only the real sessions.
+    #[test]
+    fn putty_default_settings_is_never_counted() {
+        let outcome = outcome_of(&putty_reg(), TEMPLATE);
+        assert_eq!((outcome.new, outcome.skipped), (2, 1));
+        let parsed = parse(&putty_reg()).expect("PuTTY");
+        assert!(
+            parsed
+                .hosts
+                .iter()
+                .all(|h| h.host != "template.example.com"),
+            "{:?}",
+            parsed.hosts
+        );
+    }
+
+    /// Spec 0015 AC6, Model: a PuTTY session behind an SSH proxy is behind
+    /// a jump host; any other proxy, including the pre-0.77 `ProxyType`,
+    /// is a proxy; telnet is not SSH and no `Protocol` is SSH.
+    #[test]
+    fn putty_sessions_are_skipped_by_protocol_and_proxy() {
+        let text = reg_export(
+            PUTTY,
+            &[
+                (
+                    "jump",
+                    "\"HostName\"=\"a\"\r\n\"ProxyMethod\"=dword:00000006",
+                ),
+                (
+                    "socks",
+                    "\"HostName\"=\"b\"\r\n\"ProxyMethod\"=dword:00000002",
+                ),
+                ("old", "\"HostName\"=\"c\"\r\n\"ProxyType\"=dword:00000001"),
+                ("tel", "\"HostName\"=\"d\"\r\n\"Protocol\"=\"telnet\""),
+                ("plain", "\"HostName\"=\"e.example.com\""),
+            ],
+        );
+        let parsed = parse(&text).expect("PuTTY");
+        assert_eq!(
+            parsed.skipped,
+            [Skip::JumpHost, Skip::Proxy, Skip::Proxy, Skip::NotSsh]
+        );
+        assert_eq!(parsed.hosts, [host("plain", "e.example.com", None)]);
+        let plan = plan(&parsed.hosts, &config::parse(TEMPLATE).config, &[]);
+        let report = report(&parsed, &plan, Path::new("config.yaml"), false);
+        assert!(report.contains("1 session: behind a jump host"), "{report}");
+    }
+
+    /// WinSCP sites `Prod/Web/app1` (SFTP, with a saved password) and
+    /// `ftp-box` (FTP) as a `.reg` export.
+    fn winscp_reg() -> String {
+        reg_export(
+            WINSCP,
+            &[
+                (
+                    "Prod/Web/app1",
+                    r#""HostName"="app1.example.com"
+                       "PortNumber"=dword:00000016
+                       "UserName"="deploy"
+                       "Password"="A35C4D5B-SECRET-PASSWORD"
+                       "PublicKeyFile"="C:%5Ckeys%5Capp1"
+                       "FSProtocol"=dword:00000002"#,
+                ),
+                (
+                    "ftp-box",
+                    r#""HostName"="ftp.example.com"
+                       "FSProtocol"=dword:00000005"#,
+                ),
+            ],
+        )
+    }
+
+    /// The same sites as a `WinSCP.ini`, values `%`-escaped.
+    const WINSCP_INI: &str = "\
+[Configuration\\Interface]\r
+Theme=Dark\r
+[Sessions\\Prod/Web/app1]\r
+HostName=app1.example.com\r
+PortNumber=22\r
+UserName=deploy\r
+Password=A35C4D5B-SECRET-PASSWORD\r
+PublicKeyFile=C:%5Ckeys%5Capp1\r
+FSProtocol=2\r
+[Sessions\\ftp-box]\r
+HostName=ftp.example.com\r
+FSProtocol=5\r
+";
+
+    /// Spec 0015 AC3: from a `.reg` export and from `WinSCP.ini`, `app1`
+    /// lands in group `Prod / Web` and `ftp-box` is skipped as not SSH.
+    #[test]
+    fn winscp_sites_import_with_folders_from_reg_and_ini() {
+        let expected = Host {
+            identity_file: Some(r"C:\keys\app1".into()),
+            group: Some("Prod / Web".into()),
+            ..host("app1", "app1.example.com", Some("deploy"))
+        };
+        let reg = TempFile::new("winscp.reg", &utf16(&winscp_reg()));
+        let ini = TempFile::new("WinSCP.ini", WINSCP_INI.as_bytes());
+        for file in [&reg, &ini] {
+            let parsed = load(&Place::File(file.0.clone())).expect("a WinSCP file");
+            assert_eq!(parsed.format, "WinSCP");
+            assert_eq!(parsed.hosts, std::slice::from_ref(&expected));
+            assert_eq!(parsed.skipped, [Skip::NotSsh]);
+        }
+    }
+
+    /// Spec 0015 Model: escaped folder and site names are decoded, and
+    /// SCP sites import like SFTP ones.
+    #[test]
+    fn winscp_escaped_folders_and_names_are_decoded() {
+        let parsed =
+            parse("[Sessions\\My%20Folder/my%20site]\nHostName=a.example.com\nFSProtocol=0\n")
+                .expect("WinSCP.ini");
+        assert_eq!(parsed.hosts.len(), 1);
+        assert_eq!(parsed.hosts[0].name, "my site");
+        assert_eq!(parsed.hosts[0].group.as_deref(), Some("My Folder"));
+    }
+
+    /// Spec 0015 AC6, Model: a WinSCP tunnel is a jump host, another proxy
+    /// a proxy, a workspace entry a workspace; its template is no host.
+    #[test]
+    fn winscp_sites_are_skipped_by_tunnel_proxy_and_workspace() {
+        let parsed = parse(
+            "[Sessions\\Default%20Settings]\nHostName=template.example.com\n\
+             [Sessions\\tunneled]\nHostName=a.example.com\nTunnel=1\n\
+             [Sessions\\proxied]\nHostName=b.example.com\nProxyMethod=2\n\
+             [Sessions\\Workspace/0000]\nHostName=c.example.com\nIsWorkspace=1\n",
+        )
+        .expect("WinSCP.ini");
+        assert!(parsed.hosts.is_empty(), "{:?}", parsed.hosts);
+        assert_eq!(
+            parsed.skipped,
+            [Skip::JumpHost, Skip::Proxy, Skip::Workspace]
+        );
+    }
+
+    /// A PuTTY export with a session that names a `.ppk` key.
+    fn putty_ppk_reg() -> String {
+        reg_export(
+            PUTTY,
+            &[(
+                "keyed",
+                r#""HostName"="keyed.example.com"
+                   "UserName"="ops"
+                   "PublicKeyFile"="C:\\keys\\keyed.PPK""#,
+            )],
+        )
+    }
+
+    /// Spec 0015 AC4: a WinSCP password reaches neither the parsed hosts,
+    /// the config text nor the report; a `.ppk` key is left out of the
+    /// profile, counted, and named in the report with the `puttygen` hint.
+    #[test]
+    fn no_password_and_no_ppk_key_reach_the_config() {
+        for file in [winscp_reg(), WINSCP_INI.to_owned(), putty_ppk_reg()] {
+            let parsed = parse(&file).expect("parses");
+            let plan = plan(&parsed.hosts, &config::parse(TEMPLATE).config, &[]);
+            let text = plan.apply(TEMPLATE).expect("applies");
+            let report = report(&parsed, &plan, Path::new("config.yaml"), false);
+            for out in [&text, &report, &format!("{parsed:?}")] {
+                assert!(!out.contains("SECRET"), "a password leaked:\n{out}");
+                assert!(!out.contains("password:"), "a password key:\n{out}");
+                assert!(!out.contains(".PPK\n"), "a .ppk key path:\n{out}");
+            }
+        }
+
+        let parsed = parse(&putty_ppk_reg()).expect("PuTTY");
+        assert_eq!(parsed.hosts[0].identity_file, None);
+        let plan = plan(&parsed.hosts, &config::parse(TEMPLATE).config, &[]);
+        let text = plan.apply(TEMPLATE).expect("applies");
+        assert!(!text.contains("identity_file"), "{text}");
+        assert_eq!(Outcome::of(&parsed, &plan).without_key, 1);
+        let report = report(&parsed, &plan, Path::new("config.yaml"), false);
+        assert!(
+            report.contains(
+                r#"keyed  ops@keyed.example.com  puttygen "C:\keys\keyed.PPK" -O private-openssh -o "C:\keys\keyed.pem""#
+            ),
+            "{report}"
+        );
+    }
+
+    /// Spec 0015 AC5, flow 7: a host saved in both PuTTY and WinSCP is
+    /// imported by the first source; the second counts it as a duplicate.
+    #[test]
+    fn a_host_in_putty_and_winscp_imports_once() {
+        let putty = putty_reg();
+        let winscp = "[Sessions\\Boxes/box]\nHostName=BOX.example.com\nUserName=deploy\n";
+        let first = parse(&putty).expect("PuTTY");
+        let written = plan(&first.hosts, &config::parse(TEMPLATE).config, &[])
+            .apply(TEMPLATE)
+            .expect("applies");
+        let second = outcome_of(winscp, &written);
+        assert_eq!((second.new, second.duplicates), (0, 1));
+    }
+
+    /// Three user-less PuTTY sessions `a`, `b`, `c` and one that saved
+    /// `carol`.
+    fn userless_putty() -> Parsed {
+        parse(&reg_export(
+            PUTTY,
+            &[
+                ("a", "\"HostName\"=\"a.example.com\""),
+                ("b", "\"HostName\"=\"b.example.com\""),
+                ("c", "\"HostName\"=\"c.example.com\""),
+                (
+                    "d",
+                    "\"HostName\"=\"d.example.com\"\r\n\"UserName\"=\"carol\"",
+                ),
+            ],
+        ))
+        .expect("PuTTY")
+    }
+
+    fn users_of(hosts: &[Host]) -> Vec<Option<&str>> {
+        hosts.iter().map(|h| h.user.as_deref()).collect()
+    }
+
+    /// Spec 0015 AC7: `alice` for all and `bob` for the second gives
+    /// alice, bob, alice; the host that saved `carol` keeps her and is
+    /// never asked.
+    #[test]
+    fn a_host_s_own_user_wins_over_the_one_for_all() {
+        let parsed = userless_putty();
+        let users = Users {
+            all: "alice".into(),
+            each: BTreeMap::from([("b".to_owned(), "bob".to_owned())]),
+        };
+        assert_eq!(
+            users_of(&users.hosts(&parsed)),
+            [Some("alice"), Some("bob"), Some("alice"), Some("carol")]
+        );
+        let plan = plan(&parsed.hosts, &config::parse(TEMPLATE).config, &[]);
+        let asking: Vec<_> = Outcome::of(&parsed, &plan)
+            .asking
+            .iter()
+            .map(Host::site)
+            .collect();
+        assert_eq!(asking, ["a", "b", "c"]);
+    }
+
+    /// Spec 0015 AC7: with every entry blank (or only whitespace), the
+    /// hosts are imported without `user:`.
+    #[test]
+    fn blank_users_import_without_a_user() {
+        let parsed = userless_putty();
+        let blank = Users {
+            all: "  ".into(),
+            each: BTreeMap::from([("b".to_owned(), String::new())]),
+        };
+        for users in [Users::default(), blank] {
+            let hosts = users.hosts(&parsed);
+            assert_eq!(users_of(&hosts), [None, None, None, Some("carol")]);
+            let text = plan(&hosts, &config::parse(TEMPLATE).config, &[])
+                .apply(TEMPLATE)
+                .expect("applies");
+            assert_eq!(text.matches("user:").count(), 1, "{text}");
+        }
+    }
+
+    /// Spec 0015 Model: an entered user is cleaned like a read one.
+    #[test]
+    fn an_entered_user_is_cleaned() {
+        let users = Users {
+            all: " al\x1bice \n".into(),
+            each: BTreeMap::new(),
+        };
+        assert_eq!(
+            users.hosts(&userless_putty())[0].user.as_deref(),
+            Some("alice")
+        );
+    }
+
+    /// Spec 0015 Model: per-host users go by the full site name, so two
+    /// WinSCP sites of the same name in different folders are told apart.
+    #[test]
+    fn per_host_users_go_by_group_and_name() {
+        let parsed = parse(
+            "[Sessions\\A/box]\nHostName=a.example.com\n[Sessions\\B/box]\nHostName=b.example.com\n",
+        )
+        .expect("WinSCP.ini");
+        let users = Users {
+            all: String::new(),
+            each: BTreeMap::from([("B / box".to_owned(), "bob".to_owned())]),
+        };
+        assert_eq!(users_of(&users.hosts(&parsed)), [None, Some("bob")]);
+    }
+
+    /// Spec 0015 Model: MobaXterm and Tabby hosts are never asked for a
+    /// user, and a user for all doesn't touch them.
+    #[test]
+    fn mobaxterm_and_tabby_hosts_are_never_asked() {
+        let moba = format!(
+            "[Bookmarks]\nSubRep=\nImgNum=42\nbare={}\n",
+            moba("0", "bare.example.com", "22", "", "", "")
+        );
+        let users = Users {
+            all: "alice".into(),
+            each: BTreeMap::new(),
+        };
+        for file in [moba, TABBY.to_owned()] {
+            let parsed = parse(&file).expect("parses");
+            assert!(outcome_of(&file, TEMPLATE).asking.is_empty());
+            assert_eq!(users.hosts(&parsed), parsed.hosts);
+        }
+    }
+
+    /// Spec 0015 Model: users are set before the plan, so a user-less host
+    /// that duplicates a user-less profile is new once given a user.
+    #[test]
+    fn users_are_set_before_duplicates_are_judged() {
+        let existing = "profiles:\n  a:\n    type: ssh\n    host: a.example.com\n";
+        let config = config::parse(existing).config;
+        let parsed = parse(&reg_export(
+            PUTTY,
+            &[("a", "\"HostName\"=\"a.example.com\"")],
+        ))
+        .expect("PuTTY");
+        let without = plan(&Users::default().hosts(&parsed), &config, &[]);
+        assert_eq!((without.imported.len(), without.duplicates.len()), (0, 1));
+        let users = Users {
+            all: "alice".into(),
+            each: BTreeMap::new(),
+        };
+        let with = plan(&users.hosts(&parsed), &config, &[]);
+        assert_eq!((with.imported.len(), with.duplicates.len()), (1, 0));
+    }
+
+    /// Spec 0015 AC8, Model: a `~/.putty/sessions` directory (a file per
+    /// session, named by its escaped name, of `Key=value` lines) imports
+    /// its SSH sessions; the template and a telnet session don't.
+    #[test]
+    fn a_putty_sessions_directory_imports_its_ssh_sessions() {
+        let dir = TempDir::new("putty-sessions");
+        let files = [
+            ("Default%20Settings", "HostName=template.example.com\n"),
+            (
+                "my%20box",
+                "HostName=box.example.com\nPortNumber=2222\nUserName=deploy\nProtocol=ssh\n",
+            ),
+            ("router", "HostName=router.example.com\nProtocol=telnet\n"),
+        ];
+        for (name, text) in files {
+            std::fs::write(dir.0.join(name), text).expect("session file");
+        }
+        let parsed = load(&Place::File(dir.0.clone())).expect("a sessions directory");
+        assert_eq!(parsed.format, "PuTTY");
+        assert_eq!(
+            parsed.hosts,
+            [Host {
+                port: Some(2222),
+                ..host("my box", "box.example.com", Some("deploy"))
+            }]
+        );
+        assert_eq!(parsed.skipped, [Skip::NotSsh]);
+    }
+
+    /// Spec 0015 flow 1: a `.reg` export of neither app's sessions is not a
+    /// known format, and loading it is an error naming the file.
+    #[test]
+    fn a_reg_export_of_another_key_is_not_a_known_format() {
+        let text = reg_export(
+            r"Software\Other\App\Sessions",
+            &[("x", "\"HostName\"=\"x\"")],
+        );
+        assert!(parse(&text).is_none());
+        let file = TempFile::new("other.reg", &utf16(&text));
+        let error = load(&Place::File(file.0.clone())).expect_err("unknown");
+        assert!(error.contains("other.reg"), "{error}");
+    }
+
+    /// Spec 0015 Module surface, flows 2–3: PuTTY's default place on Linux
+    /// is `~/.putty/sessions`, WinSCP's on Windows `WinSCP.ini` in the
+    /// roaming config dir; with nothing found, the cards say so per
+    /// platform.
+    #[test]
+    fn putty_and_winscp_are_looked_for_per_platform() {
+        let putty = Source::PuTTY.default_path();
+        let winscp = Source::WinSCP.default_path();
+        if cfg!(windows) {
+            assert_eq!(putty, None);
+            let dir = dirs::config_dir().expect("a config dir");
+            assert_eq!(winscp, Some(dir.join("WinSCP.ini")));
+            assert_eq!(Source::PuTTY.missing(), "No PuTTY sessions found.");
+            assert_eq!(Source::WinSCP.missing(), "No WinSCP sites found.");
+        } else {
+            assert_eq!(winscp, None);
+            assert!(Source::WinSCP.missing().contains("WinSCP runs on Windows"));
+        }
+        if cfg!(target_os = "linux") {
+            let home = dirs::home_dir().expect("a home dir");
+            assert_eq!(putty, Some(home.join(".putty").join("sessions")));
         }
     }
 }

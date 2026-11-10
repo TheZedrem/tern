@@ -234,11 +234,11 @@ impl SettingsView {
         subscriptions.push(cx.subscribe_in(
             &search,
             window,
-            |this, _, event: &InputEvent, _, cx| {
+            |this, _, event: &InputEvent, window, cx| {
                 if let InputEvent::Change = event {
                     // A search shows the import cards too: look once.
                     if this.imports.is_empty() {
-                        this.look_for_imports(cx);
+                        this.look_for_imports(window, cx);
                     }
                     cx.notify();
                 }
@@ -547,7 +547,7 @@ impl Render for SettingsView {
                         this.page = page;
                         this.form = None;
                         if page == Page::Import {
-                            this.look_for_imports(cx);
+                            this.look_for_imports(window, cx);
                         }
                         this.search
                             .update(cx, |search, cx| search.set_value("", window, cx));
