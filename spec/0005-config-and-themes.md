@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-005, T-004, T-002, T-011, T-019]
+tasks: [T-005, T-004, T-002, T-011, T-019, T-046]
 related: [spec 0001, spec 0003, spec 0004]
 ---
 
@@ -75,6 +75,8 @@ cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
 tab_bar: top                        # top | bottom | left | right (spec 0003)
+active_pane_border: true            # accent border on the focused pane in a split (spec 0003)
+inactive_pane_dim: 15               # percent the other panes are dimmed, 0–50, 0 = off (spec 0003)
 sftp_sidebar: right                 # left | right (spec 0008)
 sftp_click: edit                    # edit | download (spec 0008)
 sftp_upload: manual                 # manual | save | focus (spec 0008)

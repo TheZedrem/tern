@@ -81,13 +81,16 @@ title, else the profile's display name.
 3. **Focus:** directional focus picks the nearest pane in that direction by
    geometry. Clicking a pane focuses it.
    **Active pane:** when a tab shows two or more panes (terminal or files
-   alike), the focused one gets a 2 px border in the theme's `accent` and
-   every other pane a ~15% overlay in the theme's `background`. A single
+   alike), the focused one gets a 2 px border in the theme's `accent`
+   (`active_pane_border: true`) and every other pane an overlay in the
+   theme's `background` at `inactive_pane_dim` percent (default 15, 0 turns
+   it off, clamped to 0–50 so a pane never goes unreadable). Both are on
+   the settings screen's Appearance page and apply on config reload. A single
    visible pane (one leaf, or zoomed) gets neither. The marking follows the
    focused leaf, not window focus. **[load-bearing]** It never changes a
    pane's cell grid: the border sits in space every pane reserves, and the
    overlay draws over the pane, so moving focus sends no PTY resize and
-   re-shapes no rows. No setting (YAGNI until someone asks).
+   re-shapes no rows.
 4. **Zoom:** the focused pane fills the tab while other panes keep running.
    Toggling again restores the layout.
 5. **Save:** debounced at 1 s after any layout, title, cwd or window-size
@@ -157,7 +160,7 @@ frame themselves. Windows 11 always draws its own frame.
 8. `session.json` contains no scrollback, commands or environment variables.
 9. A 5 000-character title set via OSC 2 shows in the tab bar capped at 200 characters, on one line, and the tab bar keeps its layout.
 10. On GNOME, the window moves by dragging the tab bar's empty area, resizes from its edges, and closes from its close button.
-12. In a tab with a terminal and a files pane, the focused one has the accent border and the other is dimmed, in both built-in themes; with one pane, or zoomed, neither shows. Moving focus sends no PTY resize.
+12. In a tab with a terminal and a files pane, the focused one has the accent border and the other is dimmed, in both built-in themes; with one pane, or zoomed, neither shows. Moving focus sends no PTY resize. With `active_pane_border: false` and `inactive_pane_dim: 0`, changed on the settings screen, neither shows without a restart.
 11. With `open_new_tab: true` and 3 saved tabs, relaunch shows 4 tabs, the new last one active, and exactly one shell running; with `false`, the saved active tab is active and no tab is added.
 
 ## Open questions
