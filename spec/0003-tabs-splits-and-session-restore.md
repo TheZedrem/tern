@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-003, T-006, T-011]
+tasks: [T-003, T-006, T-011, T-062]
 related: [spec 0001, spec 0002, spec 0005]
 ---
 
@@ -27,6 +27,7 @@ immediately.
 - Tabs: new, close, reorder (drag), rename, next/prev/go-to-N, title from the shell (OSC 0/2) or the user
 - Splits: split right/down, close pane, resize by dragging a divider, directional focus, zoom (maximize) a pane
 - Session restore: layout, titles and cwd per pane
+- A fresh tab on every launch: `open_new_tab: true` (default) adds one after the restored tabs; `false` lands on the last active tab (owner's request, T-062)
 - Title bar: on compositors that draw no window frame (GNOME), the tab bar doubles as the title bar
 - Tab bar side: `tab_bar: top | bottom | left | right`. Top and bottom are a bar, left and right a vertical list, all with the same clicks, renames, drags and drops; away from the top, only the title bar (window controls, drag to move) stays there, and only where the compositor draws no frame. Default `top` (owner's request, T-025)
 
@@ -90,6 +91,12 @@ title, else the profile's display name.
    missing cwd falls back to the home directory. A leaf whose profile no
    longer exists opens `default_profile` with a notice. SSH leaves restore
    disconnected and connect only on Enter (spec 0006).
+   With `open_new_tab: true`, boot appends one tab opening `default_profile`
+   in the home directory and makes it active instead: its shell is the only
+   one spawned at boot, and every restored tab, including the last active
+   one, waits for first activation. With nothing to restore (no file,
+   `restore_session: false`) it is the one fresh tab of flow 7, never a
+   second. Whether a fresh tab nobody typed in is saved: OQ-030.
 7. **Empty, corrupt or unknown-version `session.json`:** boot one fresh tab.
    Quitting by closing the last tab saves an empty session, which is the
    normal case and leaves no `.bad` file. A corrupt or unknown-version file is renamed
@@ -105,7 +112,8 @@ title, else the profile's display name.
 
 The first frame draws the tab bar and split view; they are GPUI views over
 the layout model and cost nothing to initialize. Restore adds one
-small file read and N PTY spawns for the active tab only. The TTFP report
+small file read and N PTY spawns for the active tab only; with
+`open_new_tab: true` (default) it is one spawn for the fresh tab instead. The TTFP report
 covers a restored 4-pane tab (spec 0001).
 
 ### Platform notes
@@ -136,10 +144,11 @@ frame themselves. Windows 11 always draws its own frame.
 4. Activating a restored tab for the first time starts its shells in the saved cwd.
 5. A saved cwd that no longer exists opens the home directory without an error dialog.
 6. A truncated `session.json` boots one fresh tab and leaves `session.json.bad` behind. Closing the last tab and relaunching boots one fresh tab with no `.bad` file.
-7. TTFP with a restored 4-pane active tab stays under budget (spec 0001).
+7. TTFP with a restored 4-pane active tab (`open_new_tab: false`) stays under budget (spec 0001).
 8. `session.json` contains no scrollback, commands or environment variables.
 9. A 5 000-character title set via OSC 2 shows in the tab bar capped at 200 characters, on one line, and the tab bar keeps its layout.
 10. On GNOME, the window moves by dragging the tab bar's empty area, resizes from its edges, and closes from its close button.
+11. With `open_new_tab: true` and 3 saved tabs, relaunch shows 4 tabs, the new last one active in the home directory, and exactly one shell running; with `false`, the saved active tab is active and no tab is added.
 
 ## Open questions
 
