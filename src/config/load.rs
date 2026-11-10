@@ -871,25 +871,25 @@ mod tests {
 
     /// Spec 0003, flow 3, spec 0005 §Model: `active_pane` is by default a
     /// 2 px border in the theme's accent (`color: null`) and the other
-    /// panes dimmed 15%. Each key sets its own part, a `"#rrggbb"` color
+    /// panes dimmed 30%. Each key sets its own part, a `"#rrggbb"` color
     /// included, and a key left out keeps its default.
     #[test]
     fn active_pane_takes_each_key_and_a_partial_map_keeps_the_defaults() {
         let default = ActivePane {
             border: 2,
             color: None,
-            dim: 15,
+            dim: 30,
         };
         assert_eq!(parse("").config.active_pane, default);
         let red = Some(Color(0xff0000));
         let cases = [
-            ("{ border: 4, color: \"#ff0000\", dim: 30 }", 4, red, 30),
+            ("{ border: 4, color: \"#ff0000\", dim: 40 }", 4, red, 40),
             ("{ border: 0, dim: 0 }", 0, None, 0),
-            ("{ color: \"#FF0000\" }", 2, red, 15),
-            ("{ color: null }", 2, None, 15),
-            ("{ border: 5 }", 5, None, 15),
+            ("{ color: \"#FF0000\" }", 2, red, 30),
+            ("{ color: null }", 2, None, 30),
+            ("{ border: 5 }", 5, None, 30),
             ("{ dim: 50 }", 2, None, 50),
-            ("{}", 2, None, 15),
+            ("{}", 2, None, 30),
         ];
         for (active_pane, border, color, dim) in cases {
             let text = format!("active_pane: {active_pane}\n");
@@ -1261,7 +1261,7 @@ cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
 tab_bar: top                        # top | bottom | left | right (spec 0003)
-active_pane: { border: 2, color: null, dim: 15 }  # in a split: border px 0–6, color null → theme accent, dim % 0–50 (spec 0003)
+active_pane: { border: 2, color: null, dim: 30 }  # in a split: border px 0–6, color null → theme accent, dim % 0–50 (spec 0003)
 sftp_sidebar: right                # left | right (spec 0008)
 sftp_click: edit                    # edit | download (spec 0008)
 sftp_upload: manual                 # manual | save | focus (spec 0008)

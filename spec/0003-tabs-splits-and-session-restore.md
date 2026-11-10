@@ -85,7 +85,7 @@ title, else the profile's display name.
    the theme's `background`, set by `active_pane` (spec 0005):
    `border` width in px (default 2, 0 turns it off, clamped to 0–6),
    `color` (`#rrggbb`; unset means the theme's `accent`, so it follows
-   theme switches) and `dim` in percent (default 15, 0 turns it off,
+   theme switches) and `dim` in percent (default 30, 0 turns it off,
    clamped to 0–50 so a pane never goes unreadable). All three are on the
    settings screen's Appearance page and apply on config reload. A single
    visible pane (one leaf, or zoomed) gets neither. The marking follows the

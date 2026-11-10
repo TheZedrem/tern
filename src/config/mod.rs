@@ -209,7 +209,7 @@ impl Default for ActivePane {
         Self {
             border: 2,
             color: None,
-            dim: 15,
+            dim: 30,
         }
     }
 }
