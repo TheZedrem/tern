@@ -70,6 +70,13 @@ specs or tasks until they're promoted to one.
 - **S3 and SMB.** Browse and transfer files in S3 buckets and SMB shares
   as plugins that add a target to the file browser (spec 0013). Needs
   Phase 5.
+- **Passwords in an extra encrypted file.** A vault file beside the
+  config, encrypted with a master password, as Tabby's vault is: it would
+  travel with the config to another machine, and imports (specs 0010,
+  0015) could bring saved passwords along instead of leaving them behind.
+  It breaks ground rule 3 (secrets only in the OS keychain), so promoting
+  it means changing that rule first, plus a threat model (key derivation,
+  unlock prompt, how long the key stays in memory) and a crypto crate.
 
 ## Platforms
 
