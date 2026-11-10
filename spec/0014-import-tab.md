@@ -37,7 +37,7 @@ did.
 **Out of scope:**
 
 - Picking single hosts or a preview list: the CLI's `--dry-run` and editing `config.yaml` cover it; *Later* if users ask
-- Other sources (PuTTY, SecureCRT, Termius): *Later*, one spec each
+- Other sources: PuTTY and WinSCP in spec 0015; SecureCRT, Termius *Later*, one spec each
 - Passwords, vaults, jump hosts, non-SSH sessions: never, as spec 0010
 - Watching the source files or re-importing on change: never; the user starts every import
 
