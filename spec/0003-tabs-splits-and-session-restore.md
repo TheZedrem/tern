@@ -1,7 +1,7 @@
 ---
-status: implemented    # draft | approved | implemented
+status: approved    # draft | approved | implemented
 phase: 1
-tasks: [T-003, T-006, T-011, T-062]
+tasks: [T-003, T-006, T-011, T-062, T-046]
 related: [spec 0001, spec 0002, spec 0005]
 ---
 
@@ -26,6 +26,7 @@ immediately.
 
 - Tabs: new, close, reorder (drag), rename, next/prev/go-to-N, title from the shell (OSC 0/2) or the user
 - Splits: split right/down, close pane, resize by dragging a divider, directional focus, zoom (maximize) a pane
+- Active pane marking: in a tab showing two or more panes, the focused one stands out at a glance (owner's request, T-046)
 - Session restore: layout, titles and cwd per pane
 - A fresh tab on every launch: `open_new_tab: true` (default) adds one after the restored tabs; `false` lands on the last active tab (owner's request, T-062)
 - Title bar: on compositors that draw no window frame (GNOME), the tab bar doubles as the title bar
@@ -79,6 +80,14 @@ title, else the profile's display name.
    app.
 3. **Focus:** directional focus picks the nearest pane in that direction by
    geometry. Clicking a pane focuses it.
+   **Active pane:** when a tab shows two or more panes (terminal or files
+   alike), the focused one gets a 2 px border in the theme's `accent` and
+   every other pane a ~15% overlay in the theme's `background`. A single
+   visible pane (one leaf, or zoomed) gets neither. The marking follows the
+   focused leaf, not window focus. **[load-bearing]** It never changes a
+   pane's cell grid: the border sits in space every pane reserves, and the
+   overlay draws over the pane, so moving focus sends no PTY resize and
+   re-shapes no rows. No setting (YAGNI until someone asks).
 4. **Zoom:** the focused pane fills the tab while other panes keep running.
    Toggling again restores the layout.
 5. **Save:** debounced at 1 s after any layout, title, cwd or window-size
@@ -148,6 +157,7 @@ frame themselves. Windows 11 always draws its own frame.
 8. `session.json` contains no scrollback, commands or environment variables.
 9. A 5 000-character title set via OSC 2 shows in the tab bar capped at 200 characters, on one line, and the tab bar keeps its layout.
 10. On GNOME, the window moves by dragging the tab bar's empty area, resizes from its edges, and closes from its close button.
+12. In a tab with a terminal and a files pane, the focused one has the accent border and the other is dimmed, in both built-in themes; with one pane, or zoomed, neither shows. Moving focus sends no PTY resize.
 11. With `open_new_tab: true` and 3 saved tabs, relaunch shows 4 tabs, the new last one active, and exactly one shell running; with `false`, the saved active tab is active and no tab is added.
 
 ## Open questions
