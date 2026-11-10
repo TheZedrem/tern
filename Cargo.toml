@@ -35,6 +35,11 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 russh-sftp = "3"
 tokio = { version = "1", features = ["rt", "process", "io-util", "sync", "time", "macros"] }
 
+[dev-dependencies]
+# GPUI's test window, to drive keys through a real dispatch tree. Test
+# builds only; it turns on GPUI's x11 feature there, never in tern itself.
+gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Without font-kit, GPUI's macOS backend renders no text at all.
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit"] }

@@ -5,8 +5,8 @@ use crate::layout::show_notice;
 use crate::settings::change::{self, Change, ProfileForm};
 use crate::settings::{Page, Row, SettingsView};
 use gpui::{
-    AppContext, Context, Entity, IntoElement, ParentElement, PathPromptOptions, Styled, Window,
-    div, px,
+    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, PathPromptOptions,
+    Styled, Window, div, px,
 };
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
@@ -227,15 +227,23 @@ impl SettingsView {
                                 .label("Save")
                                 .small()
                                 .primary()
-                                .on_click(cx.listener(|this, _, _, cx| this.save_form(cx))),
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.save_form(cx);
+                                    if this.form.is_none() {
+                                        this.keep_keyboard(window, cx);
+                                    }
+                                })),
                         )
                         .child(
                             Button::new("profile-cancel")
                                 .label("Cancel")
                                 .small()
                                 .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                // Where a test clicks; a no-op outside test builds.
+                                .debug_selector(|| "profile-cancel".into())
+                                .on_click(cx.listener(|this, _, window, cx| {
                                     this.form = None;
+                                    this.keep_keyboard(window, cx);
                                     cx.notify();
                                 })),
                         ),
@@ -329,5 +337,41 @@ impl SettingsView {
                         this.open_form(true, None, window, cx);
                     })),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::settings::Page;
+    use crate::settings::tests::open_screen;
+    use gpui::TestAppContext;
+
+    /// Spec 0009, flow 4 and criterion 8: with a profile form field holding
+    /// the keyboard, closing the form with its Cancel button leaves Esc
+    /// working: it leaves the screen.
+    #[gpui::test]
+    fn esc_after_cancelling_the_profile_form_closes_the_screen(cx: &mut TestAppContext) {
+        let mut screen = open_screen(cx);
+        screen.click("settings-tab-Profiles");
+        let view = screen.view.clone();
+        screen.cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                assert_eq!(view.page, Page::Profiles);
+                view.open_form(false, None, window, cx);
+            })
+        });
+        screen.cx.run_until_parked();
+        let name = screen.cx.update(|_, cx| {
+            let form = view.read(cx).form.as_ref().expect("the form is open");
+            form.inputs[0].1.clone()
+        });
+        screen.focus(&name);
+        assert!(screen.is_focused(&name));
+
+        screen.click("profile-cancel");
+        let open = screen.cx.update(|_, cx| view.read(cx).form.is_some());
+        assert!(!open, "Cancel closed the form");
+        screen.cx.simulate_keystrokes("escape");
+        assert_eq!(screen.closed.get(), 1);
     }
 }

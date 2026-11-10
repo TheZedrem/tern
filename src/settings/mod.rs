@@ -275,6 +275,14 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// Gives the keyboard to the panel itself when the body changes under
+    /// it (another tab, the profile form closing). A focused field that's
+    /// no longer drawn leaves the keyboard nowhere, and Esc then reaches no
+    /// binding (spec 0009, criterion 8; T-058).
+    fn keep_keyboard(&self, window: &mut Window, cx: &mut App) {
+        window.focus(&self.focus, cx);
+    }
+
     fn set(&self, change: Change, cx: &mut Context<Self>) {
         cx.emit(SettingsEvent::Change(change));
     }
@@ -533,6 +541,8 @@ impl Render for SettingsView {
                     .ghost()
                     .w_full()
                     .selected(!searching && self.page == page)
+                    // Where a test clicks; a no-op outside test builds.
+                    .debug_selector(move || format!("settings-tab-{}", page.title()))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.page = page;
                         this.form = None;
@@ -541,6 +551,7 @@ impl Render for SettingsView {
                         }
                         this.search
                             .update(cx, |search, cx| search.set_value("", window, cx));
+                        this.keep_keyboard(window, cx);
                         cx.notify();
                     }))
             }))
@@ -626,6 +637,9 @@ impl Render for SettingsView {
 mod tests {
     use super::*;
     use crate::config::TEMPLATE;
+    use gpui::{Modifiers, TestAppContext, VisualTestContext};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
     /// Every top-level key spec 0005's schema names, and its nested keys
     /// as `parent.key` (spec 0005, Model).
@@ -754,5 +768,149 @@ mod tests {
                 "{field} isn't a spec 0005 key"
             );
         }
+    }
+
+    /// The settings screen open in a test window, as the workspace shows
+    /// it: inside the workspace's key context, with the app's keymap, and
+    /// with the keyboard on the screen. `closed` counts the times it asked
+    /// to be closed.
+    pub(in crate::settings) struct Screen<'a> {
+        pub view: Entity<SettingsView>,
+        pub closed: Rc<Cell<usize>>,
+        pub cx: &'a mut VisualTestContext,
+    }
+
+    /// Stands in for the workspace: draws the screen and counts its
+    /// `Close` events.
+    struct Host {
+        view: Entity<SettingsView>,
+        _events: Subscription,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .key_context(crate::commands::keymap::CONTEXT)
+                .size_full()
+                .child(self.view.clone())
+        }
+    }
+
+    /// Opens the screen with the default config, focused like the
+    /// workspace's `open_settings` does.
+    pub(in crate::settings) fn open_screen(cx: &mut TestAppContext) -> Screen<'_> {
+        cx.update(|cx| {
+            crate::layout::init(cx);
+            crate::settings::init(cx);
+            gpui_component::init(cx);
+            crate::commands::keymap::keep_library(cx);
+            crate::commands::keymap::bind(&[], Config::default().new_tab, cx);
+        });
+        let closed = Rc::new(Cell::new(0));
+        let opened = Rc::new(RefCell::new(None));
+        let (_, cx) = cx.add_window_view({
+            let (closed, opened) = (closed.clone(), opened.clone());
+            move |window, cx| {
+                let host = cx.new(|cx| {
+                    let view = cx.new(|cx| SettingsView::new(Config::default(), window, cx));
+                    let events = cx.subscribe(&view, move |_, _, event, _| {
+                        if let SettingsEvent::Close = event {
+                            closed.set(closed.get() + 1);
+                        }
+                    });
+                    Host {
+                        view,
+                        _events: events,
+                    }
+                });
+                *opened.borrow_mut() = Some(host.read(cx).view.clone());
+                gpui_component::Root::new(host, window, cx)
+            }
+        });
+        let view = opened.take().expect("the window built the screen");
+        cx.update(|window, cx| {
+            let handle = view.focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        cx.run_until_parked();
+        Screen { view, closed, cx }
+    }
+
+    impl Screen<'_> {
+        /// Clicks the element drawn with `selector` in its middle.
+        pub fn click(&mut self, selector: &'static str) {
+            self.cx.update(|window, cx| window.draw(cx).clear(cx));
+            let bounds = self
+                .cx
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("{selector} isn't drawn"));
+            self.cx.simulate_click(bounds.center(), Modifiers::none());
+            self.cx.run_until_parked();
+        }
+
+        /// Gives the keyboard to `input`, as a click or Tab into it does.
+        pub fn focus(&mut self, input: &Entity<InputState>) {
+            self.cx
+                .update(|window, cx| input.update(cx, |input, cx| input.focus(window, cx)));
+            self.cx.run_until_parked();
+        }
+
+        pub fn is_focused(&mut self, input: &Entity<InputState>) -> bool {
+            self.cx
+                .update(|window, cx| input.focus_handle(cx).is_focused(window))
+        }
+    }
+
+    /// Spec 0009, flow 1 and criterion 8: Esc right after opening, with the
+    /// keyboard in the search field (flow 6), leaves the screen.
+    #[gpui::test]
+    fn esc_right_after_opening_closes_the_screen(cx: &mut TestAppContext) {
+        let mut screen = open_screen(cx);
+        let search = screen
+            .cx
+            .update(|_, cx| screen.view.read(cx).search.clone());
+        assert!(screen.is_focused(&search), "the screen opens in its search");
+        screen.cx.simulate_keystrokes("escape");
+        assert_eq!(screen.closed.get(), 1);
+    }
+
+    /// Spec 0009, flows 1 and 6, criterion 8: Esc leaves the screen while
+    /// the search field holds a query too.
+    #[gpui::test]
+    fn esc_after_typing_a_search_closes_the_screen(cx: &mut TestAppContext) {
+        let screen = open_screen(cx);
+        screen.cx.simulate_keystrokes("f o n t");
+        let query = screen
+            .cx
+            .update(|_, cx| screen.view.read(cx).search.read(cx).value().to_string());
+        assert_eq!(query, "font", "the keys reached the search field");
+        screen.cx.simulate_keystrokes("escape");
+        assert_eq!(screen.closed.get(), 1);
+    }
+
+    /// Spec 0009, criterion 8: with a field on one tab holding the keyboard,
+    /// a click on another tab's button hides that field, and Esc still
+    /// leaves the screen.
+    #[gpui::test]
+    fn esc_after_switching_tabs_from_a_focused_field_closes_the_screen(cx: &mut TestAppContext) {
+        let mut screen = open_screen(cx);
+        screen.click("settings-tab-Appearance");
+        let font_size = screen.cx.update(|_, cx| {
+            let view = screen.view.read(cx);
+            assert_eq!(view.page, Page::Appearance, "the tab click went through");
+            view.fields
+                .iter()
+                .find(|(field, _)| *field == Field::FontSize)
+                .map(|(_, input)| input.clone())
+                .expect("a font size field")
+        });
+        screen.focus(&font_size);
+        assert!(screen.is_focused(&font_size));
+
+        screen.click("settings-tab-General");
+        let page = screen.cx.update(|_, cx| screen.view.read(cx).page);
+        assert_eq!(page, Page::General, "the tab click went through");
+        screen.cx.simulate_keystrokes("escape");
+        assert_eq!(screen.closed.get(), 1);
     }
 }

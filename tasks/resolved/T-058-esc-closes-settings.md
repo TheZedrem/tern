@@ -20,4 +20,10 @@ key. Fields that use Esc to cancel an edit (the key recorder in the
 Keyboard tab) keep that behavior: there, the first Esc cancels the edit
 and the next one closes the panel.
 
-Spec: ../spec/0009-settings-screen.md
+Spec: ../../spec/0009-settings-screen.md
+
+Resolved: the search input never swallowed Esc. A tab click (or the
+profile form closing) stopped drawing the field that had the keyboard,
+which left focus on an element that isn't drawn; keys then dispatch from
+the window root and miss the panel's binding. Those three handlers now
+give the keyboard back to the panel (`SettingsView::keep_keyboard`).

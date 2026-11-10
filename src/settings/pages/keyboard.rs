@@ -4,7 +4,7 @@ use crate::commands::{self, AppCommand, keymap};
 use crate::settings::change::Change;
 use crate::settings::{Page, Row, SettingsView};
 use gpui::prelude::FluentBuilder;
-use gpui::{Context, IntoElement, Keystroke, ParentElement, Styled, div, px};
+use gpui::{Context, InteractiveElement, IntoElement, Keystroke, ParentElement, Styled, div, px};
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 
@@ -77,6 +77,8 @@ impl SettingsView {
                             .label("Record")
                             .xsmall()
                             .ghost()
+                            // Where a test clicks; a no-op outside test builds.
+                            .debug_selector(move || format!("record-{id}"))
                             .on_click(cx.listener(move |this, _, _, cx| this.record(id, cx))),
                     )
                     .when(own.contains(&id), |row| {
@@ -144,6 +146,8 @@ fn shown_keys(keys: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::tests::open_screen;
+    use gpui::TestAppContext;
 
     fn keystroke(text: &str) -> Keystroke {
         Keystroke::parse_with_os(text, keymap::OS).unwrap()
@@ -170,5 +174,25 @@ mod tests {
         for modifier in ["shift", "control", "alt"] {
             assert_eq!(config_keys(&keystroke(modifier)), None, "{modifier}");
         }
+    }
+
+    /// Spec 0009, flow 3 and criterion 8 (T-058): while "Record" waits for
+    /// keys, the first Esc cancels the recording and leaves the screen
+    /// open; the next Esc leaves the screen.
+    #[gpui::test]
+    fn esc_cancels_a_recording_first_then_closes_the_screen(cx: &mut TestAppContext) {
+        let mut screen = open_screen(cx);
+        screen.click("settings-tab-Keyboard");
+        screen.click("record-tab.new");
+        let recording = screen.cx.update(|_, cx| screen.view.read(cx).recording);
+        assert_eq!(recording, Some("tab.new"), "Record went through");
+
+        screen.cx.simulate_keystrokes("escape");
+        let recording = screen.cx.update(|_, cx| screen.view.read(cx).recording);
+        assert_eq!(recording, None, "the first Esc cancels the recording");
+        assert_eq!(screen.closed.get(), 0, "the first Esc doesn't close");
+
+        screen.cx.simulate_keystrokes("escape");
+        assert_eq!(screen.closed.get(), 1, "the second Esc closes");
     }
 }
