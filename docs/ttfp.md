@@ -32,6 +32,8 @@ That's well inside the budget, but it's the trend to watch.
 
 ## Linux (owner's Fedora machine, Wayland)
 
-The GPUI spike measured 333 ms warm and 811 ms cold (spec 0001). The
-releases haven't been benchmarked here yet; add a row with the next
-release.
+The GPUI spike measured 333 ms warm and 811 ms cold (spec 0001).
+
+| Release | Cold | Warm median | Warm p90 | Window ready (median) | Measured |
+|---|---|---|---|---|---|
+| v0.5.0 | 346.1 ms | 304.0 ms | 319.8 ms | 190.4 ms | 2026-11-10 |
