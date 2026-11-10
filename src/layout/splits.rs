@@ -255,17 +255,19 @@ impl Workspace {
     }
 
     /// The smallest pane in pixels: `MIN_PANE_CELLS` of the current font,
-    /// plus the grid's padding.
+    /// plus the grid's padding and the active pane border's room.
     pub(super) fn pane_min(&self, window: &Window) -> (f32, f32) {
         let cell = self.font.cell_size(window);
+        let edges = 2.0 * (pty::PADDING + self.config.active_pane.border_px());
         (
-            MIN_PANE_CELLS.0 * f32::from(cell.width) + 2.0 * pty::PADDING,
-            MIN_PANE_CELLS.1 * f32::from(cell.height) + 2.0 * pty::PADDING,
+            MIN_PANE_CELLS.0 * f32::from(cell.width) + edges,
+            MIN_PANE_CELLS.1 * f32::from(cell.height) + edges,
         )
     }
 
     /// A pane, which tabs and panes are dropped on (spec 0007). In a split
-    /// tab that isn't zoomed, it has the grab handle it's dragged by.
+    /// tab that isn't zoomed, it has the grab handle it's dragged by and
+    /// shows whether it's the focused one (spec 0003, flow 3).
     pub(super) fn render_leaf(&self, leaf: LeafId, cx: &mut Context<Self>) -> AnyElement {
         let pane = match (self.panes.get(&leaf), self.files.get(&leaf)) {
             (Some(pane), _) => pane.clone().into_any_element(),
@@ -273,8 +275,27 @@ impl Workspace {
             (None, None) => return div().size_full().into_any_element(),
         };
         let tab = self.tabs.active();
+        let split = tab.zoomed.is_none() && matches!(tab.root, Node::Split { .. });
+        let focused = tab.focused == leaf;
+        let active = self.config.active_pane;
+        // Every pane of a split keeps the border's room, drawn or not, so
+        // moving focus never resizes a grid.
+        let border = split.then(|| {
+            let color = match (focused, active.color) {
+                (false, _) => gpui::transparent_black(),
+                (true, Some(color)) => theme::hsla(color.0),
+                (true, None) => theme::hsla(self.theme.accent),
+            };
+            (px(active.border_px()), color)
+        });
+        let dim = (split && !focused && active.dim_opacity() > 0.0).then(|| {
+            div()
+                .absolute()
+                .inset_0()
+                .bg(theme::hsla(self.theme.background).opacity(active.dim_opacity()))
+        });
         let group = SharedString::from(format!("pane-{leaf}"));
-        let handle = (tab.zoomed.is_none() && matches!(tab.root, Node::Split { .. })).then(|| {
+        let handle = split.then(|| {
             let title = self.pane_title(leaf, cx);
             grab_handle(leaf, &group, self.theme)
                 .on_drag(DraggedPane { leaf, title }, |pane, _, _, cx| {
@@ -302,7 +323,11 @@ impl Workspace {
             .group(group)
             .relative()
             .size_full()
+            .when_some(border, |this, (width, color)| {
+                this.border(width).border_color(color)
+            })
             .child(pane)
+            .children(dim)
             .children(handle)
             .children(mark)
             .on_drag_move(cx.listener(

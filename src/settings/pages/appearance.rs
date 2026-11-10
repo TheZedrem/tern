@@ -1,4 +1,5 @@
-//! The Appearance tab: font, colors, where the bars sit, the cursor.
+//! The Appearance tab: font, colors, where the bars sit, the cursor, how
+//! the focused pane stands out.
 
 use crate::config::{Config, CursorStyle, SftpSide, TabBarSide};
 use crate::settings::change::Change;
@@ -137,6 +138,29 @@ impl SettingsView {
             )
             .into_any_element(),
         ));
+        rows.extend([
+            Row::new(
+                Page::Appearance,
+                "Panes",
+                "Active pane border",
+                "focus focused split highlight outline width pixels",
+                self.field(Field::PaneBorder),
+            ),
+            Row::new(
+                Page::Appearance,
+                "Panes",
+                "Active pane border color",
+                "focus focused split highlight outline accent colour hex",
+                self.field(Field::PaneColor),
+            ),
+            Row::new(
+                Page::Appearance,
+                "Panes",
+                "Dim inactive panes",
+                "focus focused split unfocused fade dim opacity percent",
+                self.field(Field::PaneDim),
+            ),
+        ]);
         rows
     }
 }

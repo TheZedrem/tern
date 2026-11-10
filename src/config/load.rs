@@ -1,8 +1,8 @@
 //! The lenient reader: [`parse`] and [`load`] (spec 0005).
 
 use super::{
-    Config, Cursor, Font, Keybinding, Loaded, LocalProfile, Profile, ProfileKind, SshProfile,
-    ThemeSettings, expand_home,
+    ActivePane, Config, Cursor, Font, Keybinding, Loaded, LocalProfile, Profile, ProfileKind,
+    SshProfile, ThemeSettings, expand_home,
 };
 use crate::theme::ThemeSource;
 use serde::Deserialize;
@@ -307,6 +307,9 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                 "cursor" => {
                     config.cursor = map.next_value_seed(Optional(CursorReader(self)))?;
                 }
+                "active_pane" => {
+                    config.active_pane = map.next_value_seed(Optional(ActivePaneReader(self)))?;
+                }
                 "open_links" => {
                     if let Some(open) = map.next_value()? {
                         config.open_links = open;
@@ -595,6 +598,44 @@ impl<'de> MapReader<'de> for CursorReader<'_> {
     }
 }
 
+/// `active_pane:`, read key by key so an unknown one is a notice (spec
+/// 0003, flow 3). `color: null` is the theme's accent.
+struct ActivePaneReader<'a>(Attempt<'a>);
+
+impl<'de> MapReader<'de> for ActivePaneReader<'_> {
+    type Value = ActivePane;
+    const EXPECTING: &'static str = "`border`, `color` and `dim`";
+
+    fn empty(self) -> ActivePane {
+        ActivePane::default()
+    }
+
+    fn read<A: MapAccess<'de>>(self, mut map: A) -> Result<ActivePane, A::Error> {
+        let attempt = self.0;
+        let mut active = ActivePane::default();
+        while let Some(key) = attempt.key(&mut map, Some(Part::Key("active_pane".into())))? {
+            match key.name.as_str() {
+                "border" => {
+                    if let Some(border) = map.next_value()? {
+                        active.border = border;
+                    }
+                }
+                "color" => active.color = map.next_value()?,
+                "dim" => {
+                    if let Some(dim) = map.next_value()? {
+                        active.dim = dim;
+                    }
+                }
+                unknown => {
+                    map.next_value::<IgnoredAny>()?;
+                    attempt.unknown_key(&format!("active_pane.{unknown}"), key.line);
+                }
+            }
+        }
+        Ok(active)
+    }
+}
+
 /// `theme:`, read key by key so `custom` can fail theme by theme.
 struct ThemeReader<'a>(Attempt<'a>);
 
@@ -826,6 +867,94 @@ mod tests {
             "{}",
             notices[0]
         );
+    }
+
+    /// Spec 0003, flow 3, spec 0005 §Model: `active_pane` is by default a
+    /// 2 px border in the theme's accent (`color: null`) and the other
+    /// panes dimmed 15%. Each key sets its own part, a `"#rrggbb"` color
+    /// included, and a key left out keeps its default.
+    #[test]
+    fn active_pane_takes_each_key_and_a_partial_map_keeps_the_defaults() {
+        let default = ActivePane {
+            border: 2,
+            color: None,
+            dim: 15,
+        };
+        assert_eq!(parse("").config.active_pane, default);
+        let red = Some(Color(0xff0000));
+        let cases = [
+            ("{ border: 4, color: \"#ff0000\", dim: 30 }", 4, red, 30),
+            ("{ border: 0, dim: 0 }", 0, None, 0),
+            ("{ color: \"#FF0000\" }", 2, red, 15),
+            ("{ color: null }", 2, None, 15),
+            ("{ border: 5 }", 5, None, 15),
+            ("{ dim: 50 }", 2, None, 50),
+            ("{}", 2, None, 15),
+        ];
+        for (active_pane, border, color, dim) in cases {
+            let text = format!("active_pane: {active_pane}\n");
+            let Loaded { config, notices } = parse(&text);
+            let expected = ActivePane { border, color, dim };
+            assert_eq!(config.active_pane, expected, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0003, flow 3: the ranges are clamped where the marking is
+    /// drawn, as `font.size` is (spec 0005), so a value past them is no
+    /// mistake and gets no notice.
+    #[test]
+    fn an_active_pane_value_past_its_range_loads_without_a_notice() {
+        let Loaded { config, notices } = parse("active_pane: { border: 40, dim: 90 }\n");
+        assert_eq!(
+            (config.active_pane.border, config.active_pane.dim),
+            (40, 90)
+        );
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Spec 0005: "Unknown keys produce a notice, not an error", in
+    /// `active_pane` too; the rest of it still applies.
+    #[test]
+    fn an_unknown_key_inside_active_pane_is_a_notice_and_the_rest_of_it_applies() {
+        let Loaded { config, notices } =
+            parse("active_pane:\n  border: 4\n  opacity: 30\n  dim: 0\n");
+        let expected = ActivePane {
+            border: 4,
+            dim: 0,
+            ..ActivePane::default()
+        };
+        assert_eq!(config.active_pane, expected);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].contains("active_pane.opacity") && notices[0].contains("line 3"),
+            "{}",
+            notices[0]
+        );
+    }
+
+    /// Spec 0005: a value that doesn't fit resets its top-level key, here
+    /// all of `active_pane`, with a notice naming it; the rest still
+    /// applies. The good key beside the bad one resets too.
+    #[test]
+    fn a_bad_active_pane_value_resets_active_pane_with_a_notice_and_the_rest_applies() {
+        for (bad, good) in [
+            ("color: red", "border: 4"),
+            ("color: \"#ff00\"", "border: 4"),
+            ("border: wide", "dim: 30"),
+            ("border: -1", "dim: 30"),
+            ("border: 2.5", "dim: 30"),
+            ("dim: -5", "border: 4"),
+        ] {
+            let text =
+                format!("scrollback: 500\nactive_pane:\n  {good}\n  {bad}\ncopy_on_select: true\n");
+            let Loaded { config, notices } = parse(&text);
+            assert_eq!(config.active_pane, ActivePane::default(), "{bad}");
+            assert_eq!(config.scrollback, 500, "{bad}");
+            assert!(config.copy_on_select, "{bad}");
+            assert_eq!(notices.len(), 1, "{bad}: {notices:?}");
+            assert!(notices[0].contains("active_pane"), "{bad}: {}", notices[0]);
+        }
     }
 
     /// Spec 0005 §Model, spec 0002 flow 7: links open on Ctrl+click
@@ -1132,7 +1261,8 @@ cursor: { style: block, blink: true }
 copy_on_select: false
 open_links: ctrl_click              # ctrl_click | click (spec 0002, flow 7)
 tab_bar: top                        # top | bottom | left | right (spec 0003)
-sftp_sidebar: right                 # left | right (spec 0008)
+active_pane: { border: 2, color: null, dim: 15 }  # in a split: border px 0–6, color null → theme accent, dim % 0–50 (spec 0003)
+sftp_sidebar: right                # left | right (spec 0008)
 sftp_click: edit                    # edit | download (spec 0008)
 sftp_upload: manual                 # manual | save | focus (spec 0008)
 files_executable: ask               # ask | run | edit (spec 0013)
@@ -1152,8 +1282,8 @@ theme:
       cursor: "#f5c2e7"
 "##;
 
-    /// Its `cursor`, `copy_on_select` and `open_links` spell out the
-    /// defaults.
+    /// Its `cursor`, `active_pane`, `copy_on_select` and `open_links` spell
+    /// out the defaults.
     #[test]
     fn the_spec_example_loads_every_profile_without_a_notice() {
         let Loaded { config, notices } = parse(SPEC_EXAMPLE);
@@ -1202,7 +1332,7 @@ theme:
                 default: "dark".into(),
                 custom: vec![("midnight".into(), midnight)],
             },
-            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 36)],
+            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 37)],
             ..Config::default()
         };
         assert_eq!(config, expected);

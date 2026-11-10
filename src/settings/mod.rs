@@ -14,7 +14,7 @@ pub use pages::update_check_name;
 use pages::{Form, ImportCard};
 
 use crate::commands::OpenConfigFolder;
-use crate::config::Config;
+use crate::config::{ActivePane, Config};
 use change::Change;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -47,6 +47,9 @@ pub const FIELDS: &[&str] = &[
     "open_links",
     "cursor.style",
     "cursor.blink",
+    "active_pane.border",
+    "active_pane.color",
+    "active_pane.dim",
     "keybindings",
     "theme.default",
     "tab_bar",
@@ -96,6 +99,9 @@ enum Field {
     FontSize,
     LineHeight,
     Scrollback,
+    PaneBorder,
+    PaneColor,
+    PaneDim,
 }
 
 /// A tab of the screen, down its left side as in Tabby (spec 0009).
@@ -210,27 +216,38 @@ impl Focusable for SettingsView {
 impl SettingsView {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut subscriptions = Vec::new();
-        let fields = [Field::FontSize, Field::LineHeight, Field::Scrollback]
-            .into_iter()
-            .map(|field| {
-                let input = cx.new(|cx| {
-                    InputState::new(window, cx).default_value(field_value(field, &config))
-                });
-                subscriptions.push(cx.subscribe_in(
-                    &input,
-                    window,
-                    move |this, _, event: &InputEvent, _, cx| match event {
-                        InputEvent::Focus => this.editing = Some(field),
-                        InputEvent::PressEnter { .. } | InputEvent::Blur => {
-                            this.editing = None;
-                            this.commit(field, cx);
-                        }
-                        _ => {}
-                    },
-                ));
-                (field, input)
-            })
-            .collect();
+        let fields = [
+            Field::FontSize,
+            Field::LineHeight,
+            Field::Scrollback,
+            Field::PaneBorder,
+            Field::PaneColor,
+            Field::PaneDim,
+        ]
+        .into_iter()
+        .map(|field| {
+            let input = cx.new(|cx| {
+                let input = InputState::new(window, cx).default_value(field_value(field, &config));
+                match field {
+                    Field::PaneColor => input.placeholder("theme accent"),
+                    _ => input,
+                }
+            });
+            subscriptions.push(cx.subscribe_in(
+                &input,
+                window,
+                move |this, _, event: &InputEvent, _, cx| match event {
+                    InputEvent::Focus => this.editing = Some(field),
+                    InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                        this.editing = None;
+                        this.commit(field, cx);
+                    }
+                    _ => {}
+                },
+            ));
+            (field, input)
+        })
+        .collect();
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings"));
         subscriptions.push(cx.subscribe_in(
             &search,
@@ -314,7 +331,21 @@ fn field_value(field: Field, config: &Config) -> String {
         Field::FontSize => number(config.font.size),
         Field::LineHeight => number(config.font.line_height),
         Field::Scrollback => config.scrollback.to_string(),
+        Field::PaneBorder => config.active_pane.border.to_string(),
+        Field::PaneColor => config
+            .active_pane
+            .color
+            .map_or(String::new(), |color| format!("#{:06x}", color.0)),
+        Field::PaneDim => config.active_pane.dim.to_string(),
     }
+}
+
+/// `active_pane.color` as YAML: quoted, since `#` starts a comment.
+fn pane_color_yaml(config: &Config) -> String {
+    config
+        .active_pane
+        .color
+        .map_or("null".to_owned(), |color| format!("\"#{:06x}\"", color.0))
 }
 
 /// The change a typed field asks for, or why it can't be written.
@@ -354,6 +385,47 @@ fn field_change(field: Field, typed: &str) -> Result<Change, &'static str> {
                 path: vec!["scrollback"],
                 value: lines.to_string(),
                 reads: |config| config.scrollback.to_string(),
+            })
+        }
+        Field::PaneBorder => {
+            let width = typed
+                .parse::<u32>()
+                .ok()
+                .filter(|width| *width <= ActivePane::MAX_BORDER)
+                .ok_or("Pixels from 0 to 6.")?;
+            Ok(Change::Set {
+                path: vec!["active_pane", "border"],
+                value: width.to_string(),
+                reads: |config| config.active_pane.border.to_string(),
+            })
+        }
+        Field::PaneColor => {
+            // Empty is the theme's accent.
+            let value = if typed.is_empty() {
+                "null".to_owned()
+            } else {
+                let hex = typed
+                    .strip_prefix('#')
+                    .filter(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .ok_or("A color like #ff8800, or empty for the theme's accent.")?;
+                format!("\"#{}\"", hex.to_ascii_lowercase())
+            };
+            Ok(Change::Set {
+                path: vec!["active_pane", "color"],
+                value,
+                reads: pane_color_yaml,
+            })
+        }
+        Field::PaneDim => {
+            let dim = typed
+                .parse::<u32>()
+                .ok()
+                .filter(|dim| *dim <= ActivePane::MAX_DIM)
+                .ok_or("Percent from 0 to 50.")?;
+            Ok(Change::Set {
+                path: vec!["active_pane", "dim"],
+                value: dim.to_string(),
+                reads: |config| config.active_pane.dim.to_string(),
             })
         }
     }
@@ -653,6 +725,10 @@ mod tests {
         "scrollback",
         "cursor.style",
         "cursor.blink",
+        // Spec 0003's, documented with spec 0005's.
+        "active_pane.border",
+        "active_pane.color",
+        "active_pane.dim",
         "copy_on_select",
         "open_links",
         "tab_bar",
@@ -770,6 +846,100 @@ mod tests {
                 "{field} isn't a spec 0005 key"
             );
         }
+    }
+
+    /// Spec 0003, flow 3: the Appearance fields take a border of 0–6 px,
+    /// a `#rrggbb` color or nothing for the theme's accent, and a dim of
+    /// 0–50%; anything else isn't written and the field says why.
+    #[test]
+    fn the_active_pane_fields_take_only_values_in_their_ranges() {
+        let cases = [
+            (
+                Field::PaneBorder,
+                &["0", "2", "6"][..],
+                &["7", "-1", "2.5", "", "wide"][..],
+            ),
+            (
+                Field::PaneColor,
+                &["", "#ff8800", "#FF8800"],
+                &["ff8800", "#fff", "#ff88001", "red", "#gg0000"],
+            ),
+            (
+                Field::PaneDim,
+                &["0", "15", "50"],
+                &["51", "-5", "", "half"],
+            ),
+        ];
+        for (field, valid, invalid) in cases {
+            for typed in valid {
+                assert!(field_change(field, typed).is_ok(), "{field:?} {typed:?}");
+            }
+            for typed in invalid {
+                assert!(field_change(field, typed).is_err(), "{field:?} {typed:?}");
+            }
+        }
+    }
+
+    /// `text` with what `field` would write for `typed`, checked as the
+    /// screen does before it saves.
+    fn committed(text: &str, field: Field, typed: &str) -> String {
+        let change = field_change(field, typed).expect("a valid value");
+        change.edited(text).expect("an edit that reads back")
+    }
+
+    /// Spec 0003, AC12, spec 0009 in-place edits: border 4 and color
+    /// `#ff0000` set on the template read back as set, each rewriting only
+    /// its own line and keeping that line's comment. An empty color writes
+    /// `null` again, the theme's accent.
+    #[test]
+    fn committed_active_pane_fields_edit_the_template_in_place_and_read_back() {
+        let edited = committed(TEMPLATE, Field::PaneBorder, "4");
+        let edited = committed(&edited, Field::PaneColor, "#FF0000");
+        let edited = committed(&edited, Field::PaneDim, "0");
+        let (before, after): (Vec<&str>, Vec<&str>) =
+            (TEMPLATE.lines().collect(), edited.lines().collect());
+        assert_eq!(before.len(), after.len(), "{edited}");
+        let changed: Vec<(&str, &str)> = before
+            .into_iter()
+            .zip(after)
+            .filter(|(old, new)| old != new)
+            .collect();
+        assert_eq!(changed.len(), 3, "{changed:?}");
+        for (key, value) in [("border", "4"), ("color", "\"#ff0000\""), ("dim", "0")] {
+            let line = format!("  {key}: {value} ");
+            assert!(
+                changed
+                    .iter()
+                    .any(|(_, new)| new.starts_with(&line) && new.contains(" # ")),
+                "no `{line}` with its comment in {changed:?}"
+            );
+        }
+        let loaded = crate::config::parse(&edited);
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        let expected = ActivePane {
+            border: 4,
+            color: Some(crate::theme::Color(0xff0000)),
+            dim: 0,
+        };
+        assert_eq!(loaded.config.active_pane, expected);
+
+        let reset = committed(&edited, Field::PaneColor, "");
+        assert_eq!(crate::config::parse(&reset).config.active_pane.color, None);
+    }
+
+    /// Spec 0009: a field shows what the file says, so committing it
+    /// unchanged writes the file as it was; an unset color shows empty.
+    #[test]
+    fn the_active_pane_fields_show_the_files_values() {
+        let config = Config::default();
+        assert_eq!(field_value(Field::PaneColor, &config), "");
+        for field in [Field::PaneBorder, Field::PaneColor, Field::PaneDim] {
+            let shown = field_value(field, &config);
+            assert_eq!(committed(TEMPLATE, field, &shown), TEMPLATE, "{field:?}");
+        }
+        let edited = committed(TEMPLATE, Field::PaneColor, "#ff8800");
+        let config = crate::config::parse(&edited).config;
+        assert_eq!(field_value(Field::PaneColor, &config), "#ff8800");
     }
 
     /// The settings screen open in a test window, as the workspace shows

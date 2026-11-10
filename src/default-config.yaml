@@ -48,6 +48,12 @@ cursor:
   style: block      # block | beam | underline; programs may change it
   blink: true
 
+# How the focused pane stands out in a tab with splits.
+active_pane:
+  border: 2         # its border in pixels, 0-6; 0 = none
+  color: null       # the border's color like "#ff8800"; null = the theme's accent
+  dim: 15           # how much the other panes are dimmed, 0-50 percent; 0 = not at all
+
 # Your own keys for commands, by ID: the command palette (Ctrl+Shift+P)
 # shows the ID of the command you highlight. A command you bind here loses
 # its default key, which then goes to the shell, and a default key you give

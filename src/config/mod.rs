@@ -8,7 +8,7 @@
 //! after an error, so [`parse`] notes the part that failed and reads the
 //! document again without it.
 
-use crate::theme::ThemeSource;
+use crate::theme::{Color, ThemeSource};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -50,6 +50,8 @@ pub struct Config {
     /// flow 4).
     pub copy_on_select: bool,
     pub cursor: Cursor,
+    /// How the focused pane of a split tab stands out (spec 0003, flow 3).
+    pub active_pane: ActivePane,
     /// What opens a link (spec 0002, flow 7).
     pub open_links: OpenLinks,
     /// Which side of the window the tabs are on (spec 0003).
@@ -172,6 +174,46 @@ impl Default for Cursor {
     }
 }
 
+/// `active_pane:` as written. The ranges are applied where it's drawn, as
+/// for `font`, so a value out of range is no notice (spec 0003, flow 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActivePane {
+    /// Border width in logical pixels; 0 draws none.
+    pub border: u32,
+    /// `None` is the theme's `accent`, so it follows a theme switch.
+    pub color: Option<Color>,
+    /// How much the other panes are dimmed, in percent; 0 dims none.
+    pub dim: u32,
+}
+
+impl ActivePane {
+    /// The widest border drawn, in logical pixels.
+    pub const MAX_BORDER: u32 = 6;
+    /// The most the other panes are dimmed, in percent: past it, a pane
+    /// gets hard to read.
+    pub const MAX_DIM: u32 = 50;
+
+    /// The border width drawn, in logical pixels.
+    pub fn border_px(self) -> f32 {
+        self.border.min(Self::MAX_BORDER) as f32
+    }
+
+    /// The opacity of the overlay over the other panes, 0–0.5.
+    pub fn dim_opacity(self) -> f32 {
+        self.dim.min(Self::MAX_DIM) as f32 / 100.0
+    }
+}
+
+impl Default for ActivePane {
+    fn default() -> Self {
+        Self {
+            border: 2,
+            color: None,
+            dim: 15,
+        }
+    }
+}
+
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorStyle {
@@ -280,6 +322,7 @@ impl Default for Config {
             open_new_tab: true,
             copy_on_select: false,
             cursor: Cursor::default(),
+            active_pane: ActivePane::default(),
             open_links: OpenLinks::CtrlClick,
             tab_bar: TabBarSide::Top,
             sftp_sidebar: SftpSide::Right,
@@ -745,6 +788,25 @@ pub(crate) mod tests {
             ..htop
         };
         assert_eq!(named.display_name(), "Htop");
+    }
+
+    /// Spec 0003, flow 3: the border is drawn 0–6 px and the other panes
+    /// dimmed 0–50%, so a pane never goes unreadable; 0 draws none.
+    #[test]
+    fn the_active_pane_marking_is_drawn_within_its_ranges() {
+        let drawn = |border, dim| {
+            let active = ActivePane {
+                border,
+                color: None,
+                dim,
+            };
+            (active.border_px(), active.dim_opacity())
+        };
+        assert_eq!(drawn(0, 0), (0.0, 0.0));
+        assert_eq!(drawn(2, 15), (2.0, 0.15));
+        assert_eq!(drawn(6, 50), (6.0, 0.5));
+        assert_eq!(drawn(7, 51), (6.0, 0.5));
+        assert_eq!(drawn(u32::MAX, u32::MAX), (6.0, 0.5));
     }
 
     #[test]
