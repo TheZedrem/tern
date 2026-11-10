@@ -43,6 +43,9 @@ pub struct Config {
     /// Relaunch with the tabs of the last run; `false` deletes the saved
     /// session on the next quit (spec 0003).
     pub restore_session: bool,
+    /// Every launch opens a fresh tab after the restored ones and shows it
+    /// (spec 0003, flow 6).
+    pub open_new_tab: bool,
     /// Copy a selection to the clipboard as soon as it's made (spec 0002,
     /// flow 4).
     pub copy_on_select: bool,
@@ -274,6 +277,7 @@ impl Default for Config {
             theme: ThemeSettings::default(),
             keybindings: Vec::new(),
             restore_session: true,
+            open_new_tab: true,
             copy_on_select: false,
             cursor: Cursor::default(),
             open_links: OpenLinks::CtrlClick,

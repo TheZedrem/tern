@@ -35,7 +35,7 @@ earlier Tauri version took 1.07 s to start and was dropped.
 **Terminal**
 
 - Tabs, vertical tabs and split panes, rearranged by drag and drop
-- Session restore: tabs, splits and the window come back as you left them
+- Session restore: tabs, splits and the window come back as you left them, with a fresh tab opened on top (`open_new_tab: false` to skip it)
 - Search, clickable links, IME input, right-click paste, copy on select and the Linux primary selection
 - A command palette, and shortcuts that never take `Ctrl`/`Alt` keys from the shell
 - YAML config that reloads live, profiles and themes, and a settings screen for all of it

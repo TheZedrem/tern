@@ -82,6 +82,7 @@ files_executable: ask               # ask | run | edit (spec 0013)
 new_tab: ask                        # what Ctrl+Shift+T opens: ask | default (spec 0004)
 close_on_exit: clean                # always | clean | never
 restore_session: true
+open_new_tab: true                  # a fresh tab on every launch (spec 0003)
 keybindings: { "ctrl+shift+d": pane.splitRight }
 
 theme:

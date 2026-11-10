@@ -294,6 +294,11 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.restore_session = restore;
                     }
                 }
+                "open_new_tab" => {
+                    if let Some(open) = map.next_value()? {
+                        config.open_new_tab = open;
+                    }
+                }
                 "copy_on_select" => {
                     if let Some(copy) = map.next_value()? {
                         config.copy_on_select = copy;
@@ -730,6 +735,21 @@ mod tests {
         }
     }
 
+    /// Spec 0003, flow 6, AC11: boot opens a fresh tab behind the restored
+    /// ones unless `open_new_tab: false` turns that off.
+    #[test]
+    fn open_new_tab_is_on_unless_set_to_false() {
+        assert!(parse("").config.open_new_tab);
+        for (text, open) in [
+            ("open_new_tab: true\n", true),
+            ("open_new_tab: false\n", false),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.open_new_tab, open, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
     /// Spec 0002, flow 4: copy-on-select is a config option, off by
     /// default.
     #[test]
@@ -1119,6 +1139,7 @@ files_executable: ask               # ask | run | edit (spec 0013)
 new_tab: ask                    # what Ctrl+Shift+T opens: ask | default (spec 0004)
 close_on_exit: clean                # always | clean | never
 restore_session: true
+open_new_tab: true                  # a fresh tab on every launch (spec 0003)
 keybindings: { "ctrl+shift+d": pane.splitRight }
 
 theme:
@@ -1181,7 +1202,7 @@ theme:
                 default: "dark".into(),
                 custom: vec![("midnight".into(), midnight)],
             },
-            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 35)],
+            keybindings: vec![binding("ctrl+shift+d", "pane.splitRight", 36)],
             ..Config::default()
         };
         assert_eq!(config, expected);

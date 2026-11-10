@@ -49,6 +49,23 @@ impl SettingsView {
             Row::new(
                 Page::General,
                 "Startup",
+                "Open a new tab on launch",
+                "new tab fresh launch startup open terminal",
+                self.switch(
+                    "open-new-tab",
+                    config.open_new_tab,
+                    |on| Change::Set {
+                        path: vec!["open_new_tab"],
+                        value: on.to_string(),
+                        reads: |config| config.open_new_tab.to_string(),
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            Row::new(
+                Page::General,
+                "Startup",
                 if cfg!(target_os = "macos") {
                     "Cmd+T opens"
                 } else {

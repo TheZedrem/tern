@@ -1,5 +1,5 @@
 ---
-status: approved     # draft | approved | implemented
+status: implemented    # draft | approved | implemented
 phase: 1
 tasks: [T-003, T-006, T-011, T-062]
 related: [spec 0001, spec 0002, spec 0005]
@@ -92,7 +92,7 @@ title, else the profile's display name.
    longer exists opens `default_profile` with a notice. SSH leaves restore
    disconnected and connect only on Enter (spec 0006).
    With `open_new_tab: true`, boot appends one tab opening `default_profile`
-   in the home directory and makes it active instead: its shell is the only
+   (in its `cwd`, else home) and makes it active instead: its shell is the only
    one spawned at boot, and every restored tab, including the last active
    one, waits for first activation. With nothing to restore (no file,
    `restore_session: false`) it is the one fresh tab of flow 7, never a
@@ -148,7 +148,7 @@ frame themselves. Windows 11 always draws its own frame.
 8. `session.json` contains no scrollback, commands or environment variables.
 9. A 5 000-character title set via OSC 2 shows in the tab bar capped at 200 characters, on one line, and the tab bar keeps its layout.
 10. On GNOME, the window moves by dragging the tab bar's empty area, resizes from its edges, and closes from its close button.
-11. With `open_new_tab: true` and 3 saved tabs, relaunch shows 4 tabs, the new last one active in the home directory, and exactly one shell running; with `false`, the saved active tab is active and no tab is added.
+11. With `open_new_tab: true` and 3 saved tabs, relaunch shows 4 tabs, the new last one active, and exactly one shell running; with `false`, the saved active tab is active and no tab is added.
 
 ## Open questions
 

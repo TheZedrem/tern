@@ -129,6 +129,44 @@ impl Boot {
         area: (f32, f32),
         mut start: impl FnMut(&SavedLeaf, (f32, f32)) -> BootPane,
     ) -> Option<Self> {
+        let mut boot = Self::parked(session)?;
+        let shown = boot.tabs.active();
+        let rects = shown.root.rects(Rect::UNIT);
+        let zoomed = shown.zoomed;
+        for leaf in session.tabs[boot.tabs.active_index()].root.leaves() {
+            boot.pending.remove(&leaf.id);
+            if let Some(saved) = &leaf.files {
+                boot.files.push((leaf.id, saved.clone()));
+                continue;
+            }
+            let rect = match zoomed {
+                // A zoomed pane fills the window.
+                Some(zoomed) if zoomed == leaf.id => Rect::UNIT,
+                _ => rects
+                    .iter()
+                    .find(|(id, _)| *id == leaf.id)
+                    .map_or(Rect::UNIT, |(_, rect)| *rect),
+            };
+            boot.panes.push((
+                leaf.id,
+                start(leaf, (rect.width * area.0, rect.height * area.1)),
+            ));
+        }
+        Some(boot)
+    }
+
+    /// The tabs of `session`, none of them started, behind a new last tab
+    /// of `pane` that is shown (spec 0003, flow 6, `open_new_tab`). `None`
+    /// for a session without tabs.
+    pub fn restore_behind(session: &Session, pane: impl FnOnce() -> BootPane) -> Option<Self> {
+        let mut boot = Self::parked(session)?;
+        let leaf = boot.tabs.new_tab();
+        boot.panes.push((leaf, pane()));
+        Some(boot)
+    }
+
+    /// The tabs of `session` with every leaf waiting for its tab.
+    fn parked(session: &Session) -> Option<Self> {
         let tabs = session
             .tabs
             .iter()
@@ -141,47 +179,25 @@ impl Boot {
             })
             .collect();
         let tabs = Tabs::restore(tabs, session.active)?;
-        let shown = tabs.active_index();
-        let rects = tabs.active().root.rects(Rect::UNIT);
-        let mut panes = Vec::new();
-        let mut files = Vec::new();
-        let mut pending = HashMap::new();
-        let zoomed = tabs.active().zoomed;
-        for (ix, saved) in session.tabs.iter().enumerate() {
-            for leaf in saved.root.leaves() {
-                if ix != shown {
-                    // Shown in the tab bar until it starts: the title rules
-                    // apply to a saved title too.
-                    let title = leaf.title.as_deref().map(crate::terminal::clean_title);
-                    let leaf = SavedLeaf {
-                        title: title.filter(|title| !title.is_empty()),
-                        ..leaf.clone()
-                    };
-                    pending.insert(leaf.id, leaf);
-                    continue;
-                }
-                if let Some(saved) = &leaf.files {
-                    files.push((leaf.id, saved.clone()));
-                    continue;
-                }
-                let rect = match zoomed {
-                    // A zoomed pane fills the window.
-                    Some(zoomed) if zoomed == leaf.id => Rect::UNIT,
-                    _ => rects
-                        .iter()
-                        .find(|(id, _)| *id == leaf.id)
-                        .map_or(Rect::UNIT, |(_, rect)| *rect),
+        let pending = session
+            .tabs
+            .iter()
+            .flat_map(|saved| saved.root.leaves())
+            .map(|leaf| {
+                // Shown in the tab bar until it starts: the title rules
+                // apply to a saved title too.
+                let title = leaf.title.as_deref().map(crate::terminal::clean_title);
+                let leaf = SavedLeaf {
+                    title: title.filter(|title| !title.is_empty()),
+                    ..leaf.clone()
                 };
-                panes.push((
-                    leaf.id,
-                    start(leaf, (rect.width * area.0, rect.height * area.1)),
-                ));
-            }
-        }
+                (leaf.id, leaf)
+            })
+            .collect();
         Some(Self {
             tabs,
-            panes,
-            files,
+            panes: Vec::new(),
+            files: Vec::new(),
             pending,
             bad_session: None,
         })
@@ -815,6 +831,47 @@ mod tests {
             .map(|saved| (saved.id, saved.clone()))
             .collect();
         assert_eq!(boot.pending, waiting);
+    }
+
+    /// AC11 (spec 0003), flow 6, `open_new_tab: true`: three saved tabs
+    /// boot as four, the new last one shown. Its pane is the only one
+    /// started; every saved pane, the last shown tab's too, waits for its
+    /// tab, and none shares the new pane's ID.
+    #[test]
+    fn a_new_tab_behind_the_session_is_shown_and_the_only_one_started() {
+        let session = three_tabs();
+        let mut fresh = 0;
+        let boot = Boot::restore_behind(&session, || {
+            fresh += 1;
+            BootPane {
+                start: Start::OnEnter(String::new()),
+                launch: Launch {
+                    command: Command::bench(),
+                    cwd: None,
+                    timing: Arc::new(Timing::new(Instant::now())),
+                },
+                profile: (&Profile::shell()).into(),
+                theme: theme::DARK,
+                title: None,
+            }
+        })
+        .expect("a session with tabs");
+        assert_eq!(fresh, 1);
+        assert_eq!(boot.tabs.tabs().len(), 4);
+        assert_eq!(boot.tabs.active_index(), 3);
+        let new_leaf = boot.tabs.active().focused;
+        assert_eq!(boot.tabs.active().root.leaves(), [new_leaf]);
+        let boot_panes: Vec<LeafId> = boot.panes.iter().map(|(leaf, _)| *leaf).collect();
+        assert_eq!(boot_panes, [new_leaf]);
+        assert!(boot.files.is_empty());
+        let waiting: HashMap<LeafId, SavedLeaf> = session
+            .tabs
+            .iter()
+            .flat_map(|saved| saved.root.leaves())
+            .map(|saved| (saved.id, saved.clone()))
+            .collect();
+        assert_eq!(boot.pending, waiting);
+        assert!(!waiting.contains_key(&new_leaf));
     }
 
     /// Spec 0003, flow 6, and spec 0001, flow 4: each pane of the shown tab

@@ -1,5 +1,5 @@
 ---
-status: next
+status: now
 blocked-by: []
 ---
 # T-062: Open a fresh tab on every launch
@@ -11,4 +11,4 @@ turns it off; the key goes on the settings screen's Behavior section and
 into `src/default-config.yaml`. Asked for by the owner (2026-11-10).
 Settle OQ-030 before building. Boot path: report TTFP. Area: src.
 
-Spec: ../spec/0003-tabs-splits-and-session-restore.md
+Spec: ../../spec/0003-tabs-splits-and-session-restore.md
