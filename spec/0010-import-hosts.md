@@ -46,7 +46,7 @@ picker at once.
 
 ### Affected areas
 
-- `src/import/` (one parser per format, the report), `src/config.rs` (appending profiles, spec 0009's in-place edits), `bench::Mode::parse` / `main.rs` (one more argv mode, dispatched before GPUI starts)
+- `src/import/` (one parser per format, the report), `src/config/` (appending profiles, spec 0009's in-place edits), `bench::Mode::parse` / `main.rs` (one more argv mode, dispatched before GPUI starts)
 
 ### Model
 

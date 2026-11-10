@@ -72,4 +72,4 @@ Done when no file under `src/` has more than about 800 non-test lines, or
 the task says why one stays bigger, and `spec/architecture.md` §Code
 layout names the new files where it lists them.
 
-Spec: ../spec/architecture.md
+Spec: ../../spec/architecture.md

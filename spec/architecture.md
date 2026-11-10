@@ -119,13 +119,14 @@ machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
 One crate. `src/main.rs` is the boot path and does only what the first
 frame needs. Everything else is a module under `src/`:
 
-- `terminal/` — the pane: PTY lifecycle, terminal element, input mapping, search
-- `layout/` — tabs, title bar, split tree, session restore
+- `terminal/` — the pane: PTY lifecycle, terminal element, input mapping, search. `mod.rs` holds `TerminalPane` and its render; `launch.rs` starts and restarts the program, `exit.rs` titles and exit handling, `answers.rs` prompt answering, `mouse.rs` mouse, selection and clipboard, `font.rs` font settings, `input.rs` keys and IME, `search.rs` the search bar
+- `layout/` — tabs, title bar, split tree, session restore. `mod.rs` holds `Workspace`, `Boot`, the action wiring and render; each feature it hosts has its own file: `session.rs`, `panes.rs`, `files.rs` (files panes and the SFTP sidebar), `profiles.rs` (palette and profiles), `reload.rs` (config reload and the settings screen), `closing.rs`, `splits.rs` (splits and drag and drop), `chrome.rs` (tab bar and title bar)
 - `commands/` — actions, keymap, palette
 - `ssh/` — hosts, the ssh command, askpass (spec 0006)
-- `files/` — the one file browser: its view, tree and every feature on it, the Local target, and the two places it is drawn, the sidebar and the files pane (spec 0013)
+- `files/` — the one file browser: its view, tree and every feature on it, the Local target, and the two places it is drawn, the sidebar and the files pane (spec 0013). `browser.rs` holds `Browser`; its features live in `browser/`: `navigate.rs`, `transfers.rs`, `changes.rs` (rename, delete, new folder), `edits.rs`, `menu.rs`, `render.rs`
 - `sftp/` — the SFTP target: connections, transfers and edit copies (spec 0008)
-- `config.rs`, `theme.rs`, `session.rs` — files on disk
+- `settings/` — the settings screen (spec 0009): `mod.rs` the view and shared rows, one file per tab in `pages/`
+- `config/` (`mod.rs` the types, `load.rs` the lenient reader, `edit.rs` in-place edits, `watch.rs` the watcher), `theme.rs`, `session.rs` — files on disk
 - `secrets.rs` — the OS keychain
 - `update.rs` — the opt-in release check (spec 0011)
 - `timing.rs`, `bench.rs` — TTFP marks and the `--bench-startup` runner

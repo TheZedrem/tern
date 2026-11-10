@@ -42,7 +42,7 @@ switching themes previews live.
 
 ### Affected areas
 
-- `src/config.rs`, `src/theme.rs`, `themes/*.yaml` (built-ins, embedded), `src/commands/` (theme picker)
+- `src/config/`, `src/theme.rs`, `themes/*.yaml` (built-ins, embedded), `src/commands/` (theme picker)
 
 ### Model
 

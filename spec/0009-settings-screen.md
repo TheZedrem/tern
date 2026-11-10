@@ -40,7 +40,7 @@ can be changed from the screen, the change applies within a second, and
 
 ### Affected areas
 
-- `src/settings/` (the screen), `src/config.rs` (in-place edits, generalizing `save_theme_default`), the palette's commands (spec 0004)
+- `src/settings/` (the screen), `src/config/` (in-place edits, generalizing `save_theme_default`), the palette's commands (spec 0004)
 
 ### Model
 

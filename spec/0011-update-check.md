@@ -45,7 +45,7 @@ user runs the palette command.
 ### Affected areas
 
 - `src/update.rs` [new]: the check (HTTP, parsing, comparing versions), the state file and the scheduling
-- `src/config.rs` and `src/default-config.yaml`: the `update_check` key
+- `src/config/` and `src/default-config.yaml`: the `update_check` key
 - the settings screen (spec 0009): General → Updates
 - `commands/`: `app.checkForUpdates`
 - the workspace view: the question and the update notice, both after the first frame

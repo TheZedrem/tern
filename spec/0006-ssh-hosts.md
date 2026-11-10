@@ -43,7 +43,7 @@ arguments, the environment or a log.
 
 ### Affected areas
 
-- `src/ssh/` (host list, command, askpass), `src/secrets.rs` (keychain), `src/config.rs` (ssh profiles), the palette's host provider (spec 0004)
+- `src/ssh/` (host list, command, askpass), `src/secrets.rs` (keychain), `src/config/` (ssh profiles), the palette's host provider (spec 0004)
 
 ### Model
 
