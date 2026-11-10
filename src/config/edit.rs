@@ -7,7 +7,7 @@ use serde_saphyr::Spanned;
 use std::path::Path;
 
 /// Saves `name` as `theme.default` in the config at `path`, creating the
-/// config from [`TEMPLATE`] if there is none, and changing nothing else
+/// config from [`TEMPLATE`](super::TEMPLATE) if there is none, and changing nothing else
 /// (spec 0005, flow 4). A file that changes while it's being edited is
 /// read again once; if it changes again, nothing is written (flow 5).
 pub fn save_theme_default(path: &Path, name: &str) -> Result<(), String> {
@@ -21,7 +21,7 @@ pub fn save_theme_default(path: &Path, name: &str) -> Result<(), String> {
 }
 
 /// Rewrites the config at `path` with `edit`, creating it from
-/// [`TEMPLATE`] first if there is none (spec 0005, flow 4; spec 0009). A
+/// [`TEMPLATE`](super::TEMPLATE) first if there is none (spec 0005, flow 4; spec 0009). A
 /// file that changes while it's being edited is read again once; if it
 /// changes again, nothing is written (spec 0005, flow 5).
 pub fn save_edit(path: &Path, edit: impl Fn(&str) -> Result<String, String>) -> Result<(), String> {
