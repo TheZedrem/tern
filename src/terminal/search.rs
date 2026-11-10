@@ -2,10 +2,18 @@
 //! scrollback with alacritty_terminal's regex search, the query taken as
 //! plain text unless regex is on, and case-sensitive only when asked.
 
+use super::{CloseSearch, SEARCH_CONTEXT, State, TerminalPane, grid, search};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
+use gpui::{
+    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Styled,
+    Subscription, Window, div, px,
+};
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::{ActiveTheme, Selectable, Sizable};
 
 /// The most matches highlighted on screen at once.
 const MAX_SHOWN: usize = 1000;
@@ -79,6 +87,175 @@ pub fn on_screen<T>(term: &Term<T>, search: &mut RegexSearch) -> Vec<Match> {
     RegexIter::new(top, bottom, Direction::Right, term, search)
         .take(MAX_SHOWN)
         .collect()
+}
+
+/// The search bar while it's open (spec 0002, flow 6).
+pub(super) struct SearchBar {
+    input: Entity<InputState>,
+    case_sensitive: bool,
+    regex: bool,
+    /// The query, compiled; `None` while it's empty or not a valid regex.
+    compiled: Option<RegexSearch>,
+    /// The match the view is on.
+    current: Option<Match>,
+    _events: Subscription,
+}
+
+impl TerminalPane {
+    /// Opens the search bar, or selects its query if it's open (spec 0002,
+    /// flow 6).
+    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.state, State::Running(_)) {
+            return;
+        }
+        if let Some(bar) = &self.search {
+            bar.input.update(cx, |input, cx| {
+                input.focus(window, cx);
+                input.select_all(window, cx);
+            });
+            return;
+        }
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let events = cx.subscribe_in(&input, window, |pane, _, event: &InputEvent, _, cx| {
+            match event {
+                InputEvent::Change => pane.search_changed(cx),
+                // Enter goes up to older output, Shift+Enter back down.
+                InputEvent::PressEnter { shift, .. } => pane.search_step(!shift, cx),
+                _ => {}
+            }
+        });
+        input.update(cx, |input, cx| input.focus(window, cx));
+        self.search = Some(SearchBar {
+            input,
+            case_sensitive: false,
+            regex: false,
+            compiled: None,
+            current: None,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    /// Closes the search bar; the keyboard goes back to the program.
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.take().is_some() {
+            window.focus(&self.focus, cx);
+            cx.notify();
+        }
+    }
+
+    /// Searches anew for the query as it is now, from the newest output up.
+    fn search_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(bar) = &mut self.search else {
+            return;
+        };
+        let query = bar.input.read(cx).value().to_string();
+        bar.compiled = search::compile(&query, bar.case_sensitive, bar.regex);
+        bar.current = None;
+        self.search_step(true, cx);
+    }
+
+    /// Moves to the next match, up to older output or down to newer, and
+    /// scrolls it into view.
+    fn search_step(&mut self, up: bool, cx: &mut Context<Self>) {
+        let (Some(bar), State::Running(running)) = (&mut self.search, &self.state) else {
+            return;
+        };
+        let Some(compiled) = &mut bar.compiled else {
+            cx.notify();
+            return;
+        };
+        let mut term = running.term.lock();
+        bar.current = search::step(&term, compiled, bar.current.as_ref(), up);
+        if let Some(found) = &bar.current {
+            term.scroll_to_point(*found.start());
+        }
+        cx.notify();
+    }
+
+    fn toggle_search_option(&mut self, regex: bool, cx: &mut Context<Self>) {
+        if let Some(bar) = &mut self.search {
+            if regex {
+                bar.regex = !bar.regex;
+            } else {
+                bar.case_sensitive = !bar.case_sensitive;
+            }
+            self.search_changed(cx);
+        }
+    }
+
+    /// The search highlights on screen now.
+    pub(super) fn marks(&mut self) -> grid::Marks {
+        let link = self.hovered_link.as_ref().map(|link| link.range.clone());
+        let (Some(bar), State::Running(running)) = (&mut self.search, &self.state) else {
+            return grid::Marks {
+                link,
+                ..Default::default()
+            };
+        };
+        let Some(compiled) = &mut bar.compiled else {
+            return grid::Marks {
+                link,
+                ..Default::default()
+            };
+        };
+        let term = running.term.lock();
+        grid::Marks {
+            matches: search::on_screen(&term, compiled),
+            current: bar.current.clone(),
+            link,
+            ..Default::default()
+        }
+    }
+
+    /// The search bar over the pane's top right corner.
+    pub(super) fn render_search(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let bar = self.search.as_ref()?;
+        let found = bar.current.is_some() || bar.compiled.is_none();
+        let theme = cx.theme();
+        let toggle = |id: &'static str, label: &'static str, on: bool, regex: bool| {
+            Button::new(id)
+                .label(label)
+                .ghost()
+                .xsmall()
+                .selected(on)
+                .on_click(cx.listener(move |pane, _, _, cx| {
+                    pane.toggle_search_option(regex, cx);
+                }))
+        };
+        let step = |id: &'static str, label: &'static str, up: bool| {
+            Button::new(id)
+                .label(label)
+                .ghost()
+                .xsmall()
+                .on_click(cx.listener(move |pane, _, _, cx| pane.search_step(up, cx)))
+        };
+        Some(
+            div()
+                .key_context(SEARCH_CONTEXT)
+                .on_action(cx.listener(|pane, _: &CloseSearch, window, cx| {
+                    pane.close_search(window, cx);
+                }))
+                .absolute()
+                .top(px(6.))
+                .right(px(6.))
+                .w(px(340.))
+                .p(px(4.))
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(if found { theme.border } else { theme.danger })
+                .bg(theme.popover)
+                .shadow_md()
+                .child(div().flex_1().child(Input::new(&bar.input).xsmall()))
+                .child(toggle("search-case", "Aa", bar.case_sensitive, false))
+                .child(toggle("search-regex", ".*", bar.regex, true))
+                .child(step("search-up", "↑", true))
+                .child(step("search-down", "↓", false)),
+        )
+    }
 }
 
 #[cfg(test)]

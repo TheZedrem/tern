@@ -7,7 +7,12 @@
 //! one never surprises the shell. Modified cursor and function keys still
 //! send xterm's sequences.
 
+use super::pty;
+use super::{State, TerminalPane};
+use alacritty_terminal::event::Notify;
+use alacritty_terminal::grid::Scroll;
 use gpui::Keystroke;
+use gpui::{Bounds, Context, EntityInputHandler, Pixels, Point, UTF16Selection, Window, px};
 
 /// Terminal modes that change what a key sends.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -165,6 +170,125 @@ fn with_alt(alt: bool, bytes: &[u8]) -> Vec<u8> {
     }
     out.extend_from_slice(bytes);
     out
+}
+
+impl TerminalPane {
+    /// Writes what an input method committed to the program, as is.
+    fn type_text(&mut self, text: &str) {
+        // As for keys: nothing reaches a program waiting on a dialog.
+        if self.exited || self.dialog.is_some() {
+            return;
+        }
+        let State::Running(running) = &self.state else {
+            return;
+        };
+        running.term.lock().scroll_display(Scroll::Bottom);
+        running.notifier.notify(text.as_bytes().to_vec());
+        self.keep_cursor_shown();
+    }
+
+    /// Where the cursor's cell is on screen, for the input method's
+    /// candidate window.
+    fn cursor_bounds(&self) -> Option<Bounds<Pixels>> {
+        let (origin, cell) = self.geometry?;
+        let State::Running(running) = &self.state else {
+            return None;
+        };
+        let term = running.term.lock();
+        let point = term.grid().cursor.point;
+        let row = point.line.0 + term.grid().display_offset() as i32;
+        let at = origin
+            + gpui::point(
+                px(pty::PADDING) + cell.width * point.column.0 as f32,
+                px(pty::PADDING) + cell.height * row.max(0) as f32,
+            );
+        Some(Bounds::new(at, cell))
+    }
+}
+
+/// Input methods (spec 0002, flow 2): what they compose shows at the
+/// cursor, and what they commit goes to the program as is. The grid's text
+/// isn't theirs to read, so there is nothing to select or replace.
+impl EntityInputHandler for TerminalPane {
+    fn text_for_range(
+        &mut self,
+        _: std::ops::Range<usize>,
+        _: &mut Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        None
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: 0..0,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<std::ops::Range<usize>> {
+        let preedit = self.preedit.as_ref()?;
+        Some(0..preedit.encode_utf16().count())
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.preedit.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.preedit = None;
+        self.type_text(text);
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.preedit = Some(text.to_owned()).filter(|text| !text.is_empty());
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _: std::ops::Range<usize>,
+        _: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        self.cursor_bounds()
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
 }
 
 #[cfg(test)]
