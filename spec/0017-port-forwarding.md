@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 7
-tasks: [T-076, T-075, T-077]
+tasks: [T-076, T-075, T-077, T-078]
 related: [spec 0006, spec 0008, spec 0016, OQ-033, OQ-034, threat model 0001, threat model 0004]
 ---
 
@@ -34,6 +34,7 @@ after its tab closes, until it's deleted or Tern quits.
 - Their state (starting, up, failed with `ssh`'s reason), delete, and retry
 - `ssh`'s prompts for a forward, answered in the app like the pane's own (spec 0006)
 - A palette command listing every running forward, to stop one whose tabs are closed
+- Adding a forward from the command palette in ssh's own syntax: `pf 13305:13305` (owner, 2026-11-11)
 
 **Out of scope:**
 
@@ -142,6 +143,23 @@ after its tab closes, until it's deleted or Tern quits.
    to every `ssh` it starts. If one of those is already bound (by the
    pane's connection), `ExitOnForwardFailure` fails the new forward, and
    its reason names that port.
+10. **Palette shortcut:** with an SSH pane focused, a palette query
+    starting with `pf ` is read as ssh's forward syntax without a bind
+    address, and the palette's first entry becomes "Add port forward
+    `<summary>`"; Enter adds it to the focused pane's host exactly as
+    the sidebar's Add does (flows 2, 4), with a notice naming it.
+    - `pf 13305:13305` (`-L` by default): this machine's 13305 →
+      `localhost:13305` as the host sees it; `pf 5432:db.internal:5432`
+      names the host. `pf -R 9000:3000` is remote, `pf -D 1080` SOCKS.
+    - It always listens on `127.0.0.1` [load-bearing]: a bind address
+      (`pf 0.0.0.0:80:web:80`) isn't accepted, and the entry says to use
+      the sidebar's "Let other machines connect" (TM-fwd-02).
+    - Anything flow 2 refuses (bad port, hostile host, a port this host
+      already forwards) shows the entry dimmed with that reason; Enter
+      does nothing. Without a focused SSH pane it is dimmed with "Port
+      forwards need an SSH pane".
+    - The terminal itself never sees this: typing `pf` in the shell runs
+      the shell's `pf`, as the shell owns the keyboard.
 
 ### Startup impact
 
@@ -201,6 +219,7 @@ connections the user starts. Trust boundaries:
 8. A host with a remembered password starts a forward without typing; one without asks in the dialog over the pane, and Esc there marks the forward failed with "cancelled".
 9. Only checking "Let other machines connect" makes a forward listen on `0.0.0.0`, and it shows the network warning before Add; a port of `70000` or `-oProxyCommand=x` as the `to` host keeps Add disabled.
 10. On Windows 11, criteria 1, 2 and 5 hold with the built-in `ssh.exe`, and a loopback forward raises no firewall prompt.
+11. With an SSH pane focused, `pf 13305:13305` and Enter in the palette start the same `ssh` as AC1 with `-L 127.0.0.1:13305:localhost:13305`, and the forward is listed in that pane's sidebar; `pf 0.0.0.0:80:web:80` and `pf 70000:1` stay dimmed with their reasons.
 
 ## Open questions
 
