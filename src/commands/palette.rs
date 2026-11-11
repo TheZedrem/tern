@@ -44,6 +44,13 @@ pub enum Entry {
         pick: Pick,
         current: bool,
     },
+    /// The forward a `pf` query asks for, which picking adds to the
+    /// focused SSH pane's host; `None` with the reason in the title when it
+    /// can't be added (spec 0017, flow 10).
+    AddForward {
+        title: String,
+        forward: Option<crate::forwards::Forward>,
+    },
     /// A running port forward, as `<label>: <summary>`, which picking stops
     /// (spec 0017, flow 7).
     Forward {
@@ -63,7 +70,9 @@ impl Entry {
     fn title(&self) -> &str {
         match self {
             Entry::Command { title, .. } => title,
-            Entry::Profile { title, .. } | Entry::Forward { title, .. } => title,
+            Entry::Profile { title, .. }
+            | Entry::Forward { title, .. }
+            | Entry::AddForward { title, .. } => title,
             Entry::Setting { title, .. } => title,
             Entry::Theme { name, .. } => name,
             Entry::Host(host)
@@ -122,6 +131,9 @@ impl Entry {
                 .label(host.label.clone())
                 .checked(*current),
             Entry::Forward { title, .. } => CommandItem::new().label(title.clone()),
+            Entry::AddForward { title, forward } => CommandItem::new()
+                .label(title.clone())
+                .disabled(forward.is_none()),
         }
     }
 }
@@ -146,6 +158,8 @@ pub enum PaletteEvent {
     Files(Pick),
     /// Stop the port forward with this ID (spec 0017, flow 7).
     StopForward(crate::forwards::Id),
+    /// Add this port forward to the focused SSH pane's host (flow 10).
+    AddForward(crate::forwards::Forward),
     /// Done: after running an entry, or `cancelled` by Esc.
     Closed {
         cancelled: bool,
@@ -164,7 +178,15 @@ pub struct Palette {
     placeholder: SharedString,
     /// What an empty list says.
     empty: SharedString,
+    /// Turns a query into an entry of its own, shown alone (the `pf`
+    /// shortcut); `entries` holds it last while it's shown.
+    quick: Option<Quick>,
+    /// How many of `entries` aren't the quick entry.
+    fixed: usize,
 }
+
+/// What [`Palette::with_quick`] takes: an entry for a query, if it's one.
+pub type Quick = Box<dyn Fn(&str, &App) -> Option<Entry>>;
 
 impl EventEmitter<PaletteEvent> for Palette {}
 
@@ -183,6 +205,8 @@ impl Palette {
         Self {
             state,
             shown: (0..entries.len()).collect(),
+            fixed: entries.len(),
+            quick: None,
             entries,
             highlighted: None,
             pending: highlight,
@@ -197,7 +221,20 @@ impl Palette {
         self
     }
 
-    fn rank(&mut self, query: &str) {
+    /// Lets a query become an entry of its own: when `quick` makes one,
+    /// it's the only entry shown.
+    pub fn with_quick(mut self, quick: Quick) -> Self {
+        self.quick = Some(quick);
+        self
+    }
+
+    fn rank(&mut self, query: &str, cx: &App) {
+        self.entries.truncate(self.fixed);
+        if let Some(entry) = self.quick.as_ref().and_then(|quick| quick(query, cx)) {
+            self.entries.push(entry);
+            self.shown = vec![self.fixed];
+            return;
+        }
         let haystacks: Vec<Cow<str>> = self.entries.iter().map(Entry::haystack).collect();
         self.shown = fuzzy::rank(query, haystacks.iter().map(|haystack| &**haystack));
     }
@@ -262,6 +299,12 @@ impl Palette {
             Some(Entry::Setting { change, .. }) => cx.emit(PaletteEvent::Change(change.clone())),
             Some(Entry::Files { pick, .. }) => cx.emit(PaletteEvent::Files(pick.clone())),
             Some(Entry::Forward { id, .. }) => cx.emit(PaletteEvent::StopForward(*id)),
+            Some(Entry::AddForward { forward, .. }) => {
+                let Some(forward) = forward else {
+                    return;
+                };
+                cx.emit(PaletteEvent::AddForward(forward.clone()));
+            }
             // A command has run through its action already.
             Some(Entry::Command { .. }) | None => {}
         }
@@ -318,7 +361,7 @@ impl Render for Palette {
                 let palette = palette.clone();
                 move |query: &str, _: &mut Window, cx: &mut App| {
                     let _ = palette.update(cx, |palette, cx| {
-                        palette.rank(query);
+                        palette.rank(query, cx);
                         cx.notify();
                     });
                 }
@@ -354,6 +397,10 @@ impl Render for Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::forwards::{self, Forward};
+    use gpui::{TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     /// Spec 0006, flows 1 and 7: forgetting picks the host in the same
     /// picker as connecting: listed by its label, found by its label, where
@@ -419,5 +466,123 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// What a palette has emitted: forwards to add, and how often it closed.
+    #[derive(Default)]
+    struct Seen {
+        added: Vec<Forward>,
+        closed: usize,
+    }
+
+    /// A palette over two profiles with the `pf` shortcut as its quick
+    /// entry, and what it emits.
+    fn pf_palette(
+        cx: &mut TestAppContext,
+    ) -> (Entity<Palette>, &mut VisualTestContext, Rc<RefCell<Seen>>) {
+        cx.update(gpui_component::init);
+        let entries = || {
+            ["Split right", "Port forwards"]
+                .map(|title| Entry::Profile {
+                    id: title.into(),
+                    title: title.into(),
+                })
+                .into()
+        };
+        let quick: Quick = Box::new(|query, _| {
+            forwards::shortcut(query).map(|parsed| match parsed {
+                Ok(forward) => Entry::AddForward {
+                    title: format!("Add port forward {}", forward.summary()),
+                    forward: Some(forward),
+                },
+                Err(reason) => Entry::AddForward {
+                    title: reason.into(),
+                    forward: None,
+                },
+            })
+        });
+        let (palette, cx) = cx.add_window_view(|window, cx| {
+            Palette::new(entries(), "Search", None, window, cx).with_quick(quick)
+        });
+        let seen = Rc::new(RefCell::new(Seen::default()));
+        cx.update(|_, cx| {
+            let seen = seen.clone();
+            cx.subscribe(&palette, move |_, event, _| match event {
+                PaletteEvent::AddForward(forward) => seen.borrow_mut().added.push(forward.clone()),
+                PaletteEvent::Closed { .. } => seen.borrow_mut().closed += 1,
+                _ => {}
+            })
+            .detach();
+        });
+        (palette, cx, seen)
+    }
+
+    /// The titles of the entries a query shows, in order.
+    fn shown(palette: &Entity<Palette>, query: &str, cx: &mut VisualTestContext) -> Vec<String> {
+        palette.update(cx, |palette, cx| {
+            palette.rank(query, cx);
+            palette
+                .shown
+                .iter()
+                .map(|&ix| palette.entries[ix].title().to_owned())
+                .collect()
+        })
+    }
+
+    /// Spec 0017, flow 10: a `pf` query is the palette's only entry, and
+    /// going back to an ordinary query ranks the commands again without a
+    /// leftover forward entry.
+    #[gpui::test]
+    fn a_pf_query_is_the_only_entry_until_the_query_changes(cx: &mut TestAppContext) {
+        let (palette, cx, _) = pf_palette(cx);
+        assert_eq!(
+            shown(&palette, "pf 13305:13305", cx),
+            ["Add port forward 13305 → localhost:13305"]
+        );
+        assert_eq!(
+            shown(&palette, "pf 1:2", cx),
+            ["Add port forward 1 → localhost:2"]
+        );
+        assert_eq!(shown(&palette, "port", cx), ["Port forwards"]);
+        assert_eq!(shown(&palette, "", cx), ["Split right", "Port forwards"]);
+    }
+
+    /// Spec 0017, flow 10 and AC11: Enter on the shortcut's entry asks to
+    /// add that forward and closes the palette.
+    #[gpui::test]
+    fn confirming_a_pf_entry_adds_its_forward(cx: &mut TestAppContext) {
+        let (palette, cx, seen) = pf_palette(cx);
+        palette.update(cx, |palette, cx| {
+            palette.rank("pf 13305:13305", cx);
+            palette.confirm(IndexPath::default(), cx);
+        });
+        let seen = seen.borrow();
+        assert_eq!(seen.added.len(), 1, "one forward asked for");
+        assert_eq!(seen.added[0].arg(), "127.0.0.1:13305:localhost:13305");
+        assert!(!seen.added[0].network);
+        assert_eq!(seen.closed, 1, "the palette closes");
+    }
+
+    /// Spec 0017, flow 10 and AC11: a refused forward stays dimmed with its
+    /// reason, and Enter on it adds nothing and leaves the palette open.
+    #[gpui::test]
+    fn confirming_a_refused_pf_entry_adds_nothing(cx: &mut TestAppContext) {
+        let (palette, cx, seen) = pf_palette(cx);
+        for query in ["pf 0.0.0.0:80:web:80", "pf 70000:1"] {
+            palette.update(cx, |palette, cx| {
+                palette.rank(query, cx);
+                assert!(
+                    matches!(
+                        palette.entries[palette.shown[0]],
+                        Entry::AddForward { forward: None, .. }
+                    ),
+                    "`{query}` isn't dimmed"
+                );
+                palette.confirm(IndexPath::default(), cx);
+            });
+        }
+        let seen = seen.borrow();
+        assert!(seen.added.is_empty(), "added {:?}", seen.added);
+        assert_eq!(seen.closed, 0, "the palette closed");
     }
 }

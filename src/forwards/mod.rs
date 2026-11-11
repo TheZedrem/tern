@@ -14,6 +14,45 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// A forward's ID, unique for the app run.
 pub type Id = u64;
 
+/// Why a host can't have a forward: it listens where another one does
+/// (flow 2).
+pub const CLASH: &str = "This host already has a forward on that port";
+
+/// What the palette's `pf` shortcut needs typed after it (flow 10).
+const SHORTCUT_HELP: &str = "Type a forward like 13305:13305, -R 9000:3000 or -D 1080";
+
+/// The forward a palette query asks for in ssh's syntax (spec 0017, flow
+/// 10): `pf 13305:13305`, `pf 5432:db:5432`, `pf -R 9000:3000`, `pf -D
+/// 1080`. `None` unless it starts with `pf `. It always listens on
+/// `127.0.0.1` [load-bearing]: a bind address is refused, since only the
+/// sidebar's checkbox opens a port to the network (TM-fwd-02).
+pub fn shortcut(query: &str) -> Option<Result<Forward, &'static str>> {
+    let rest = query.trim_start().strip_prefix("pf ")?;
+    let mut words = rest.split_whitespace();
+    let (kind, spec) = match (words.next(), words.next(), words.next()) {
+        (Some("-L"), Some(spec), None) | (Some(spec), None, None) if !spec.starts_with('-') => {
+            (Kind::Local, spec)
+        }
+        (Some("-R"), Some(spec), None) => (Kind::Remote, spec),
+        (Some("-D"), Some(spec), None) => (Kind::Socks, spec),
+        _ => return Some(Err(SHORTCUT_HELP)),
+    };
+    let (listen, to) = match kind {
+        Kind::Socks => (spec, ""),
+        _ => spec.split_once(':').unwrap_or((spec, "")),
+    };
+    // A first part that isn't a port is a bind address: `0.0.0.0:80:web:80`.
+    if listen.contains(['.', '[', '*'])
+        || listen == "localhost"
+        || kind == Kind::Socks && spec.contains(':')
+    {
+        return Some(Err(
+            "Forwards from here listen on 127.0.0.1; to let other machines connect, use the sidebar",
+        ));
+    }
+    Some(Forward::parse(kind, listen, to, false))
+}
+
 /// What the add row's kind buttons choose between.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Kind {
@@ -381,5 +420,159 @@ mod tests {
         // Network access doesn't change the port.
         let network = Forward::parse(Kind::Local, "5432", "db:1", true).expect("a valid forward");
         assert!(local.clashes(&network));
+    }
+
+    fn pf(query: &str) -> Forward {
+        match shortcut(query) {
+            Some(Ok(forward)) => forward,
+            other => panic!("`{query}` gave {other:?}"),
+        }
+    }
+
+    /// Flow 10 and AC11: `pf 13305:13305` is `-L` by default, listens on
+    /// this machine's loopback and leads to the host's own localhost.
+    #[test]
+    fn a_pf_query_with_two_ports_is_a_local_forward_on_loopback() {
+        let forward = pf("pf 13305:13305");
+        assert_eq!(
+            forward,
+            Forward {
+                way: Way::Local(Destination {
+                    host: "localhost".into(),
+                    port: 13305
+                }),
+                listen: 13305,
+                network: false,
+            }
+        );
+        assert_eq!(
+            (forward.flag(), forward.arg()),
+            ("-L", "127.0.0.1:13305:localhost:13305".to_owned())
+        );
+        assert_eq!(forward.summary(), "13305 → localhost:13305");
+    }
+
+    /// Flow 10: ssh's own forward syntax, with `-L` optional, `-R` remote
+    /// and `-D` SOCKS; blanks around the words are a typing slip, not a
+    /// different forward.
+    #[test]
+    fn a_pf_query_reads_ssh_forward_syntax() {
+        let db = pf("pf 5432:db.internal:5432");
+        assert_eq!(db.summary(), "5432 → db.internal:5432");
+        assert_eq!(pf("pf -L 5432:db.internal:5432"), db);
+        assert_eq!(pf("  pf   -L   5432:db.internal:5432  "), db);
+
+        let remote = pf("pf -R 9000:3000");
+        assert_eq!(remote.summary(), "remote 9000 → localhost:3000");
+        assert_eq!(remote.arg(), "127.0.0.1:9000:localhost:3000");
+        assert_eq!(pf("pf  -R\t9000:3000 "), remote);
+
+        let socks = pf("pf -D 1080");
+        assert_eq!((socks.way.clone(), socks.listen), (Way::Dynamic, 1080));
+        assert_eq!(socks.arg(), "127.0.0.1:1080");
+    }
+
+    /// Flow 10 and TM-fwd-02 [load-bearing]: a bind address never opens a
+    /// port to the network from the palette; the entry sends the user to
+    /// the sidebar's "Let other machines connect" instead.
+    #[test]
+    fn a_pf_query_with_a_bind_address_points_to_the_sidebar() {
+        for query in [
+            "pf 0.0.0.0:80:web:80",
+            "pf -L 0.0.0.0:80:web:80",
+            "pf localhost:80:web:80",
+            "pf 127.0.0.1:80:web:80",
+            "pf *:80:web:80",
+            "pf [::]:80:x:80",
+            "pf -D 0.0.0.0:1080",
+            "pf -D localhost:1080",
+            "pf -R 0.0.0.0:9000:3000",
+        ] {
+            match shortcut(query) {
+                Some(Err(reason)) => assert!(
+                    reason.contains("sidebar"),
+                    "`{query}` doesn't point to the sidebar: {reason}"
+                ),
+                other => panic!("`{query}` gave {other:?}"),
+            }
+        }
+    }
+
+    /// Flow 10 and TM-fwd-02: whatever is typed, no forward from the
+    /// palette listens on the network.
+    #[test]
+    fn no_pf_query_makes_a_network_forward() {
+        for query in [
+            "pf 13305:13305",
+            "pf -R 9000:3000",
+            "pf -D 1080",
+            "pf 0.0.0.0:80:web:80",
+            "pf 80:0.0.0.0:80",
+            "pf -R 9000:0.0.0.0:3000",
+            "pf -D 0.0.0.0:1080",
+            "pf GatewayPorts:80:web:80",
+            "pf 1080 -g",
+            "pf -g 1080",
+        ] {
+            if let Some(Ok(forward)) = shortcut(query) {
+                assert!(!forward.network, "`{query}` listens on the network");
+                assert!(forward.arg().starts_with("127.0.0.1:"), "`{query}`");
+            }
+        }
+    }
+
+    /// Flow 10 reusing flow 2: what the sidebar's Add refuses, the palette
+    /// refuses too, and nothing typed becomes an extra ssh word or option
+    /// (TM-fwd-05).
+    #[test]
+    fn a_pf_query_flow_2_refuses_is_an_error() {
+        for query in [
+            "pf ",
+            "pf    ",
+            "pf 70000:1",
+            "pf 0:1",
+            "pf 1:70000",
+            "pf 13305",
+            "pf -L 13305",
+            "pf -R 9000",
+            "pf -D",
+            "pf -D 0",
+            "pf -L",
+            "pf 1:-oProxyCommand=x:22",
+            "pf -R 1:-oProxyCommand=x:22",
+            "pf -oProxyCommand=x",
+            "pf -L -oProxyCommand=x:22",
+            "pf 1:2 3",
+            "pf 1:2 -oProxyCommand=x",
+            "pf -L 1:2 3",
+            "pf -D 1080 1081",
+            "pf -X 1:2",
+            "pf -l 1:2",
+            "pf 1:a b:22",
+            "pf 1:$(id):22",
+        ] {
+            assert!(
+                matches!(shortcut(query), Some(Err(_))),
+                "`{query}` gave {:?}",
+                shortcut(query)
+            );
+        }
+    }
+
+    /// Flow 10: only a query starting with `pf ` is a forward; anything
+    /// else ranks the palette's commands as usual.
+    #[test]
+    fn a_query_without_pf_and_a_space_is_no_shortcut() {
+        for query in [
+            "",
+            "p",
+            "pf",
+            "pf13305:1",
+            "pfx 1:2",
+            "split",
+            "port forwards",
+        ] {
+            assert_eq!(shortcut(query), None, "`{query}`");
+        }
     }
 }

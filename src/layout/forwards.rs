@@ -5,12 +5,13 @@
 use super::files::{Shown, SidebarView};
 use super::tree::LeafId;
 use super::{Workspace, show_notice};
-use crate::commands::palette::{Entry, Palette};
+use crate::commands::palette::{Entry, Palette, Quick};
 use crate::commands::{ShowPortForwards, StopForward};
 use crate::forwards::registry::Registry;
-use crate::forwards::view::{ForwardsEvent, ForwardsView};
+use crate::forwards::view::{ForwardsEvent, ForwardsView, start};
+use crate::forwards::{self, CLASH, Forward};
 use crate::terminal::TerminalPane;
-use gpui::{AppContext, Context, Entity, Window};
+use gpui::{App, AppContext, Context, Entity, Window};
 
 impl Workspace {
     /// The app's port forwards, made now if this is the first use: nothing
@@ -93,5 +94,52 @@ impl Workspace {
         self.show_palette(None, window, cx, |window, cx| {
             Palette::new(entries, "Stop a port forward", None, window, cx)
         });
+    }
+
+    /// The palette's `pf` shortcut for the focused pane (spec 0017, flow
+    /// 10): a query like `pf 13305:13305` becomes one entry that adds that
+    /// forward, or says why it can't.
+    pub(super) fn forward_shortcut(&self, cx: &App) -> Quick {
+        let pane = self.panes.get(&self.tabs.active().focused);
+        let host = pane.and_then(|pane| pane.read(cx).forward_host());
+        let registry = self.forwards.clone();
+        Box::new(move |query, cx| {
+            let parsed = forwards::shortcut(query)?.and_then(|forward| {
+                let host = host.as_ref().ok_or("Port forwards need an SSH pane")?;
+                let clashes = registry
+                    .as_ref()
+                    .is_some_and(|registry| registry.read(cx).clashes(&host.args, &forward));
+                if clashes { Err(CLASH) } else { Ok(forward) }
+            });
+            Some(match parsed {
+                Ok(forward) => Entry::AddForward {
+                    title: format!("Add port forward {}", forward.summary()),
+                    forward: Some(forward),
+                },
+                Err(reason) => Entry::AddForward {
+                    title: format!("Can't add this port forward: {reason}"),
+                    forward: None,
+                },
+            })
+        })
+    }
+
+    /// Adds `forward` to the focused SSH pane's host, from the palette's
+    /// `pf` shortcut, and says so (spec 0017, flow 10).
+    pub(super) fn add_forward(
+        &mut self,
+        forward: Forward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane) = self.panes.get(&self.tabs.active().focused).cloned() else {
+            return;
+        };
+        let summary = forward.summary();
+        let registry = self.forward_registry(cx);
+        match start(&registry, &pane, forward, window, cx) {
+            Some(_) => show_notice(format!("Port forward {summary} is starting"), window, cx),
+            None => show_notice("Port forwards need an SSH pane".into(), window, cx),
+        }
     }
 }

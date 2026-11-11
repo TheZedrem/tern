@@ -9,7 +9,7 @@
 //! Enter retries a failed forward, Delete removes one.
 
 use super::registry::{Entry, Host, Registry, State};
-use super::{Forward, Id, Kind};
+use super::{CLASH, Forward, Id, Kind};
 use crate::terminal::TerminalPane;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -121,6 +121,26 @@ impl Row {
     }
 }
 
+/// Starts `forward` to `pane`'s host (flow 2): the pane builds its ssh, so
+/// its prompts open over that pane. `None` if `pane` isn't an SSH pane.
+pub fn start(
+    registry: &Entity<Registry>,
+    pane: &Entity<TerminalPane>,
+    forward: Forward,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Id> {
+    let host = pane.read(cx).forward_host()?;
+    let id = registry.update(cx, |registry, _| registry.next_id());
+    let command = pane.update(cx, |pane, cx| {
+        pane.forward_command(id, &forward, window, cx)
+    })?;
+    registry.update(cx, |registry, cx| {
+        registry.add(id, host, forward, &command, cx)
+    });
+    Some(id)
+}
+
 pub enum ForwardsEvent {
     /// The user closed the sidebar from here.
     Close,
@@ -198,7 +218,7 @@ impl ForwardsView {
         let to = self.to.read(cx).value();
         let forward = Forward::parse(self.kind, &listen, &to, self.network)?;
         if self.registry.read(cx).clashes(&self.host.args, &forward) {
-            return Err("This host already has a forward on that port");
+            return Err(CLASH);
         }
         Ok(forward)
     }
@@ -211,17 +231,9 @@ impl ForwardsView {
         let Some(pane) = self.pane.upgrade() else {
             return;
         };
-        let id = self.registry.update(cx, |registry, _| registry.next_id());
-        let command = pane.update(cx, |pane, cx| {
-            pane.forward_command(id, &forward, window, cx)
-        });
-        let Some(command) = command else {
+        let Some(id) = start(&self.registry, &pane, forward, window, cx) else {
             return;
         };
-        let host = self.host.clone();
-        self.registry.update(cx, |registry, cx| {
-            registry.add(id, host, forward, &command, cx);
-        });
         for input in [&self.listen, &self.to] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }

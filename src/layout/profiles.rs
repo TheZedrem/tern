@@ -56,8 +56,10 @@ impl Workspace {
             id: profile.id,
         });
         let entries = commands.chain(profiles).collect();
+        let quick = self.forward_shortcut(cx);
         self.show_palette(None, window, cx, |window, cx| {
             Palette::new(entries, "Run a command or open a profile", None, window, cx)
+                .with_quick(quick)
         });
     }
 
@@ -326,6 +328,7 @@ impl Workspace {
                         .update(cx, |pane, cx| pane.pick(pick, window, cx));
                 }
             }
+            PaletteEvent::AddForward(forward) => self.add_forward(forward.clone(), window, cx),
             PaletteEvent::StopForward(id) => {
                 if let Some(forwards) = &self.forwards {
                     forwards.update(cx, |forwards, cx| forwards.remove(*id, cx));
