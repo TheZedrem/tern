@@ -33,11 +33,6 @@ impl Kind {
             Kind::Socks => "SOCKS",
         }
     }
-
-    /// Whether it forwards to a `host:port` the user names.
-    pub fn has_to(self) -> bool {
-        self != Kind::Socks
-    }
 }
 
 /// Where a local or remote forward leads: a host checked by [`parse_host`]
@@ -72,7 +67,7 @@ pub enum Way {
 pub struct Forward {
     pub way: Way,
     pub listen: u16,
-    /// "Allow from network": listen on `0.0.0.0` instead of `127.0.0.1`
+    /// "Let other machines connect": listen on `0.0.0.0` instead of `127.0.0.1`
     /// (TM-fwd-01, -02). Off unless the user checks it.
     pub network: bool,
 }
@@ -305,7 +300,7 @@ mod tests {
         );
     }
 
-    /// Flow 3 and TM-fwd-02: only "Allow from network" binds `0.0.0.0`.
+    /// Flow 3 and TM-fwd-02: only "Let other machines connect" binds `0.0.0.0`.
     #[test]
     fn allow_from_network_binds_every_ipv4_interface() {
         let network = |kind, to| {

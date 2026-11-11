@@ -1,5 +1,5 @@
 //! The Port forwards view of an SSH pane's sidebar (spec 0017, flows 1–6):
-//! the add row (kind, listen port, `to`, "Allow from network") and the
+//! the add row (kind, listen port, `to`, "Let other machines connect") and the
 //! host's forwards with their state, Retry and Delete. It draws what the
 //! [`Registry`] holds; the pane it belongs to builds each forward's ssh,
 //! so its prompts open over that pane.
@@ -20,7 +20,7 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{ActiveTheme, Disableable, IconName, Selectable, Sizable};
+use gpui_component::{ActiveTheme, Disableable, IconName, Sizable};
 
 /// The view's key context.
 const CONTEXT: &str = "PortForwards";
@@ -56,6 +56,54 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
+/// What the add row says for a kind, so it's clear which side listens and
+/// where the forward leads (spec 0017, flow 2).
+struct Words {
+    what: SharedString,
+    listen: SharedString,
+    to: Option<SharedString>,
+    /// Where it listens without "Let other machines connect".
+    local: SharedString,
+    /// The warning with it (flow 3).
+    network: SharedString,
+}
+
+impl Words {
+    fn of(kind: Kind, host: &str) -> Self {
+        match kind {
+            Kind::Local => Self {
+                what: format!("A port on this machine that leads to a host:port {host} can reach.")
+                    .into(),
+                listen: "Port on this machine".into(),
+                to: Some(format!("Leads to (as {host} sees it)").into()),
+                local: "Only this machine can connect (127.0.0.1)".into(),
+                network: "Reachable from other machines on the network".into(),
+            },
+            Kind::Remote => Self {
+                what: format!("A port on {host} that leads to a host:port this machine can reach.")
+                    .into(),
+                listen: format!("Port on {host}").into(),
+                to: Some("Leads to (as this machine sees it)".into()),
+                local: format!("Only {host} itself can connect (127.0.0.1)").into(),
+                network: format!(
+                    "Reachable from other machines on {host}'s network, if the server allows it"
+                )
+                .into(),
+            },
+            Kind::Socks => Self {
+                what: format!(
+                    "A SOCKS proxy on this machine: apps set to use it reach what {host} can reach."
+                )
+                .into(),
+                listen: "Port on this machine".into(),
+                to: None,
+                local: "Only this machine can connect (127.0.0.1)".into(),
+                network: format!("An open proxy into {host}'s network").into(),
+            },
+        }
+    }
+}
+
 /// What a line of the list shows, read out of the registry.
 struct Row {
     id: Id,
@@ -88,7 +136,7 @@ pub struct ForwardsView {
     kind: Kind,
     listen: Entity<InputState>,
     to: Entity<InputState>,
-    /// "Allow from network", off each time the row is used (flow 3).
+    /// "Let other machines connect", off each time the row is used (flow 3).
     network: bool,
     selected: Option<Id>,
     _subscriptions: Vec<Subscription>,
@@ -110,7 +158,7 @@ impl ForwardsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let listen = cx.new(|cx| InputState::new(window, cx).placeholder("Port, like 5432"));
+        let listen = cx.new(|cx| InputState::new(window, cx).placeholder("5432"));
         let to = cx.new(|cx| InputState::new(window, cx).placeholder("host:port"));
         let mut subscriptions = vec![cx.observe(&registry, |_, _, cx| cx.notify())];
         for input in [&listen, &to] {
@@ -248,90 +296,75 @@ impl ForwardsView {
 
     fn render_add(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (muted, danger, warning) = (theme.muted_foreground, theme.danger, theme.warning);
+        let (muted, danger, warning, border) = (
+            theme.muted_foreground,
+            theme.danger,
+            theme.warning,
+            theme.border,
+        );
         let draft = self.draft(cx);
         let kinds = Kind::ALL.into_iter().map(|kind| {
-            Button::new(SharedString::from(format!("forward-kind-{}", kind.label())))
+            let button = Button::new(SharedString::from(format!("forward-kind-{}", kind.label())))
                 .label(kind.label())
                 .small()
-                .ghost()
-                .selected(self.kind == kind)
+                .flex_1()
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.kind = kind;
                     cx.notify();
-                }))
+                }));
+            if self.kind == kind {
+                button.primary()
+            } else {
+                button.outline()
+            }
         });
-        let warning_text = self.network.then(|| match self.kind {
-            Kind::Local => "Reachable from other machines on the network".to_owned(),
-            Kind::Socks => format!("An open proxy into {}'s network", self.host.label),
-            Kind::Remote => format!(
-                "Reachable from other machines on {}'s network, if the server allows it",
-                self.host.label
-            ),
-        });
+        let words = Words::of(self.kind, &self.host.label);
+        let label = |text: SharedString| div().text_xs().text_color(muted).child(text);
         // Only say what's wrong once something's typed.
         let typed =
             !self.listen.read(cx).value().is_empty() || !self.to.read(cx).value().is_empty();
         let problem = draft.as_ref().err().copied().filter(|_| typed);
+        let (note, note_color) = match self.network {
+            true => (words.network, warning),
+            false => (words.local, muted),
+        };
         div()
             .flex()
             .flex_col()
             .gap(px(6.))
             .px(px(8.))
-            .py(px(6.))
+            .py(px(8.))
             .border_b_1()
-            .border_color(theme.border)
-            .child(div().flex().gap(px(2.)).children(kinds))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(4.))
-                    .child(
-                        div()
-                            .w(px(90.))
-                            .flex_shrink_0()
-                            .child(Input::new(&self.listen).small()),
-                    )
-                    .when(self.kind.has_to(), |row| {
-                        row.child(div().flex_1().min_w_0().child(Input::new(&self.to).small()))
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(4.))
-                    .child(
-                        Checkbox::new("forward-network")
-                            .label("Allow from network")
-                            .checked(self.network)
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.network = *checked;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("forward-add")
-                            .label("Add")
-                            .primary()
-                            .small()
-                            .disabled(draft.is_err())
-                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                this.add(window, cx);
-                            })),
-                    ),
-            )
-            .children(warning_text.map(|text| div().text_xs().text_color(warning).child(text)))
-            .children(problem.map(|text| div().text_xs().text_color(danger).child(text)))
-            .when(!typed && !self.network, |row| {
-                row.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("Listens on 127.0.0.1, this machine only"),
-                )
+            .border_color(border)
+            .child(div().flex().gap(px(4.)).children(kinds))
+            .child(div().text_xs().text_color(muted).child(words.what))
+            .child(label(words.listen))
+            .child(Input::new(&self.listen).small())
+            .when_some(words.to, |row, to| {
+                row.child(label(to)).child(Input::new(&self.to).small())
             })
+            .child(
+                Checkbox::new("forward-network")
+                    .label("Let other machines connect")
+                    .checked(self.network)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.network = *checked;
+                        cx.notify();
+                    })),
+            )
+            .child(div().text_xs().text_color(note_color).child(note))
+            .children(problem.map(|text| div().text_xs().text_color(danger).child(text)))
+            .child(
+                Button::new("forward-add")
+                    .label("Add forward")
+                    .primary()
+                    .small()
+                    .w_full()
+                    .disabled(draft.is_err())
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.add(window, cx);
+                    })),
+            )
     }
 
     fn render_entry(&self, entry: Row, selected: bool, cx: &mut Context<Self>) -> impl IntoElement {

@@ -99,15 +99,19 @@ after its tab closes, until it's deleted or Tern quits.
 1. **Open:** `pane.portForwards`, or the switch in an open sidebar, shows
    Port forwards; the sidebar keeps the last view it showed. Opening it
    connects nothing.
-2. **Add:** a row at the top takes kind (Local, Remote, SOCKS), listen
-   port, to, and an "Allow from network" checkbox, off each time the row
-   opens. They are checked as typed: a port outside 1–65535, a missing
+2. **Add:** a form at the top takes kind (Local, Remote, SOCKS), listen
+   port, to, and a "Let other machines connect" checkbox, off each time
+   the form opens. It says in words which side listens and where the
+   forward leads: one sentence per kind, and each field labeled with its
+   side ("Port on this machine", "Port on `<host>`", "Leads to (as
+   `<host>` sees it)"); under the checkbox, who can connect. The fields
+   are checked as typed: a port outside 1–65535, a missing
    `to` for Local and Remote, a `to` host that is neither an IP (IPv6 in
    brackets) nor a name of letters, digits, `.`, `-` and `_` not
    starting with `-` (TM-fwd-05), or a listen port this host already has
    a forward on keeps Add disabled with the reason. Add starts the
    forward and lists it as starting.
-3. **Allow from network:** only checking the box binds `0.0.0.0`, and
+3. **Let other machines connect:** only checking the box binds `0.0.0.0`, and
    while it is checked the row shows, before Add, "Reachable from other
    machines on the network" (SOCKS: "an open proxy into `<host>`'s
    network"; Remote: "Reachable from other machines on `<host>`'s
@@ -151,7 +155,7 @@ Both use the system OpenSSH client: `-N`, `-L`, `-R`, `-D` and
 connection sharing (`ControlMaster`), which could add a forward to the
 pane's own connection, doesn't exist on Windows, hence one process per
 forward. Linux: a listen port below 1024 needs privileges, and `ssh`'s
-reason says so. Windows: a forward with "Allow from network" makes
+reason says so. Windows: a forward with "Let other machines connect" makes
 Windows Defender Firewall ask about `ssh.exe` once; loopback asks
 nothing. Stopping uses the process handle on both. Tying forwards to
 Tern's life differs: `PR_SET_PDEATHSIG` on Linux, a Job object on
@@ -169,7 +173,7 @@ connections the user starts. Trust boundaries:
 - **New: listening sockets [load-bearing].** A local or SOCKS forward lets
   whatever reaches its address use the user's SSH access. `127.0.0.1` by
   default limits that to this machine's processes. `0.0.0.0` only ever
-  comes from the user checking "Allow from network", after flow 3's
+  comes from the user checking "Let other machines connect", after flow 3's
   warning; Tern never adds `-g` or `GatewayPorts`.
 - A remote forward opens a port on the server that reaches this machine;
   the server's `GatewayPorts` decides who can use it.
@@ -194,7 +198,7 @@ connections the user starts. Trust boundaries:
 6. Closing the SSH tab keeps the forward working; `forwards.stop` lists it, and picking it closes the port. A new tab to the same host shows the forward in its sidebar.
 7. Quitting Tern leaves no forward's `ssh` running and nothing about forwards in `config.yaml` or `session.json`; the relaunch listens on no forwarded port. Killing Tern instead (`kill -9`; on Windows, End task) leaves no forward's `ssh` running either.
 8. A host with a remembered password starts a forward without typing; one without asks in the dialog over the pane, and Esc there marks the forward failed with "cancelled".
-9. Only checking "Allow from network" makes a forward listen on `0.0.0.0`, and it shows the network warning before Add; a port of `70000` or `-oProxyCommand=x` as the `to` host keeps Add disabled.
+9. Only checking "Let other machines connect" makes a forward listen on `0.0.0.0`, and it shows the network warning before Add; a port of `70000` or `-oProxyCommand=x` as the `to` host keeps Add disabled.
 10. On Windows 11, criteria 1, 2 and 5 hold with the built-in `ssh.exe`, and a loopback forward raises no firewall prompt.
 
 ## Open questions
