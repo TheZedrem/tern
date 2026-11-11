@@ -326,6 +326,11 @@ impl Workspace {
                         .update(cx, |pane, cx| pane.pick(pick, window, cx));
                 }
             }
+            PaletteEvent::StopForward(id) => {
+                if let Some(forwards) = &self.forwards {
+                    forwards.update(cx, |forwards, cx| forwards.remove(*id, cx));
+                }
+            }
             PaletteEvent::ChooseTheme(name) => {
                 if let Some(open) = &mut self.palette {
                     open.saved_theme = None;

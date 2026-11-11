@@ -138,6 +138,16 @@ impl Workspace {
                     show_notice(secrets::UNAVAILABLE.into(), window, cx);
                 }
             }
+            PaneEvent::ForwardPrompt { id, open } => {
+                if let Some(forwards) = &self.forwards {
+                    forwards.update(cx, |forwards, cx| forwards.prompting(*id, *open, cx));
+                }
+            }
+            PaneEvent::ForwardDeclined(id) => {
+                if let Some(forwards) = &self.forwards {
+                    forwards.update(cx, |forwards, cx| forwards.cancelled(*id, cx));
+                }
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 7
-tasks: [T-076, T-075]
+tasks: [T-076, T-075, T-077]
 related: [spec 0006, spec 0008, spec 0016, OQ-033, OQ-034, threat model 0001, threat model 0004]
 ---
 
@@ -71,8 +71,8 @@ after its tab closes, until it's deleted or Tern quits.
   The same holds for `-R` (on the server) and `-D`. The value is built
   from the add row's typed fields only and passed as one argument
   (TM-fwd-05). It runs with stdout to null, stderr on a pipe the
-  forward's thread reads to the end, keeping only the last line cut at
-  1 KiB (TM-fwd-15), and no terminal, like the SFTP connection, with an
+  forward's thread reads to the end, keeping only its last KiB
+  (TM-fwd-15), and no terminal, like the SFTP connection, with an
   askpass token of its own.
 - **Process:** Tern keeps each forward's `Child` and stops it with
   `kill` and `wait` on that handle, so a reused PID is never hit
@@ -91,7 +91,8 @@ after its tab closes, until it's deleted or Tern quits.
 - `forwards::Registry`: `add(host, Forward) -> Id`, `remove(Id)`, `retry(Id)`, `of(host)`, `all()`, `stop_all()`; emits a change event the sidebar redraws on
 - `forwards::Forward::arg()` (the `-L`/`-R`/`-D` value) and `summary()` (`5432 → db.internal:5432`, `remote 9000 → localhost:3000`, `SOCKS 1080`, `5432 (network) → db.internal:5432`)
 - `ssh::forward_args(pane_args, &Forward) -> Vec<String>`, next to `ssh::sftp_args`
-- Commands `pane.portForwards` (open the sidebar on Port forwards) and `forwards.stop` (pick a running forward to stop), in the palette and bindable, no default keys
+- Commands `pane.portForwards` (open the sidebar on Port forwards, the keyboard in the add row) and `forwards.stop` (pick a running forward to stop), in the palette and bindable, no default keys
+- Keys of the Port forwards view: Tab and Shift+Tab walk the kind buttons, fields, checkbox, Add and the list; Enter in a field adds; Esc closes the sidebar. In the list, Up and Down select, Enter retries a failed forward, Delete or Backspace deletes
 
 ### Flows
 
@@ -117,9 +118,11 @@ after its tab closes, until it's deleted or Tern quits.
    forward's, by spec 0006's flow 4 and its keychain fill. Esc cancels:
    the forward fails with "cancelled".
 5. **Fail:** `ssh` exiting within 2 s, or later (connection lost, server
-   gone), marks it failed with the last line `ssh` wrote to stderr, as
-   plain text up to 200 characters (spec 0003's title rules), else its
-   exit code. A failed forward stays listed with Retry and Delete.
+   gone), marks it failed with the last three lines `ssh` wrote to
+   stderr, joined with ` · `, as plain text up to 200 characters (spec
+   0003's title rules), else its exit code. Three, because a failed bind
+   ends on "Could not request local forwarding.", two lines after the one
+   that names the port. A failed forward stays listed with Retry and Delete.
    Nothing reconnects by itself.
 6. **Delete:** stops its `ssh` (the `Child` kept from spawn, never a kill
    by name) and removes the row. A program using the forward sees its

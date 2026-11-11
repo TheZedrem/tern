@@ -52,6 +52,7 @@ earlier Tauri version took 1.07 s to start and was dropped.
 - An SFTP sidebar on every SSH pane: browse, download, upload (drag and drop too), rename and delete
 - Edit remote files in your own editor; saves are uploaded on a click, on save or on focus
 - A files pane that shows the local disk or any saved host as a tree next to your terminals
+- Port forwards (local, remote and SOCKS) from the SSH pane's sidebar, listening on 127.0.0.1 unless you allow the network; never saved
 
 **Privacy**
 

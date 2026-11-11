@@ -11,6 +11,7 @@ mod bench;
 mod commands;
 mod config;
 mod files;
+mod forwards;
 mod import;
 mod layout;
 mod secrets;

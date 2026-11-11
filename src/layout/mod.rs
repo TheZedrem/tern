@@ -8,6 +8,7 @@ pub mod answers;
 mod chrome;
 mod closing;
 mod files;
+mod forwards;
 mod panes;
 mod profiles;
 mod reload;
@@ -70,6 +71,7 @@ pub fn init(cx: &mut App) {
     )]);
     browser::init(cx);
     answers::init(cx);
+    crate::forwards::view::init(cx);
 }
 
 /// A pane of the window's first frame, its program started before the
@@ -273,6 +275,8 @@ pub struct Workspace {
     files: HashMap<LeafId, FilesLeaf>,
     /// The sidebars' width, one for the window, until Tern quits.
     sftp_width: f32,
+    /// The app's port forwards, from the first one on (spec 0017).
+    forwards: Option<Entity<crate::forwards::registry::Registry>>,
     /// A close the user chose "Upload and close" for, waiting on the
     /// uploads (spec 0008, flow 3).
     closing: Option<Closing>,
@@ -343,6 +347,7 @@ impl Workspace {
             sftp: HashMap::new(),
             files: HashMap::new(),
             sftp_width: SFTP_WIDTH,
+            forwards: None,
             closing: None,
             window_may_close: false,
         };
@@ -475,6 +480,14 @@ impl Workspace {
             "pane.splitRight" | "pane.splitRightWithProfile" => self.has_room(Axis::Row, window),
             "pane.splitDown" | "pane.splitDownWithProfile" => self.has_room(Axis::Column, window),
             "files.switchTarget" => self.files.contains_key(&tab.focused),
+            "pane.portForwards" => self
+                .panes
+                .get(&tab.focused)
+                .is_some_and(|pane| pane.read(cx).ssh_target().is_some()),
+            "forwards.stop" => self
+                .forwards
+                .as_ref()
+                .is_some_and(|forwards| !forwards.read(cx).all().is_empty()),
             "font.increase" => size < *FONT_SIZES.end(),
             "font.decrease" => size > *FONT_SIZES.start(),
             "font.reset" => self.zoom != 0.0,
@@ -698,6 +711,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::connect_to_host))
             .on_action(cx.listener(Self::forget_password))
             .on_action(cx.listener(Self::toggle_sftp))
+            .on_action(cx.listener(Self::show_port_forwards))
+            .on_action(cx.listener(Self::stop_forward))
             .on_action(cx.listener(Self::open_files))
             .on_action(cx.listener(Self::open_files_in_new_tab))
             .on_action(cx.listener(Self::switch_files_target))

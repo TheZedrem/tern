@@ -7,6 +7,7 @@ pub mod config;
 pub mod target;
 
 use crate::config::{Profile, ProfileKind, SshProfile};
+use crate::forwards::Forward;
 use crate::secrets::{self, Key};
 use crate::terminal::pty::{self, Command};
 use std::collections::BTreeMap;
@@ -128,6 +129,23 @@ pub fn sftp_args(args: &[String]) -> Option<Vec<String>> {
     let mut sftp = options.to_vec();
     sftp.extend(["-s".to_owned(), host.clone(), "sftp".to_owned()]);
     Some(sftp)
+}
+
+/// A port forward to the host `args` connect to (spec 0017, Command): the
+/// same options first, then `-N -o ExitOnForwardFailure=yes`, the forward,
+/// and the host. `None` for an empty list.
+pub fn forward_args(args: &[String], forward: &Forward) -> Option<Vec<String>> {
+    let (host, options) = args.split_last()?;
+    let mut forwarded = options.to_vec();
+    forwarded.extend([
+        "-N".to_owned(),
+        "-o".to_owned(),
+        "ExitOnForwardFailure=yes".to_owned(),
+        forward.flag().to_owned(),
+        forward.arg(),
+        host.clone(),
+    ]);
+    Some(forwarded)
 }
 
 /// Who and where [`command`]'s `args` connect to, as the SFTP sidebar's
@@ -598,6 +616,81 @@ mod tests {
     #[test]
     fn no_arguments_give_no_sftp_connection() {
         assert_eq!(sftp_args(&[]), None);
+    }
+
+    /// Spec 0017, Command, and AC1: a forward runs the pane's own options,
+    /// then `-N -o ExitOnForwardFailure=yes` and one forward, then the host
+    /// last, as `command` put it.
+    #[test]
+    fn a_forward_runs_the_panes_options_then_n_exit_on_failure_the_forward_and_the_host() {
+        let pane = command(&SshProfile {
+            user: Some("me".into()),
+            ..ssh_to("bastion")
+        })
+        .args;
+        let forward = |kind, listen, to, network| {
+            let forward = crate::forwards::Forward::parse(kind, listen, to, network)
+                .expect("a valid forward");
+            forward_args(&pane, &forward).expect("a host to forward through")
+        };
+        use crate::forwards::Kind;
+        let expected = |flag: &str, value: &str| {
+            [
+                "-l",
+                "me",
+                "-N",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                flag,
+                value,
+                "bastion",
+            ]
+            .map(String::from)
+            .to_vec()
+        };
+        assert_eq!(
+            forward(Kind::Local, "5432", "db.internal:5432", false),
+            expected("-L", "127.0.0.1:5432:db.internal:5432")
+        );
+        assert_eq!(
+            forward(Kind::Remote, "9000", "localhost:3000", false),
+            expected("-R", "127.0.0.1:9000:localhost:3000")
+        );
+        assert_eq!(
+            forward(Kind::Socks, "1080", "", false),
+            expected("-D", "127.0.0.1:1080")
+        );
+        assert_eq!(
+            forward(Kind::Local, "5432", "db.internal:5432", true),
+            expected("-L", "0.0.0.0:5432:db.internal:5432")
+        );
+    }
+
+    /// TM-fwd-06: a forward through a profile with a port and key keeps
+    /// every option before the host, and nothing comes after the host.
+    #[test]
+    fn a_forward_keeps_every_pane_option_before_the_host() {
+        let pane = command(&SshProfile {
+            port: NonZeroU16::new(2222),
+            identity_file: Some(PathBuf::from("/home/me/.ssh/id_ed25519")),
+            ..ssh_to("web")
+        })
+        .args;
+        let forward =
+            crate::forwards::Forward::parse(crate::forwards::Kind::Socks, "1080", "", false)
+                .expect("a valid forward");
+        let args = forward_args(&pane, &forward).expect("a host to forward through");
+        assert_eq!(&args[..4], ["-p", "2222", "-i", "/home/me/.ssh/id_ed25519"]);
+        assert_eq!(args.last().map(String::as_str), Some("web"));
+    }
+
+    /// Without a host there's nothing to forward through.
+    #[test]
+    fn no_arguments_give_no_forward() {
+        let forward =
+            crate::forwards::Forward::parse(crate::forwards::Kind::Socks, "1080", "", false)
+                .expect("a valid forward");
+        assert_eq!(forward_args(&[], &forward), None);
     }
 
     /// Spec 0008, Model: the sidebar's header names its target as

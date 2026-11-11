@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 2
 tasks: [T-024, T-023, T-035, T-036, T-011, T-032, T-033, T-034, T-049]
-related: [spec 0013, spec 0003, spec 0005, spec 0006, spec 0009, OQ-001 ✅, OQ-019 ✅, OQ-023 ✅, threat model 0001, threat model 0003]
+related: [spec 0013, spec 0017, spec 0003, spec 0005, spec 0006, spec 0009, OQ-001 ✅, OQ-019 ✅, OQ-023 ✅, threat model 0001, threat model 0003]
 ---
 
 # Spec: SFTP sidebar
@@ -122,8 +122,11 @@ manager), and the sidebar asks for passwords the way the terminal does.
 
 ### Flows
 
-1. **Open:** `sftp.toggle` opens the active pane's sidebar, or closes it
-   (its session stays). If the pane has no session yet, it connects and
+1. **Open:** `sftp.toggle` opens the active pane's sidebar on its files,
+   or closes it if it shows them already (its session stays). A switch
+   at the top of the sidebar shows Files or Port forwards (spec 0017,
+   flow 1); the sidebar keeps the last one it showed, and showing Port
+   forwards connects nothing. If the pane has no session yet, it connects and
    lists its start folder (Model). Its prompts open the pane's dialog,
    named "<profile> (SFTP)", filled from the keychain as in spec 0006,
    flow 4; they take turns with the terminal's prompts. On a local pane the

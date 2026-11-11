@@ -226,10 +226,12 @@ impl Workspace {
     pub(super) fn apply_settings(&mut self, cx: &mut Context<Self>) {
         theme::apply_to_widgets(&self.theme, cx);
         let settings = BrowserSettings::of(&self.config);
-        for sidebar in self.sftp.values() {
-            sidebar
-                .view
-                .update(cx, |view, _| view.set_settings(settings));
+        for files in self
+            .sftp
+            .values()
+            .filter_map(|sidebar| sidebar.files.as_ref())
+        {
+            files.view.update(cx, |view, _| view.set_settings(settings));
         }
         for files in self.files.values() {
             let config = &self.config;

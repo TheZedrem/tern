@@ -47,8 +47,8 @@ impl Workspace {
         let leaves = self.closing_leaves(closing);
         let sidebars = leaves
             .iter()
-            .filter_map(|leaf| self.sftp.get(leaf))
-            .flat_map(|sidebar| sidebar.view.read(cx).open_edits());
+            .filter_map(|leaf| self.sftp.get(leaf)?.files.as_ref())
+            .flat_map(|files| files.view.read(cx).open_edits());
         let files = leaves
             .iter()
             .filter_map(|leaf| self.files.get(leaf))
@@ -164,8 +164,8 @@ impl Workspace {
             Some(true) => {
                 self.closing = Some(closing);
                 for leaf in self.closing_leaves(closing) {
-                    if let Some(sidebar) = self.sftp.get(&leaf) {
-                        sidebar.view.update(cx, |view, cx| view.upload_unsent(cx));
+                    if let Some(files) = self.sftp.get(&leaf).and_then(|s| s.files.as_ref()) {
+                        files.view.update(cx, |view, cx| view.upload_unsent(cx));
                     }
                     if let Some(files) = self.files.get(&leaf) {
                         files.pane.update(cx, |pane, cx| pane.upload_unsent(cx));
@@ -185,7 +185,11 @@ impl Workspace {
         };
         let mut sent = true;
         for leaf in self.closing_leaves(closing) {
-            let settled = match (self.sftp.get(&leaf), self.files.get(&leaf)) {
+            let sidebar = self
+                .sftp
+                .get(&leaf)
+                .and_then(|sidebar| sidebar.files.as_ref());
+            let settled = match (sidebar, self.files.get(&leaf)) {
                 (Some(sidebar), _) => sidebar.view.read(cx).settled(),
                 (_, Some(files)) => files.pane.read(cx).settled(cx),
                 (None, None) => continue,
@@ -209,7 +213,8 @@ impl Workspace {
     fn stop_pane(&mut self, leaf: LeafId, cx: &mut Context<Self>) {
         self.pending.remove(&leaf);
         // Its SFTP session ends with it, and its ssh with the session; a
-        // files pane's sessions end the same way.
+        // files pane's sessions end the same way. Its port forwards don't:
+        // they belong to the host (spec 0017, flow 7).
         self.sftp.remove(&leaf);
         self.files.remove(&leaf);
         self.pane_subscriptions.remove(&leaf);

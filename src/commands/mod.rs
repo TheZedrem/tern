@@ -63,6 +63,12 @@ actions!(
         /// Splits the focused pane with a files pane on its target, or
         /// focuses the tab's files pane (spec 0013, flow 1).
         OpenFiles,
+        /// Opens the focused SSH pane's sidebar on its port forwards (spec
+        /// 0017, flow 1).
+        ShowPortForwards,
+        /// Picks a running port forward to stop, whatever pane it came
+        /// from (spec 0017, flow 7).
+        StopForward,
         /// Opens a tab holding a files pane on Local at home (spec 0013).
         OpenFilesInNewTab,
         /// Picks what the focused files pane shows: Local, a host, or
@@ -148,6 +154,12 @@ pub const COMMANDS: &[AppCommand] = &[
     }),
     command("sftp.toggle", Some("Toggle SFTP sidebar"), || {
         Box::new(ToggleSftp)
+    }),
+    command("pane.portForwards", Some("Show port forwards"), || {
+        Box::new(ShowPortForwards)
+    }),
+    command("forwards.stop", Some("Stop port forward…"), || {
+        Box::new(StopForward)
     }),
     command("files.open", Some("Open files"), || Box::new(OpenFiles)),
     command("files.newTab", Some("Open files in a new tab"), || {
@@ -374,6 +386,30 @@ mod tests {
             assert_eq!(command.title, Some(title));
             let action = (command.action)();
             assert!(action.partial_eq(&*expected), "{id} runs {}", action.name());
+        }
+    }
+
+    /// Spec 0017, Module surface: "Show port forwards" and "Stop port
+    /// forward…" are in the palette, bindable as `pane.portForwards` and
+    /// `forwards.stop`, run their actions, and have no default keys.
+    #[test]
+    fn port_forward_commands_are_in_the_palette_bindable_and_unbound_by_default() {
+        let cases: [(&str, &str, &dyn Action); 2] = [
+            ("pane.portForwards", "Show port forwards", &ShowPortForwards),
+            ("forwards.stop", "Stop port forward…", &StopForward),
+        ];
+        for (id, title, runs) in cases {
+            let command = by_id(id).unwrap_or_else(|| panic!("no command has the ID `{id}`"));
+            assert_eq!(command.title, Some(title));
+            let action = (command.action)();
+            assert!(action.partial_eq(runs), "`{id}` runs {}", action.name());
+            let bound: Vec<String> = [crate::config::NewTab::Ask, crate::config::NewTab::Default]
+                .into_iter()
+                .flat_map(keymap::defaults_for)
+                .filter(|(_, command)| *command == id)
+                .map(|(key, _)| key)
+                .collect();
+            assert!(bound.is_empty(), "`{id}` is bound to {bound:?} by default");
         }
     }
 }

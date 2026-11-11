@@ -39,6 +39,11 @@ impl TerminalPane {
         let connection = match asker {
             Asker::Terminal => SharedString::from(self.profile.name.clone()),
             Asker::Sftp => format!("{} (SFTP)", self.profile.name).into(),
+            Asker::Forward(id) => {
+                let summary = self.forward_askpass.get(&id).map(|(summary, _)| summary);
+                let summary = summary.map_or("", |summary| summary.as_ref());
+                format!("{} (port forward {summary})", self.profile.name).into()
+            }
         };
         let dialog = cx.new(|cx| {
             PromptDialog::new(
@@ -52,6 +57,9 @@ impl TerminalPane {
             )
         });
         self.dialog = Some((asker, dialog));
+        if let Asker::Forward(id) = asker {
+            cx.emit(PaneEvent::ForwardPrompt { id, open: true });
+        }
         cx.emit(PaneEvent::DialogChanged);
         cx.notify();
         answered
@@ -65,6 +73,9 @@ impl TerminalPane {
             .is_some_and(|(owner, _)| *owner == asker)
         {
             self.dialog = None;
+            if let Asker::Forward(id) = asker {
+                cx.emit(PaneEvent::ForwardPrompt { id, open: false });
+            }
             cx.emit(PaneEvent::DialogChanged);
             cx.notify();
         }
@@ -102,6 +113,12 @@ impl PromptHost for TerminalPane {
             PromptNotice::NoKeychain => PaneEvent::NoKeychain,
         });
     }
+
+    fn prompt_declined(&mut self, asker: Asker, cx: &mut Context<Self>) {
+        if let Asker::Forward(id) = asker {
+            cx.emit(PaneEvent::ForwardDeclined(id));
+        }
+    }
 }
 
 /// A view that answers its ssh connections' prompts in a dialog of its
@@ -128,6 +145,9 @@ pub trait PromptHost: Sized + 'static {
 
     /// Says something about the prompts, as a notice.
     fn prompt_notice(&mut self, notice: PromptNotice, cx: &mut Context<Self>);
+
+    /// The user left `asker`'s dialog without an answer (Esc, Cancel, No).
+    fn prompt_declined(&mut self, _asker: Self::Asker, _cx: &mut Context<Self>) {}
 }
 
 /// What answering prompts has to say.
@@ -191,11 +211,17 @@ pub fn answer_prompts<H: PromptHost>(
             }) else {
                 break;
             };
-            let answer = match select(answered, pin!(prompt.ended())).await {
-                Either::Left((Ok(answer), _)) => Some(answer),
-                _ => None,
+            let (answer, declined) = match select(answered, pin!(prompt.ended())).await {
+                Either::Left((Ok(answer), _)) => (Some(answer), false),
+                Either::Left((Err(_), _)) => (None, true),
+                Either::Right(_) => (None, false),
             };
-            let _ = this.update(cx, |host, cx| host.close_prompt(asker, cx));
+            let _ = this.update(cx, |host, cx| {
+                host.close_prompt(asker, cx);
+                if declined {
+                    host.prompt_declined(asker, cx);
+                }
+            });
             match answer {
                 Some(Answer::Typed { text, save }) => {
                     prompt.answer(&text);

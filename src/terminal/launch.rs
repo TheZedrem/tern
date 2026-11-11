@@ -195,6 +195,58 @@ impl TerminalPane {
         })
     }
 
+    /// This SSH pane's host as port forwards key it: its ssh arguments, and
+    /// the `user@host` label (spec 0017, Model).
+    pub fn forward_host(&self) -> Option<crate::forwards::registry::Host> {
+        let label = self.ssh_target()?;
+        Some(crate::forwards::registry::Host {
+            args: self.launch.command.args.clone(),
+            label,
+        })
+    }
+
+    /// What starts port forward `id` to this SSH pane's host (spec 0017,
+    /// Command), with a token of its own: its prompts open this pane's
+    /// dialog, named with `forward`'s summary (flow 4). A new start of the
+    /// same forward ends the last one's prompts. Without an askpass server
+    /// it runs in batch mode, like the SFTP connection.
+    pub fn forward_command(
+        &mut self,
+        id: crate::forwards::Id,
+        forward: &crate::forwards::Forward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<pty::Command> {
+        if !self.profile.ssh {
+            return None;
+        }
+        let pane_args = self.launch.command.args.clone();
+        let mut args = ssh::forward_args(&pane_args, forward)?;
+        self.forward_askpass.remove(&id);
+        self.close_dialog(Asker::Forward(id), cx);
+        let mut env = self.launch.command.env.clone();
+        match askpass::connect(cx) {
+            Ok(connection) => {
+                env.extend(connection.env);
+                let prompts = connection.prompts;
+                let turn = Rc::clone(&self.dialog_turn);
+                let asker = Asker::Forward(id);
+                let task = answer_prompts(prompts, pane_args, asker, turn, window, cx);
+                self.forward_askpass
+                    .insert(id, (forward.summary().into(), task));
+            }
+            Err(_) => {
+                args.insert(0, "BatchMode=yes".to_owned());
+                args.insert(0, "-o".to_owned());
+            }
+        }
+        Some(pty::Command {
+            program: self.launch.command.program.clone(),
+            args,
+            env,
+        })
+    }
+
     /// Starts the program again in the same terminal, after its SSH
     /// connection dropped: the old session stays in the scrollback. The new
     /// connection gets a token of its own.

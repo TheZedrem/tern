@@ -44,6 +44,12 @@ pub enum Entry {
         pick: Pick,
         current: bool,
     },
+    /// A running port forward, as `<label>: <summary>`, which picking stops
+    /// (spec 0017, flow 7).
+    Forward {
+        id: crate::forwards::Id,
+        title: String,
+    },
     /// A value for a setting the settings screen picks from a list (spec
     /// 0009); `current` is the one the file has.
     Setting {
@@ -57,7 +63,7 @@ impl Entry {
     fn title(&self) -> &str {
         match self {
             Entry::Command { title, .. } => title,
-            Entry::Profile { title, .. } => title,
+            Entry::Profile { title, .. } | Entry::Forward { title, .. } => title,
             Entry::Setting { title, .. } => title,
             Entry::Theme { name, .. } => name,
             Entry::Host(host)
@@ -115,6 +121,7 @@ impl Entry {
             Entry::Files { host, current, .. } => CommandItem::new()
                 .label(host.label.clone())
                 .checked(*current),
+            Entry::Forward { title, .. } => CommandItem::new().label(title.clone()),
         }
     }
 }
@@ -137,6 +144,8 @@ pub enum PaletteEvent {
     Change(Change),
     /// Act on the focused files pane's targets (spec 0013).
     Files(Pick),
+    /// Stop the port forward with this ID (spec 0017, flow 7).
+    StopForward(crate::forwards::Id),
     /// Done: after running an entry, or `cancelled` by Esc.
     Closed {
         cancelled: bool,
@@ -252,6 +261,7 @@ impl Palette {
             Some(Entry::Theme { name, .. }) => cx.emit(PaletteEvent::ChooseTheme(name.clone())),
             Some(Entry::Setting { change, .. }) => cx.emit(PaletteEvent::Change(change.clone())),
             Some(Entry::Files { pick, .. }) => cx.emit(PaletteEvent::Files(pick.clone())),
+            Some(Entry::Forward { id, .. }) => cx.emit(PaletteEvent::StopForward(*id)),
             // A command has run through its action already.
             Some(Entry::Command { .. }) | None => {}
         }

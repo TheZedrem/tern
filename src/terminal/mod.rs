@@ -29,12 +29,13 @@ use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement, KeyBinding,
-    KeyDownEvent, MouseButton, NoAction, ParentElement, Pixels, Point, Render, Size,
+    KeyDownEvent, MouseButton, NoAction, ParentElement, Pixels, Point, Render, SharedString, Size,
     StatefulInteractiveElement, Styled, Task, Window, actions, div, px,
 };
 use prompt::PromptDialog;
 use pty::{EventProxy, GridSize, Terminal};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -166,6 +167,10 @@ pub enum PaneEvent {
     Notice(String),
     /// There is no keychain; the workspace says so once (spec 0006, flow 8).
     NoKeychain,
+    /// A prompt of a port forward's ssh opened or closed (spec 0017).
+    ForwardPrompt { id: crate::forwards::Id, open: bool },
+    /// The user declined a port forward's prompt: it fails as cancelled.
+    ForwardDeclined(crate::forwards::Id),
 }
 
 /// What goes back to the program for `event`: replies to its queries,
@@ -204,12 +209,14 @@ struct Running {
     reported: std::sync::Arc<osc7::Reported>,
 }
 
-/// Whose ssh a prompt dialog answers: the pane's terminal connection, or
-/// its SFTP connection (spec 0008).
+/// Whose ssh a prompt dialog answers: the pane's terminal connection, its
+/// SFTP connection (spec 0008), or a port forward added from it (spec
+/// 0017, flow 4).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Asker {
     Terminal,
     Sftp,
+    Forward(crate::forwards::Id),
 }
 
 pub struct TerminalPane {
@@ -233,6 +240,10 @@ pub struct TerminalPane {
     /// Answers the prompts of the pane's SFTP connection, which has a token
     /// of its own (spec 0008, Model).
     sftp_askpass: Option<Task<()>>,
+    /// Answers the prompts of the port forwards started from this pane,
+    /// each with a token of its own, and names them in the dialog (spec
+    /// 0017, flow 4). Closing the pane ends them.
+    forward_askpass: HashMap<crate::forwards::Id, (SharedString, Task<()>)>,
     /// The dialog over the pane while an ssh waits on a prompt, and whose.
     dialog: Option<(Asker, Entity<PromptDialog>)>,
     /// The terminal's and the SFTP connection's prompts take turns at the
@@ -290,6 +301,7 @@ impl TerminalPane {
             title: None,
             askpass: None,
             sftp_askpass: None,
+            forward_askpass: HashMap::new(),
             dialog: None,
             dialog_turn: Rc::default(),
             geometry: None,
