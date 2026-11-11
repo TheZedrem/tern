@@ -1,6 +1,6 @@
 ---
-status: next
-blocked-by: [T-075]
+status: resolved
+blocked-by: []
 ---
 # T-078: Add a port forward from the palette: `pf 13305:13305`
 

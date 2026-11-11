@@ -1,5 +1,5 @@
 ---
-status: next
+status: resolved
 blocked-by: []
 ---
 # T-075: Port forwards in the SSH pane's sidebar
