@@ -1,169 +1,170 @@
 ---
 status: draft        # draft | approved | implemented
 phase: 7
-tasks: [T-075, T-076]
-related: [spec 0005, spec 0006, spec 0008, spec 0009, spec 0016, OQ-033, threat model 0001]
+tasks: [T-076, T-075]
+related: [spec 0006, spec 0008, spec 0016, OQ-033, threat model 0001]
 ---
 
 # Spec: Port forwarding
 
-Pins local, remote and dynamic (SOCKS) port forwards on an SSH profile,
-passed to the system `ssh` as `-L`, `-R` and `-D` on the pane's
-connection, and edited on the settings screen. Phase 7 started ahead of
-Phases 3–6 (owner's call, 2026-11-11). Which of several connections to the
-same profile holds the ports is OQ-033.
+Pins local, remote and dynamic (SOCKS) port forwards created from an SSH
+pane's sidebar, which switches between its files and its forwards. Each
+forward is its own background `ssh -N` to the pane's host, lives until
+the user stops it or Tern quits, and is never saved. Phase 7 started
+ahead of Phases 3–6 (owner's call, 2026-11-11). Resolves OQ-033.
 
 ## Problem & goal
 
 Developers reach databases, dashboards and internal web apps through SSH
-tunnels. Today that takes `LocalForward` lines in `~/.ssh/config`, which
-Tern honors but can't show or edit. A profile should carry its forwards,
-so connecting to "prod-db" also makes `localhost:5432` reach the database.
+tunnels, usually for a while and then not. Today that takes
+`LocalForward` lines in `~/.ssh/config` or an `ssh -L` typed by hand. In
+Tern it should be a few clicks next to the connection they're already
+in, and gone as quickly.
 
-Done means: a profile's forwards are set on the settings screen or in
-`config.yaml`, open with the profile's terminal connection, listen on
-loopback unless the user names another address, and close with it.
+Done means: in an SSH pane's sidebar the user adds a forward in one row,
+sees whether it's up, and deletes it with one click; it keeps running
+after its tab closes, until it's deleted or Tern quits.
 
 ## Scope
 
 **In scope:**
 
-- A `forwards:` list on `type: ssh` profiles: local (`-L`), remote (`-R`), dynamic (`-D`), TCP only
-- The forwards on the pane's own `ssh` connection, and on its reconnect
-- The profile form's forwards rows (spec 0009, flow 4), with a warning for a non-loopback bind address
-- A notice on connect naming the forwards asked for
+- A switch at the top of the SSH pane's sidebar (spec 0008) between Files and Port forwards
+- Local (`-L`), remote (`-R`) and dynamic (`-D`) TCP forwards, one `ssh -N` process each, for the pane's host
+- Their state (starting, up, failed with `ssh`'s reason), delete, and retry
+- `ssh`'s prompts for a forward, answered in the app like the pane's own (spec 0006)
+- A palette command listing every running forward, to stop one whose tabs are closed
 
 **Out of scope:**
 
-- Tunnels without a terminal (`ssh -N`, a tunnel manager with start/stop): *Later*; depends on OQ-033
-- Unix socket forwards (`-L path:…`): *Later*
-- Forwards on `~/.ssh/config` hosts: they're set in `~/.ssh/config` already, which `ssh` applies (spec 0006)
-- Importing tunnels from MobaXterm, Tabby, PuTTY or WinSCP: *Later* (specs 0010, 0015 skip them)
-- A live list of open forwards in the app sidebar: *Later*, with the sidebar (T-064)
-- `request_portforward` for plugins: reserved in spec 0016, specced when plugins exist
+- Saving forwards, in the profile or the session: never in this spec (owner, 2026-11-11). `~/.ssh/config`'s `LocalForward` stays the way to keep one
+- Unix socket forwards: *Later*
+- Forwards on local panes, which have no host: never
+- Importing tunnels from MobaXterm, Tabby, PuTTY or WinSCP: never, as nothing is saved
+- `request_portforward` for plugins: reserved in spec 0016, specced with the plugin API
 - Agent forwarding and jump-host editors: still `~/.ssh/config` (spec 0006)
 
 ## Design
 
 ### Affected areas
 
-- `src/config/` (the `forwards` key, its checks), `src/ssh/` (the command's arguments), `src/settings/pages/profiles.rs` (the form), `src/default-config.yaml` (the template line), spec 0009 flow 4 (amended by T-075)
+- New `src/forwards/` (the registry, processes, the sidebar view); `src/files/browser/` and the sidebar host in `src/layout/files.rs` (the switch); `src/ssh/` (the command); spec 0008 (the switch, amended by T-075)
 
 ### Model
 
-```yaml
-profiles:
-  prod-db:
-    type: ssh
-    host: bastion
-    forwards:
-      - local: 5432              # or "127.0.0.1:5432", "[::1]:5432"
-        to: db.internal:5432
-      - remote: 9000             # a port on the server…
-        to: localhost:3000       # …reaching this machine's port 3000
-      - dynamic: 1080            # a SOCKS proxy on this machine
-```
-
-- **Forward** = kind (`local | remote | dynamic`), listen (`port` or
-  `address:port`, IPv6 in brackets), and `to` (`host:port`) for local and
-  remote. Ports 1–65535. `to` is required for local and remote and
-  refused for dynamic.
-- **Arguments [load-bearing]:** each forward becomes one `-L`, `-R` or
-  `-D` argument before the host, in the order written:
-  `ssh [-l user] [-p port] [-i file] -L 5432:db.internal:5432 -R 9000:localhost:3000 -D 1080 bastion`.
-  A bind address is passed only if the user wrote one, so `ssh` binds to
-  loopback by its default (`GatewayPorts no`, and the server's own for
-  `-R`). The user's `~/.ssh/config` still applies, its own forwards
-  included.
-- **Only the terminal connection [load-bearing]:** the SFTP sidebar's
-  connection, a files pane's (spec 0008, 0013) and `ssh -G` (spec 0006,
-  Target) never carry forwards, so opening SFTP never binds a port twice.
+- **Forward** = id, host (the pane's connection: its `ssh` arguments and
+  label, as the SFTP sidebar takes them, so `~/.ssh/config` hosts work
+  too), kind (`local | remote | dynamic`), listen (`port` or
+  `address:port`, IPv6 in brackets), `to` (`host:port`, for local and
+  remote), and state (`starting | up | failed(reason)`).
+- **Registry:** one per app run, owned by the workspace, keyed by host.
+  Every SSH pane of a host shows that host's forwards; none belongs to a
+  pane. Held in memory only.
+- **Command [load-bearing]:** the pane's `ssh` options, then
+  `-N -o ExitOnForwardFailure=yes` and one `-L`, `-R` or `-D`, then the
+  host: `ssh -l me -N -o ExitOnForwardFailure=yes -L 5432:db.internal:5432 bastion`.
+  A bind address is passed only if the user typed one, so `ssh` binds to
+  loopback by its default. It runs with a pipe for stdout and stderr and
+  no terminal, like the SFTP connection, with an askpass token of its own.
+- **Up:** a forward counts as up once its `ssh` has run 2 s without
+  exiting; `ExitOnForwardFailure` makes a failed bind or a refused remote
+  forward end it before that.
 
 ### Module surface
 
-- `config::Forward { kind, listen, to }`, `SshProfile.forwards: Vec<Forward>`
-- `ssh::command(&SshProfile)` adds the forwards; `ssh::sftp_args` leaves them out
-- `Forward::arg(&self) -> String`, the `-L`/`-R`/`-D` value; `Forward::summary(&self) -> String`, as the notice and form show it (`5432 → db.internal:5432`, `remote 9000 → localhost:3000`, `SOCKS 1080`)
+- `forwards::Registry`: `add(host, Forward) -> Id`, `remove(Id)`, `retry(Id)`, `of(host)`, `all()`, `stop_all()`; emits a change event the sidebar redraws on
+- `forwards::Forward::arg()` (the `-L`/`-R`/`-D` value) and `summary()` (`5432 → db.internal:5432`, `remote 9000 → localhost:3000`, `SOCKS 1080`)
+- `ssh::forward_args(pane_args, &Forward) -> Vec<String>`, next to `ssh::sftp_args`
+- Commands `pane.portForwards` (open the sidebar on Port forwards) and `forwards.stop` (pick a running forward to stop), in the palette and bindable, no default keys
 
 ### Flows
 
-1. **Connect:** Enter on a waiting pane (spec 0006, flow 6) starts `ssh`
-   with the forwards, and a notice says "Port forwards for `<label>`:
-   …" with each summary. It names what was asked, not what worked:
-   `ssh` reports a forward that failed in the pane (`bind … Address
-   already in use`, `remote port forwarding failed`), and the connection
-   goes on without it (`ssh`'s default, `ExitOnForwardFailure no`).
-2. **Drop and reconnect:** the forwards close with the connection;
-   Enter reruns the same command, forwards included (spec 0006, flow 5).
-3. **More connections to the profile:** a split, a second tab or a
-   restored tab of the same profile runs the same command. While another
-   pane holds a port, `ssh` prints its bind warning there, and that pane
-   works without the forward (TODO(OQ-033)).
-4. **Edit:** the profile form (spec 0009, flow 4) shows one row per
-   forward: kind, listen, to, and a remove button; "Add forward" adds a
-   row. A listen address that isn't loopback (`127.0.0.1`, `::1`,
-   `localhost`) shows a warning under the row: "Reachable from other
-   machines on the network" (for dynamic: "an open proxy to `<host>`'s
-   network"). Saving writes the `forwards:` block; a profile without
-   forwards writes none.
-5. **Bad config:** a forward with a bad port, a missing or extra `to`, or
-   an unknown kind is skipped with a notice naming the profile and the
-   forward; the profile and its other forwards still load (spec 0005's
-   rule for bad entries). Two forwards listening on the same address and
-   port: the second is skipped the same way.
-6. **Close:** closing the pane ends its `ssh`, which closes its forwards.
-   A program still using a forward sees its connection drop.
+1. **Open:** `pane.portForwards`, or the switch in an open sidebar, shows
+   Port forwards; the sidebar keeps the last view it showed. Opening it
+   connects nothing.
+2. **Add:** a row at the top takes kind (Local, Remote, SOCKS), listen
+   and to, checked as typed: a port outside 1–65535, a missing `to` for
+   Local and Remote, or a listen address and port this host already has
+   a forward on keeps Add disabled with the reason. Add starts the
+   forward and lists it as starting.
+3. **Not loopback:** a listen address other than `127.0.0.1`, `::1` or
+   `localhost` shows, before Add, "Reachable from other machines on the
+   network" (SOCKS: "an open proxy into `<host>`'s network").
+4. **Prompts:** a password, passphrase or host-key question opens the
+   dialog over the pane the forward was added from, marked as the
+   forward's, by spec 0006's flow 4 and its keychain fill. Esc cancels:
+   the forward fails with "cancelled".
+5. **Fail:** `ssh` exiting within 2 s, or later (connection lost, server
+   gone), marks it failed with the last line `ssh` wrote to stderr, as
+   plain text up to 200 characters (spec 0003's title rules), else its
+   exit code. A failed forward stays listed with Retry and Delete.
+   Nothing reconnects by itself.
+6. **Delete:** stops its `ssh` (the PID captured at spawn, never a kill
+   by name) and removes the row. A program using the forward sees its
+   connection drop.
+7. **Tabs closed:** closing every pane of a host keeps its forwards up;
+   `forwards.stop` lists every forward as `<label>: <summary>`, and
+   picking one stops it. Opening a pane of that host again shows them in
+   its sidebar.
+8. **Quit:** Tern quitting stops every forward. Nothing is saved; a
+   restored SSH tab has no forwards (spec 0006, flow 6).
+9. **`~/.ssh/config` forwards:** the host's own `LocalForward` lines apply
+   to every `ssh` it starts. If one of those is already bound (by the
+   pane's connection), `ExitOnForwardFailure` fails the new forward, and
+   its reason names that port.
 
 ### Startup impact
 
-None. Forwards are arguments of a connection the user starts; a restored
-SSH tab still waits for Enter (spec 0006, flow 6), so nothing listens or
-connects at boot.
+None. Nothing is saved, so nothing is restored; the registry is created
+with the first forward.
 
 ### Platform notes
 
-Both use the system OpenSSH client, which supports `-L`, `-R` and `-D`
-on Linux and in Windows 11's built-in `ssh.exe`; arguments reach it whole
-on Windows since T-074. Linux: a listen port below 1024 needs privileges
-(`net.ipv4.ip_unprivileged_port_start`), and `ssh` says so in the pane.
-Windows: no privileged ports, but listening on a non-loopback address
-makes Windows Defender Firewall ask about `ssh.exe` once; loopback asks
-nothing. macOS only needs to compile.
+Both use the system OpenSSH client: `-N`, `-L`, `-R`, `-D` and
+`ExitOnForwardFailure` work alike on Linux and in Windows 11's
+`ssh.exe`, and arguments reach it whole on Windows (T-074). OpenSSH's
+connection sharing (`ControlMaster`), which could add a forward to the
+pane's own connection, doesn't exist on Windows, hence one process per
+forward. Linux: a listen port below 1024 needs privileges, and `ssh`'s
+reason says so. Windows: listening on a non-loopback address makes
+Windows Defender Firewall ask about `ssh.exe` once; loopback asks
+nothing. Stopping uses the PID on both. macOS only needs to compile.
 
 ### Security & privacy
 
 | Data | Where | Purpose | Legal basis | Retention |
 |---|---|---|---|---|
-| Forwards: ports, addresses, target hosts | `config.yaml`, written by the user | Open the forwards on connect | The user's own device; no one else processes it | Until the user edits it |
+| Forwards: ports, addresses, target hosts | Memory | Run and list them | The user's own device; no one else processes it | Until deleted or Tern quits |
 
-Nothing new is sent: the forwards travel inside the SSH connection the
-user starts. Trust boundaries:
+Nothing is written to disk, and nothing is sent beyond the SSH
+connections the user starts. Trust boundaries:
 
-- **New: listening sockets [load-bearing].** A local or dynamic forward
-  lets whatever can reach its address use the user's SSH access. Loopback
-  by default limits that to this machine's processes, the same as
-  `~/.ssh/config`'s `LocalForward`. Another address is only ever what the
-  user typed, with the form's warning; Tern never widens a bind, and it
-  never adds `-g` or `GatewayPorts`.
+- **New: listening sockets [load-bearing].** A local or SOCKS forward lets
+  whatever reaches its address use the user's SSH access. Loopback by
+  default limits that to this machine's processes, as `ssh -L` does.
+  Another address is only ever what the user typed, after flow 3's
+  warning; Tern never adds `-g` or `GatewayPorts`.
 - A remote forward opens a port on the server that reaches this machine;
-  the server's `GatewayPorts` decides who can use it, and the target is
-  what the user typed.
-- Ground rule 1 holds: no forward opens before the user connects.
-- The STRIDE threat model of forwards is T-076, before T-075 builds it.
+  the server's `GatewayPorts` decides who can use it.
+- §Security 3: a forward's prompts go through askpass with a token of
+  its own, as the SFTP connection's do (threat model 0001).
+- `ssh`'s stderr is shown as plain text only, never interpreted.
+- Ground rule 1: no forward starts without the user's Add or Retry.
+- The STRIDE threat model is T-076, before T-075 builds this.
 
 ## Acceptance criteria
 
-1. A profile with `local: 5432, to: db.internal:5432` connects with exactly `-L 5432:db.internal:5432` before the host, and `psql -h localhost -p 5432` in a local pane reaches the database.
-2. With `dynamic: 1080`, `curl --socks5-hostname localhost:1080 http://intranet/` works, and the port listens on loopback only (`ss -ltn` on Linux, `Get-NetTCPConnection -State Listen` on Windows).
-3. With `remote: 9000, to: localhost:3000`, `curl localhost:9000` on the server reaches the dev server on this machine.
-4. Opening the SFTP sidebar or a files pane on that profile binds no port: its `ssh` has no `-L`, `-R` or `-D`, and no bind warning shows anywhere.
-5. A second tab of the same profile connects, shows `ssh`'s bind warning, and the first tab's forward keeps working.
-6. `local: 70000`, a `dynamic` with `to`, and a `local` without `to` each give one notice naming the profile, and the profile connects with its valid forwards.
-7. Relaunching with a restored tab of that profile listens on no port until Enter is pressed in it.
-8. Adding a forward in the profile form writes only a `forwards:` block under that profile, other comments and order kept; a listen address `0.0.0.0:5432` shows the network warning before saving.
-9. Dropping the connection closes the port; Enter reconnects and opens it again.
-10. On Windows 11, criteria 1 and 2 hold with the built-in `ssh.exe`, and a loopback-only forward raises no firewall prompt.
+1. In a pane connected to `bastion`, adding Local `5432` → `db.internal:5432` starts one `ssh` with exactly `-N -o ExitOnForwardFailure=yes -L 5432:db.internal:5432` before the host, shows it up within 3 s, and `psql -h localhost -p 5432` in a local pane reaches the database.
+2. SOCKS `1080` serves `curl --socks5-hostname localhost:1080 http://intranet/`, and the port listens on loopback only (`ss -ltn` on Linux, `Get-NetTCPConnection -State Listen` on Windows).
+3. Remote `9000` → `localhost:3000` makes `curl localhost:9000` on the server reach the dev server on this machine.
+4. Adding a forward on a port another program already listens on shows it failed with `ssh`'s "Address already in use" line, and Retry after that program exits brings it up.
+5. Delete closes the port within a second, and no `ssh` of that forward is left running.
+6. Closing the SSH tab keeps the forward working; `forwards.stop` lists it, and picking it closes the port. A new tab to the same host shows the forward in its sidebar.
+7. Quitting Tern leaves no forward's `ssh` running and nothing about forwards in `config.yaml` or `session.json`; the relaunch listens on no forwarded port.
+8. A host with a remembered password starts a forward without typing; one without asks in the dialog over the pane, and Esc there marks the forward failed with "cancelled".
+9. Typing `0.0.0.0` as the listen address shows the network warning before Add; a port of `70000` keeps Add disabled.
+10. On Windows 11, criteria 1, 2 and 5 hold with the built-in `ssh.exe`, and a loopback forward raises no firewall prompt.
 
 ## Open questions
 
-- OQ-033: which connection holds a profile's forwards when it's open in more than one pane.
+- None. OQ-033 is resolved by the owner's choices above.
