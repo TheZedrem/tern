@@ -118,6 +118,7 @@ impl Workspace {
                 self.save_soon(window, cx);
                 cx.notify();
             }
+            PaneEvent::CwdChanged => self.save_soon(window, cx),
             PaneEvent::Exited => self.close(Closing::Pane(leaf), window, cx),
             // The keyboard follows a prompt dialog of the focused pane in and
             // out, unless the palette or a rename has it.

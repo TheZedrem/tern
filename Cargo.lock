@@ -6952,6 +6952,7 @@ dependencies = [
  "interprocess",
  "keyring",
  "notify",
+ "polling",
  "russh-sftp",
  "serde",
  "serde-saphyr 2.1.0",

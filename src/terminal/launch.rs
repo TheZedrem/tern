@@ -86,6 +86,7 @@ impl TerminalPane {
             notifier: session.notifier,
             size: session.size,
             child_pid: session.child_pid,
+            reported: session.reported,
         });
     }
 
@@ -109,6 +110,7 @@ impl TerminalPane {
             grid,
             self.launch.cwd.as_deref(),
             self.settings.scrollback,
+            self.profile.ssh,
             Arc::clone(&self.launch.timing),
         );
         self.attach(session, cx);
@@ -135,6 +137,16 @@ impl TerminalPane {
             }
         }
         command
+    }
+
+    /// The remote folder an SSH pane's shell last reported with OSC 7,
+    /// where its SFTP sidebar starts (spec 0008, Model). Untrusted text,
+    /// held in memory only.
+    pub fn remote_cwd(&self) -> Option<String> {
+        match &self.state {
+            State::Running(running) => running.reported.remote(),
+            _ => None,
+        }
     }
 
     /// `user@host` of an SSH pane, as its SFTP sidebar names it.
@@ -200,6 +212,7 @@ impl TerminalPane {
             self.launch.cwd.as_deref(),
             &running.term,
             &running.proxy,
+            &running.reported,
         );
         let failed = match started {
             Ok((notifier, child_pid)) => {

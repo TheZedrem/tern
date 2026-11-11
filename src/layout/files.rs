@@ -276,7 +276,9 @@ impl Workspace {
         };
         let settings = BrowserSettings::of(&self.config);
         let source = Source::Pane(pane.downgrade());
-        let view = cx.new(|cx| Browser::new(source, None, true, settings, window, cx));
+        // The folder the pane's shell last reported, read once (spec 0008).
+        let start = pane.read(cx).remote_cwd();
+        let view = cx.new(|cx| Browser::new(source, start, true, settings, window, cx));
         let events = cx.subscribe_in(
             &view,
             window,

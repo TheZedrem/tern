@@ -1,6 +1,6 @@
 ---
-status: next
-blocked-by: [OQ-018]
+status: resolved
+blocked-by: []
 ---
 # T-022: Track the cwd shells report (OSC 7)
 
@@ -19,3 +19,12 @@ dependency (OQ-018). Area: src.
 
 Spec: ../spec/0002-terminal-pane.md (cwd, AC9)
 Spec: ../spec/threat-model/0002-escape-sequences.md (TM-escape-09)
+
+**Resolved (2026-11-11):** `src/terminal/osc7.rs` wraps the PTY
+(`Osc7Pty`) and keeps the last report in `Reported`; a local pane's cwd
+prefers it over `/proc` and a change saves the session; an SSH pane's
+sidebar starts in it. On Windows only drive paths count (no UNC, so no
+network on the check). Snippets in `shell-integration/`. Checked on
+Windows 11: the pwsh snippet's report passes through ConPTY, and the
+session saved `C:/Users` with no `/proc` to fall back on. Linux, zsh and
+the SFTP start folder are checked in T-073.

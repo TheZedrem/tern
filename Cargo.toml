@@ -34,6 +34,9 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 # thread runs a current-thread tokio runtime; GPUI already builds tokio.
 russh-sftp = "3"
 tokio = { version = "1", features = ["rt", "process", "io-util", "sync", "time", "macros"] }
+# OSC 7 cwd tracking wraps alacritty_terminal's PTY, whose traits name
+# polling's types; pinned to the version alacritty_terminal builds (OQ-018).
+polling = "=3.11.0"
 
 [dev-dependencies]
 # GPUI's test window, to drive keys through a real dispatch tree. Test

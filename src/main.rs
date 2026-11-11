@@ -148,6 +148,7 @@ fn main() {
                 GridSize::fit(area, cell),
                 launch.cwd.as_deref(),
                 config.scrollback as usize,
+                !bench && matches!(profile.kind, config::ProfileKind::Ssh(_)),
                 Arc::clone(&timing),
             ))
         };

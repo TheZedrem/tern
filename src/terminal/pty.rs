@@ -3,6 +3,7 @@
 //! parser; the UI only locks the grid to draw it (architecture §Key
 //! decisions).
 
+use super::osc7::{Osc7Pty, Reported};
 use crate::config::{Profile, ProfileKind};
 use crate::ssh;
 use crate::timing::{Mark, Timing};
@@ -186,6 +187,8 @@ pub struct Session {
     pub size: GridSize,
     /// The program's process ID, where the platform exposes it (Unix).
     pub child_pid: Option<u32>,
+    /// The cwd its shell reports with OSC 7; kept across reruns.
+    pub reported: Arc<Reported>,
 }
 
 /// A program started on a terminal: the channel to it, and its process ID
@@ -194,12 +197,14 @@ pub type Started = (Notifier, Option<u32>);
 
 /// Starts `command` in a new PTY of `size`, in `cwd` or the home directory.
 /// Output is parsed on the event loop's own thread from the first byte,
-/// even before any window exists.
+/// even before any window exists. A `remote` program's cwd reports name a
+/// folder on its SSH host, never a local one (TM-escape-09).
 pub fn spawn(
     command: &Command,
     size: GridSize,
     cwd: Option<&Path>,
     scrollback: usize,
+    remote: bool,
     timing: Arc<Timing>,
 ) -> Result<Session, String> {
     let (tx, events) = unbounded();
@@ -212,7 +217,8 @@ pub fn spawn(
         ..Default::default()
     };
     let term = Arc::new(FairMutex::new(Term::new(config, &size, proxy.clone())));
-    let (notifier, child_pid) = rerun(command, size, cwd, &term, &proxy)?;
+    let reported = Reported::new(remote);
+    let (notifier, child_pid) = rerun(command, size, cwd, &term, &proxy, &reported)?;
     Ok(Session {
         term,
         notifier,
@@ -220,6 +226,7 @@ pub fn spawn(
         proxy,
         size,
         child_pid,
+        reported,
     })
 }
 
@@ -233,6 +240,7 @@ pub fn rerun(
     cwd: Option<&Path>,
     term: &Terminal,
     proxy: &EventProxy,
+    reported: &Arc<Reported>,
 ) -> Result<Started, String> {
     #[allow(
         clippy::needless_update,
@@ -268,6 +276,7 @@ pub fn rerun(
     #[cfg(not(unix))]
     let child_pid = None;
 
+    let pty = Osc7Pty::new(pty, Arc::clone(reported));
     let event_loop = EventLoop::new(Arc::clone(term), proxy.clone(), pty, true, false)
         .map_err(|e| e.to_string())?;
     let notifier = Notifier(event_loop.channel());
@@ -412,7 +421,7 @@ mod tests {
             args: vec![],
             env: BTreeMap::new(),
         };
-        match spawn(&missing, SMALL, None, 100, timing()) {
+        match spawn(&missing, SMALL, None, 100, false, timing()) {
             Ok(_) => panic!("spawned a program that doesn't exist"),
             Err(message) => assert!(!message.is_empty()),
         }
@@ -437,7 +446,7 @@ mod tests {
         cwd: Option<&Path>,
         timing: Arc<Timing>,
     ) -> (Session, Vec<Event>) {
-        let mut session = spawn(command, size, cwd, 100, timing).expect("spawn sh");
+        let mut session = spawn(command, size, cwd, 100, false, timing).expect("spawn sh");
         let events = until_exit(&mut session.events);
         (session, events)
     }
@@ -470,7 +479,6 @@ mod tests {
     }
 
     /// Every line `term` holds, scrollback first, without trailing blanks.
-    #[cfg(unix)]
     fn all_lines<T>(term: &Term<T>) -> Vec<String> {
         use alacritty_terminal::index::{Column, Line};
         let grid = term.grid();
@@ -498,6 +506,7 @@ mod tests {
             None,
             &session.term,
             &session.proxy,
+            &session.reported,
         )
         .expect("rerun sh");
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
@@ -526,7 +535,15 @@ mod tests {
     #[test]
     fn a_rerun_programs_exit_reaches_the_sessions_events() {
         let (mut session, _) = run_to_exit(&sh("exit 255"), SMALL, None, timing());
-        rerun(&sh("exit 7"), SMALL, None, &session.term, &session.proxy).expect("rerun sh");
+        rerun(
+            &sh("exit 7"),
+            SMALL,
+            None,
+            &session.term,
+            &session.proxy,
+            &session.reported,
+        )
+        .expect("rerun sh");
         let exit = until_exit(&mut session.events)
             .iter()
             .find_map(|event| match event {
@@ -691,5 +708,244 @@ mod tests {
         let (session, _) = run_to_exit(&Command::of_profile(&profile), wide, None, timing());
         let screen = crate::terminal::tests::screen(&*session.term.lock());
         assert_eq!(screen[0], "dumb truecolor tern");
+    }
+
+    /// Wide enough that a temp path and the text around it fit on one row.
+    const WIDE: GridSize = GridSize {
+        cols: 400,
+        rows: 6,
+        ..SMALL
+    };
+
+    /// Waits until a line of `session`'s grid contains `marker`. The OSC 7
+    /// scanner sees bytes before the parser does, so by then every report
+    /// printed before `marker` has been taken.
+    fn wait_for(session: &Session, marker: &str) -> Vec<String> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let lines = all_lines(&*session.term.lock());
+            if lines.iter().any(|line| line.contains(marker)) {
+                return lines;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no {marker:?} within 30 s: {lines:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Whether `pwsh` can run here; the Windows end-to-end tests skip
+    /// without it, saying so.
+    #[cfg(windows)]
+    fn has_pwsh() -> bool {
+        let found = on_path("pwsh.exe");
+        if !found {
+            eprintln!("pwsh isn't on PATH: skipped");
+        }
+        found
+    }
+
+    /// A program that prints `before`, an OSC 7 report of `url`, then
+    /// `after` and exits: `sh` on Unix (ST-terminated), `pwsh` on Windows
+    /// (BEL-terminated), so the report crosses ConPTY there.
+    fn reporter(url: &str) -> Command {
+        let env = BTreeMap::from([("TERN_TEST_URL".to_owned(), url.to_owned())]);
+        #[cfg(unix)]
+        let (program, script) = (
+            "sh",
+            vec![
+                "-c".to_owned(),
+                r#"printf 'before\033]7;%s\033\\after\n' "$TERN_TEST_URL""#.to_owned(),
+            ],
+        );
+        // No spaces or double quotes: alacritty joins the arguments
+        // unescaped into one command line.
+        #[cfg(windows)]
+        let (program, script) = (
+            "pwsh",
+            ["-NoProfile", "-NonInteractive", "-Command"]
+                .map(String::from)
+                .into_iter()
+                .chain([
+                    "[Console]::Write('before'+[char]27+']7;'+$env:TERN_TEST_URL+[char]7+'after')"
+                        .to_owned(),
+                ])
+                .collect(),
+        );
+        Command {
+            program: program.into(),
+            args: script,
+            env,
+        }
+    }
+
+    /// `dir` as a `file://` URL for `host`, unencoded: test dirs have no
+    /// characters that need it.
+    fn file_url(host: &str, dir: &Path) -> String {
+        let path = dir.to_str().expect("a UTF-8 temp dir").replace('\\', "/");
+        if path.starts_with('/') {
+            format!("file://{host}{path}")
+        } else {
+            format!("file://{host}/{path}")
+        }
+    }
+
+    fn same_dir(reported: Option<std::path::PathBuf>, dir: &Path) -> bool {
+        let canonical = |path: &Path| path.canonicalize().expect("the dir exists");
+        reported.is_some_and(|path| canonical(&path) == canonical(dir))
+    }
+
+    /// Spec 0002, cwd and TM-escape-09: a local program's OSC 7 report of
+    /// an existing directory on this machine becomes the pane's cwd, and
+    /// the output around the report still reaches the grid unchanged.
+    #[test]
+    fn a_local_programs_osc7_report_sets_its_cwd_and_its_output_still_shows() {
+        #[cfg(windows)]
+        if !has_pwsh() {
+            return;
+        }
+        let dir = crate::config::tests::TempDir::new("osc7-local");
+        let url = file_url("localhost", dir.path());
+        let session = spawn(&reporter(&url), WIDE, None, 100, false, timing()).expect("spawn");
+        let lines = wait_for(&session, "after");
+        assert!(
+            lines.iter().any(|line| line == "beforeafter"),
+            "the report changed the output around it: {lines:?}"
+        );
+        assert!(
+            same_dir(session.reported.local(), dir.path()),
+            "reported {:?}, not {:?}",
+            session.reported.local(),
+            dir.path()
+        );
+        assert_eq!(session.reported.remote(), None);
+        assert!(session.reported.take_changed(), "the pane isn't told");
+    }
+
+    /// Spec 0002, cwd [load-bearing] and TM-escape-09: a local pane
+    /// ignores a report naming another machine or a directory that
+    /// doesn't exist.
+    #[test]
+    fn a_local_programs_osc7_report_of_another_host_or_a_missing_dir_is_ignored() {
+        #[cfg(windows)]
+        if !has_pwsh() {
+            return;
+        }
+        let dir = crate::config::tests::TempDir::new("osc7-ignored");
+        let missing = dir.path().join("missing");
+        for url in [
+            file_url("elsewhere.example", dir.path()),
+            file_url("localhost", &missing),
+        ] {
+            let session = spawn(&reporter(&url), WIDE, None, 100, false, timing()).expect("spawn");
+            let lines = wait_for(&session, "after");
+            assert!(lines.iter().any(|line| line == "beforeafter"), "{lines:?}");
+            assert_eq!(session.reported.local(), None, "{url}");
+            assert!(!session.reported.take_changed(), "{url}");
+        }
+    }
+
+    /// Spec 0002, cwd [load-bearing], and spec 0008, Start folder: an SSH
+    /// pane's report sets no local cwd, even when it names a directory
+    /// that exists here; its path is kept only as the remote folder.
+    #[test]
+    fn an_ssh_panes_osc7_report_is_kept_only_as_its_remote_folder() {
+        #[cfg(windows)]
+        if !has_pwsh() {
+            return;
+        }
+        let dir = crate::config::tests::TempDir::new("osc7-remote");
+        let url = file_url("localhost", dir.path());
+        let session = spawn(&reporter(&url), WIDE, None, 100, true, timing()).expect("spawn");
+        wait_for(&session, "after");
+        assert_eq!(session.reported.local(), None);
+        assert!(!session.reported.take_changed(), "a remote cwd isn't saved");
+        let path = url.strip_prefix("file://localhost").expect("a file URL");
+        assert_eq!(session.reported.remote().as_deref(), Some(path));
+    }
+
+    /// Spec 0002, cwd, and criterion 9: with `shell-integration/tern.ps1`
+    /// sourced, `Set-Location` to a directory whose name has a space and
+    /// non-ASCII letters, then a prompt, gives a report that names it.
+    #[cfg(windows)]
+    #[test]
+    fn the_pwsh_snippet_reports_a_directory_with_a_space_and_non_ascii_letters() {
+        if !has_pwsh() {
+            return;
+        }
+        let root = crate::config::tests::TempDir::new("osc7-pwsh");
+        let dir = root.path().join("my dir äöü");
+        std::fs::create_dir(&dir).expect("create the dir");
+        let snippet = Path::new(env!("CARGO_MANIFEST_DIR")).join("shell-integration/tern.ps1");
+        // A script file: its paths have spaces, which the command line
+        // alacritty builds wouldn't keep.
+        let script = format!(
+            ". '{}'\nSet-Location -LiteralPath '{}'\n$null = prompt\n[Console]::Write('after')\n",
+            snippet.display(),
+            dir.display()
+        );
+        let file = root.path().join("run.ps1");
+        std::fs::write(&file, script).expect("write the script");
+        let command = Command {
+            program: "pwsh".into(),
+            args: [
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ]
+            .map(String::from)
+            .into_iter()
+            .chain([file.display().to_string()])
+            .collect(),
+            env: BTreeMap::new(),
+        };
+        let session = spawn(&command, WIDE, None, 100, false, timing()).expect("spawn pwsh");
+        wait_for(&session, "after");
+        assert!(
+            same_dir(session.reported.local(), &dir),
+            "reported {:?}, not {dir:?}",
+            session.reported.local()
+        );
+    }
+
+    /// Spec 0002, cwd: with `shell-integration/tern.bash` sourced, `cd` to
+    /// a directory whose name has a space and non-ASCII letters, then the
+    /// prompt hook, gives a report that names it.
+    #[cfg(unix)]
+    #[test]
+    fn the_bash_snippet_reports_a_directory_with_a_space_and_non_ascii_letters() {
+        if !on_path("bash") {
+            eprintln!("bash isn't on PATH: skipped");
+            return;
+        }
+        let root = crate::config::tests::TempDir::new("osc7-bash");
+        let dir = root.path().join("my dir äöü");
+        std::fs::create_dir(&dir).expect("create the dir");
+        let snippet = Path::new(env!("CARGO_MANIFEST_DIR")).join("shell-integration/tern.bash");
+        let command = Command {
+            program: "bash".into(),
+            args: [
+                "--norc",
+                "--noprofile",
+                "-c",
+                r#". "$1" && cd "$2" && eval "$PROMPT_COMMAND"; printf after"#,
+                "bash",
+            ]
+            .map(String::from)
+            .into_iter()
+            .chain([snippet.display().to_string(), dir.display().to_string()])
+            .collect(),
+            env: BTreeMap::new(),
+        };
+        let session = spawn(&command, WIDE, None, 100, false, timing()).expect("spawn bash");
+        wait_for(&session, "after");
+        assert!(
+            same_dir(session.reported.local(), &dir),
+            "reported {:?}, not {dir:?}",
+            session.reported.local()
+        );
     }
 }

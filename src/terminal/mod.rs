@@ -11,6 +11,7 @@ pub mod input;
 mod launch;
 pub mod link;
 mod mouse;
+pub mod osc7;
 pub mod prompt;
 pub mod pty;
 pub mod search;
@@ -154,6 +155,9 @@ pub enum PaneEvent {
     Focused,
     /// The program set or reset its title.
     TitleChanged,
+    /// A local pane's shell reported a new cwd (OSC 7), which the session
+    /// saves.
+    CwdChanged,
     /// The program exited and `close_on_exit` says the pane closes.
     Exited,
     /// A prompt dialog opened or closed, which moves the keyboard focus.
@@ -196,6 +200,8 @@ struct Running {
     notifier: Notifier,
     size: GridSize,
     child_pid: Option<u32>,
+    /// The cwd the shell reports with OSC 7.
+    reported: std::sync::Arc<osc7::Reported>,
 }
 
 /// Whose ssh a prompt dialog answers: the pane's terminal connection, or
@@ -363,12 +369,15 @@ impl TerminalPane {
     }
 
     /// The program's working directory, so a split starts in the same place
-    /// (spec 0003, flow 1). Read from `/proc` on Linux; elsewhere unknown.
-    // TODO(OQ-018): prefer the cwd the shell reports with OSC 7 (T-022).
+    /// (spec 0003, flow 1): the one a local pane's shell last reported with
+    /// OSC 7, else `/proc` on Linux; elsewhere unknown (spec 0002, cwd).
     pub fn cwd(&self) -> Option<PathBuf> {
         let State::Running(running) = &self.state else {
             return None;
         };
+        if let Some(reported) = running.reported.local() {
+            return Some(reported);
+        }
         let pid = running.child_pid?;
         if cfg!(target_os = "linux") {
             std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
@@ -396,6 +405,9 @@ impl TerminalPane {
         match event {
             Event::Wakeup => {
                 self.has_output = true;
+                if running.reported.take_changed() {
+                    cx.emit(PaneEvent::CwdChanged);
+                }
                 cx.notify();
             }
             Event::Title(title) => {

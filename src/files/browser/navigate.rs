@@ -67,8 +67,6 @@ impl Browser {
 
     fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         match event {
-            // TODO(T-022): an SSH target starts in the folder the pane's
-            // shell reported.
             Event::Connected { home } => {
                 self.connection = Connection::Connected { home: home.clone() };
                 // A reconnect shows the folder it showed.

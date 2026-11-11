@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-010, T-011, T-002, T-022, T-055]
+tasks: [T-010, T-011, T-002, T-022, T-055, T-072, T-073]
 related: [spec 0005, OQ-003 ✅, OQ-008 ✅, OQ-011 ✅]
 ---
 
@@ -136,7 +136,7 @@ only there.
   untrusted program output. The STRIDE model is
   [threat model 0002](threat-model/0002-escape-sequences.md); decisions:
   - **Titles (OSC 0/2):** honored as plain text (spec 0003).
-  - **cwd (OSC 7) [load-bearing]:** honored only in a local pane, as a `file://` URL whose host is empty, `localhost` or this machine's name, naming an existing local directory, at most 4 KiB. An SSH pane's reports set no local cwd (TM-escape-09); its last report's path is kept in memory only, never saved, as the remote folder its SFTP session starts in (spec 0008).
+  - **cwd (OSC 7) [load-bearing]:** honored only in a local pane, as a `file://` URL whose host is empty, `localhost` or this machine's name, naming an existing local directory (on Windows a drive path, never UNC, so checking one never touches the network), at most 4 KiB. An SSH pane's reports set no local cwd (TM-escape-09); its last report's path is kept in memory only, never saved, as the remote folder its SFTP session starts in (spec 0008).
   - **Links (OSC 8 and detected URLs) [load-bearing]:** only `http`/`https` targets, checked on the parsed URL, are links at all, and they open only on the user's click (flow 7), through GPUI's URL opener, never a shell. Hovering shows the target as plain text, marking a host with non-ASCII letters; targets over 2 KiB are ignored (TM-escape-02, -03, -10).
   - **Clipboard (OSC 52) [load-bearing]:** writes are ignored and reads are never answered (TM-escape-04, -05).
   - **Replies:** only fixed strings and numbers go back to the program; none echoes terminal text (TM-escape-06).

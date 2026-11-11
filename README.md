@@ -36,6 +36,7 @@ earlier Tauri version took 1.07 s to start and was dropped.
 
 - Tabs, vertical tabs and split panes, rearranged by drag and drop; the focused pane gets an accent border and the others dim (`active_pane`)
 - Session restore: tabs, splits and the window come back as you left them, with a fresh tab opened on top (`open_new_tab: false` to skip it)
+- Splits and restored tabs open in the shell's working directory, with the opt-in [shell integration](#shell-integration) on Windows and everywhere for SSH
 - Search, clickable links, IME input, right-click paste, copy on select and the Linux primary selection
 - A command palette, and shortcuts that never take `Ctrl`/`Alt` keys from the shell
 - YAML config that reloads live, profiles and themes, and a settings screen for all of it
@@ -97,11 +98,27 @@ shell. You can rebind all of them in the settings or in `config.yaml`.
 | `Ctrl+Shift+S` | SFTP sidebar of an SSH pane |
 | `Ctrl+Shift+B` / `Ctrl+Shift+O` | Files pane / switch its host |
 
+## Shell integration
+
+To have splits, restored tabs and an SSH pane's SFTP sidebar open in the
+folder you're in, source the snippet for your shell from its rc file. It
+reports the working directory with OSC 7 at each prompt; nothing is set
+up automatically.
+
+| Shell | Add to | Line |
+|---|---|---|
+| bash | `~/.bashrc` | `. /path/to/tern/shell-integration/tern.bash` |
+| zsh | `~/.zshrc` | `source /path/to/tern/shell-integration/tern.zsh` |
+| PowerShell 7 | `$PROFILE` | `. /path/to/tern/shell-integration/tern.ps1` |
+
+On Linux, local panes follow `cd` without it. On a server, the snippet
+lets the SFTP sidebar start in the shell's folder. A report counts as
+local only for this machine and an existing directory.
+
 ## Roadmap
 
 **Next**
 
-- Following the shell's working directory (OSC 7) ([T-022](tasks/T-022-osc7-cwd-tracking.md))
 - In the file browser: fuzzy filter, path suggestions, permissions, deleting to the trash, a local sidebar, dragging files out ([tasks](tasks/))
 - Signed apt and dnf repositories ([T-031](tasks/T-031-package-repositories.md))
 
