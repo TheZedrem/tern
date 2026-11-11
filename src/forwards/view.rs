@@ -159,7 +159,7 @@ impl ForwardsView {
         cx: &mut Context<Self>,
     ) -> Self {
         let listen = cx.new(|cx| InputState::new(window, cx).placeholder("5432"));
-        let to = cx.new(|cx| InputState::new(window, cx).placeholder("host:port"));
+        let to = cx.new(|cx| InputState::new(window, cx).placeholder("port, or host:port"));
         let mut subscriptions = vec![cx.observe(&registry, |_, _, cx| cx.notify())];
         for input in [&listen, &to] {
             subscriptions.push(cx.subscribe_in(

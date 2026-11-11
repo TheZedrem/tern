@@ -56,7 +56,8 @@ after its tab closes, until it's deleted or Tern quits.
   label, as the SFTP sidebar takes them, so `~/.ssh/config` hosts work
   too), kind (`local | remote | dynamic`), listen port, `network`
   (off unless the user turns it on: listen on every IPv4 interface
-  instead of `127.0.0.1`), `to` (`host:port`, for local and remote), and
+  instead of `127.0.0.1`), `to` (`host:port`, or a port alone for `localhost:port` on the side it
+  leads from; for local and remote), and
   state (`starting | up | failed(reason)`). There is no free-typed bind
   address (owner, 2026-11-11).
 - **Registry:** one per app run, owned by the workspace, keyed by host.

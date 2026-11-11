@@ -80,7 +80,7 @@ impl Forward {
         let to = || -> Result<Destination, &'static str> {
             let to = to.trim();
             if to.is_empty() {
-                return Err("Say where it leads: host:port");
+                return Err("Say where it leads: a port, or host:port");
             }
             parse_destination(to)
         };
@@ -149,11 +149,18 @@ fn parse_port(text: &str) -> Option<u16> {
     text.parse().ok().filter(|port| *port != 0)
 }
 
-/// `host:port`, where an IPv6 host is in brackets: `[::1]:5432`.
+/// `host:port`, where an IPv6 host is in brackets: `[::1]:5432`. A port
+/// alone is `localhost` on the side the forward leads from.
 fn parse_destination(text: &str) -> Result<Destination, &'static str> {
+    if let Some(port) = parse_port(text) {
+        return Ok(Destination {
+            host: "localhost".to_owned(),
+            port,
+        });
+    }
     let (host, port) = text
         .rsplit_once(':')
-        .ok_or("Say where it leads: host:port")?;
+        .ok_or("Say where it leads: a port, or host:port")?;
     let port = parse_port(port).ok_or("The target port must be 1–65535")?;
     let host = parse_host(host).ok_or(
         "The target host may only have letters, digits, '.', '-' and '_', \
@@ -207,7 +214,16 @@ mod tests {
     #[test]
     fn a_target_port_is_1_to_65535_in_digits() {
         assert!(local("5432", "db:65535").is_ok());
-        for bad in ["db:0", "db:70000", "db:", "db:12a", "db", "db:5432 -v"] {
+        for bad in [
+            "db:0",
+            "db:70000",
+            "db:",
+            "db:12a",
+            "db",
+            "db:5432 -v",
+            "0",
+            "70000",
+        ] {
             assert!(local("5432", bad).is_err(), "`to` {bad:?} was taken");
         }
     }
@@ -231,6 +247,8 @@ mod tests {
             _ => None,
         };
         assert_eq!(to("db.internal:5432").as_deref(), Some("db.internal:5432"));
+        // A port alone leads to that port on the far side's own localhost.
+        assert_eq!(to("13305").as_deref(), Some("localhost:13305"));
         assert_eq!(to("db-1_a:5432").as_deref(), Some("db-1_a:5432"));
         assert_eq!(to("localhost:3000").as_deref(), Some("localhost:3000"));
         assert_eq!(to("10.0.0.7:5432").as_deref(), Some("10.0.0.7:5432"));
