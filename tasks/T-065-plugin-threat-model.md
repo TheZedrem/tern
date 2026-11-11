@@ -4,7 +4,7 @@ blocked-by: []
 ---
 # T-065: STRIDE threat model for plugins
 
-Model the Tern ↔ plugin process boundary as `spec/threat-model/0004-plugins.md`
+Model the Tern ↔ plugin process boundary as `spec/threat-model/0005-plugins.md`
 before any plugin code is written (architecture §Roadmap, constraints for
 the plugin phases): a plugin spoofing another's panel or confirmation bar,
 confirmation spam, text that hides what a command does, terminal output

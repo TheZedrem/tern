@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 7
 tasks: [T-076, T-075]
-related: [spec 0006, spec 0008, spec 0016, OQ-033, threat model 0001]
+related: [spec 0006, spec 0008, spec 0016, OQ-033, OQ-034, threat model 0001, threat model 0004]
 ---
 
 # Spec: Port forwarding
@@ -62,13 +62,26 @@ after its tab closes, until it's deleted or Tern quits.
   pane. Held in memory only.
 - **Command [load-bearing]:** the pane's `ssh` options, then
   `-N -o ExitOnForwardFailure=yes` and one `-L`, `-R` or `-D`, then the
-  host: `ssh -l me -N -o ExitOnForwardFailure=yes -L 5432:db.internal:5432 bastion`.
-  A bind address is passed only if the user typed one, so `ssh` binds to
-  loopback by its default. It runs with a pipe for stdout and stderr and
-  no terminal, like the SFTP connection, with an askpass token of its own.
+  host: `ssh -l me -N -o ExitOnForwardFailure=yes -L localhost:5432:db.internal:5432 bastion`.
+  The bind address is what the user typed, else `localhost`, always
+  written out: without one, `GatewayPorts yes` in `~/.ssh/config` would
+  make `ssh` listen on every interface (TM-fwd-01). The value is built
+  from the add row's typed fields only and passed as one argument
+  (TM-fwd-05). It runs with stdout to null, stderr on a pipe the
+  forward's thread reads to the end, keeping only the last line cut at
+  1 KiB (TM-fwd-15), and no terminal, like the SFTP connection, with an
+  askpass token of its own.
+- **Process:** Tern keeps each forward's `Child` and stops it with
+  `kill` and `wait` on that handle, so a reused PID is never hit
+  (TM-fwd-14). The OS ends forwards with Tern, crash included: Linux
+  `PR_SET_PDEATHSIG` set in `pre_exec`, spawned from a thread that lives
+  as long as the app; Windows a Job object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (TM-fwd-13, pending OQ-034's
+  `libc` answer).
 - **Up:** a forward counts as up once its `ssh` has run 2 s without
-  exiting; `ExitOnForwardFailure` makes a failed bind or a refused remote
-  forward end it before that.
+  exiting, counted only while none of its prompts is open (TM-fwd-10);
+  `ExitOnForwardFailure` makes a failed bind or a refused remote forward
+  end it before that.
 
 ### Module surface
 
@@ -84,12 +97,16 @@ after its tab closes, until it's deleted or Tern quits.
    connects nothing.
 2. **Add:** a row at the top takes kind (Local, Remote, SOCKS), listen
    and to, checked as typed: a port outside 1–65535, a missing `to` for
-   Local and Remote, or a listen address and port this host already has
-   a forward on keeps Add disabled with the reason. Add starts the
+   Local and Remote, an address that is neither an IP (IPv6 in brackets)
+   nor a name of letters, digits, `.`, `-` and `_` not starting with `-`
+   (TM-fwd-05), or a listen address and port this host already has a
+   forward on keeps Add disabled with the reason. Add starts the
    forward and lists it as starting.
 3. **Not loopback:** a listen address other than `127.0.0.1`, `::1` or
    `localhost` shows, before Add, "Reachable from other machines on the
-   network" (SOCKS: "an open proxy into `<host>`'s network").
+   network" (SOCKS: "an open proxy into `<host>`'s network"; Remote:
+   "Reachable from other machines on `<host>`'s network, if the server
+   allows it").
 4. **Prompts:** a password, passphrase or host-key question opens the
    dialog over the pane the forward was added from, marked as the
    forward's, by spec 0006's flow 4 and its keychain fill. Esc cancels:
@@ -99,7 +116,7 @@ after its tab closes, until it's deleted or Tern quits.
    plain text up to 200 characters (spec 0003's title rules), else its
    exit code. A failed forward stays listed with Retry and Delete.
    Nothing reconnects by itself.
-6. **Delete:** stops its `ssh` (the PID captured at spawn, never a kill
+6. **Delete:** stops its `ssh` (the `Child` kept from spawn, never a kill
    by name) and removes the row. A program using the forward sees its
    connection drop.
 7. **Tabs closed:** closing every pane of a host keeps its forwards up;
@@ -128,7 +145,9 @@ pane's own connection, doesn't exist on Windows, hence one process per
 forward. Linux: a listen port below 1024 needs privileges, and `ssh`'s
 reason says so. Windows: listening on a non-loopback address makes
 Windows Defender Firewall ask about `ssh.exe` once; loopback asks
-nothing. Stopping uses the PID on both. macOS only needs to compile.
+nothing. Stopping uses the process handle on both. Tying forwards to
+Tern's life differs: `PR_SET_PDEATHSIG` on Linux, a Job object on
+Windows; macOS isn't tied. macOS only needs to compile.
 
 ### Security & privacy
 
@@ -149,20 +168,25 @@ connections the user starts. Trust boundaries:
 - §Security 3: a forward's prompts go through askpass with a token of
   its own, as the SFTP connection's do (threat model 0001).
 - `ssh`'s stderr is shown as plain text only, never interpreted.
+- Killing Tern (`kill -9`, Task Manager) ends its forwards on Linux
+  and Windows (TM-fwd-13).
 - Ground rule 1: no forward starts without the user's Add or Retry.
-- The STRIDE threat model is T-076, before T-075 builds this.
+- STRIDE threat model: [0004](threat-model/0004-port-forwarding.md).
+  Its residual risks (other OS users on loopback, the other loopback
+  family, other users on the server, no indicator for forwards whose
+  tabs are closed) await sign-off in OQ-034.
 
 ## Acceptance criteria
 
-1. In a pane connected to `bastion`, adding Local `5432` → `db.internal:5432` starts one `ssh` with exactly `-N -o ExitOnForwardFailure=yes -L 5432:db.internal:5432` before the host, shows it up within 3 s, and `psql -h localhost -p 5432` in a local pane reaches the database.
-2. SOCKS `1080` serves `curl --socks5-hostname localhost:1080 http://intranet/`, and the port listens on loopback only (`ss -ltn` on Linux, `Get-NetTCPConnection -State Listen` on Windows).
+1. In a pane connected to `bastion`, adding Local `5432` → `db.internal:5432` starts one `ssh` with exactly `-N -o ExitOnForwardFailure=yes -L localhost:5432:db.internal:5432` before the host, shows it up within 3 s, and `psql -h localhost -p 5432` in a local pane reaches the database.
+2. SOCKS `1080` serves `curl --socks5-hostname localhost:1080 http://intranet/`, and the port listens on loopback only (`ss -ltn` on Linux, `Get-NetTCPConnection -State Listen` on Windows), also with `GatewayPorts yes` for the host in `~/.ssh/config`.
 3. Remote `9000` → `localhost:3000` makes `curl localhost:9000` on the server reach the dev server on this machine.
 4. Adding a forward on a port another program already listens on shows it failed with `ssh`'s "Address already in use" line, and Retry after that program exits brings it up.
 5. Delete closes the port within a second, and no `ssh` of that forward is left running.
 6. Closing the SSH tab keeps the forward working; `forwards.stop` lists it, and picking it closes the port. A new tab to the same host shows the forward in its sidebar.
-7. Quitting Tern leaves no forward's `ssh` running and nothing about forwards in `config.yaml` or `session.json`; the relaunch listens on no forwarded port.
+7. Quitting Tern leaves no forward's `ssh` running and nothing about forwards in `config.yaml` or `session.json`; the relaunch listens on no forwarded port. Killing Tern instead (`kill -9`; on Windows, End task) leaves no forward's `ssh` running either.
 8. A host with a remembered password starts a forward without typing; one without asks in the dialog over the pane, and Esc there marks the forward failed with "cancelled".
-9. Typing `0.0.0.0` as the listen address shows the network warning before Add; a port of `70000` keeps Add disabled.
+9. Typing `0.0.0.0` as the listen address shows the network warning before Add; a port of `70000` or `-oProxyCommand=x` as the `to` host keeps Add disabled.
 10. On Windows 11, criteria 1, 2 and 5 hold with the built-in `ssh.exe`, and a loopback forward raises no firewall prompt.
 
 ## Open questions

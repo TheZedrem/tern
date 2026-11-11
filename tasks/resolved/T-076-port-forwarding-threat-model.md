@@ -1,5 +1,5 @@
 ---
-status: next
+status: resolved
 blocked-by: []
 ---
 # T-076: STRIDE threat model for port forwarding
