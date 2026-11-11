@@ -40,7 +40,7 @@ The GPUI spike measured 333 ms warm and 811 ms cold (spec 0001).
 | v0.5.0 | 346.1 ms | 304.0 ms | 319.8 ms | 190.4 ms | 2026-11-10 |
 | v0.7.0 | 621.9 ms | 357.8 ms | 401.4 ms | 208.6 ms | 2026-11-11 |
 
-From v0.5.0 to v0.7.0 the warm median grew by about 55 ms (a second run
-gave 377.9 ms), most of it in the window opening and the first render.
-Port forwards add nothing to startup, so the growth came with the 0.6
-work. Still inside the budget, but worth a look before it grows further.
+v0.7.0's row looks 55 ms slower than v0.5.0's, but it isn't: built and
+run back to back on the same day, v0.5.0 measured 327.7–350.6 ms warm and
+v0.7.0 324.4–327.1 ms. The machine was slower that day; compare rows
+measured in the same session only.
