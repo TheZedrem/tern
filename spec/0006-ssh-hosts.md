@@ -36,7 +36,7 @@ arguments, the environment or a log.
 
 - SFTP panel: its own spec (T-016)
 - Adding and editing hosts in a form: *Later*; hosts are edited in `config.yaml` ("Open config file")
-- Port forwarding, agent forwarding and jump-host editors: *Later*; `~/.ssh/config` does all of them today
+- Port forwarding: [spec 0017](0017-port-forwarding.md). Agent forwarding and jump-host editors: *Later*; `~/.ssh/config` does them today
 - An SSH implementation of our own: never (architecture §Stack)
 
 ## Design

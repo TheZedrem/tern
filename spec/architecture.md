@@ -23,7 +23,7 @@ local, single-user app: no accounts, no backend, no telemetry.
 | 4 — Theming | Edit themes in the app with a live preview, saved as `themes/*.yaml` files (spec 0005) | — |
 | 5 — Plugins | A plugin system: runtime, API and per-plugin permissions; an extensible app sidebar with the SSH hosts as its first built-in panel and plugins adding their own; themes installable as plugins | 0016 |
 | 6 — Plugin store | Plugin registries the user configures; browse, install and update plugins in the app, with an opt-in update check like spec 0011's | — |
-| 7 — Port forwarding | Local, remote and dynamic SSH forwards on a profile, passed to the system `ssh` as `-L`/`-R`/`-D` (deferred in spec 0006) | — |
+| 7 — Port forwarding | Local, remote and dynamic SSH forwards on a profile, passed to the system `ssh` as `-L`/`-R`/`-D` (deferred in spec 0006) | 0017 |
 | 8 — Command profiles | Custom profiles that run a command (e.g. a coding agent like `claude` or `codex`) instead of the shell, launched in the focused pane's cwd; from an SSH pane there's no local cwd, so a folder picker asks for one. Any profile can also be set to ask for its working directory on launch | — |
 
 **1.0 is Phases 1–8.**
@@ -31,6 +31,8 @@ local, single-user app: no accounts, no backend, no telemetry.
 Only phases that have started get specs and tasks; later phases stay one
 row here. Phase 2 started before Phase 1 finished (owner's call,
 2026-11-04), so its tasks wait for the Phase 1 tasks they build on.
+Phase 7 started ahead of Phases 3–6 (owner's call, 2026-11-11); it builds
+only on Phase 2.
 
 **Constraints for the plugin phases.** Their specs must settle these;
 until then they're recorded here so earlier work doesn't paint them into
