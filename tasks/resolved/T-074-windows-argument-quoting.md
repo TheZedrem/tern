@@ -1,5 +1,5 @@
 ---
-status: next
+status: resolved
 blocked-by: []
 type: bug
 ---
@@ -18,3 +18,13 @@ behave: an argument the user quoted by hand gets quoted again, so check
 what changed. Found by the T-022/T-057 test agent. Area: src.
 
 Spec: ../spec/0002-terminal-pane.md
+Spec: ../spec/0005-config-and-themes.md
+
+**Resolved (2026-11-11):** `pty::rerun` sets `escape_args: true` on
+Windows, and quotes a program path with whitespace itself, which
+alacritty_terminal doesn't. Regression test
+`arguments_with_spaces_and_quotes_reach_the_program_whole` runs a pwsh
+from a folder with a space with `a b` and `"quoted"` as arguments through
+ConPTY; it fails with escaping off. Behavior change for release notes: a
+Windows profile `command` argument that the user quoted by hand now
+arrives with those quotes. The owner's config has none.

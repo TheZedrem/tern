@@ -1,7 +1,7 @@
 ---
 status: implemented     # draft | approved | implemented
 phase: 1
-tasks: [T-005, T-004, T-002, T-011, T-019, T-046]
+tasks: [T-005, T-004, T-002, T-011, T-019, T-046, T-074]
 related: [spec 0001, spec 0003, spec 0004]
 ---
 
@@ -182,7 +182,9 @@ after the first frame. The picker state is built on first open.
 
 Paths come from `dirs`: `~/.config/tern/` on Linux, `%APPDATA%\tern\`
 on Windows. `~` in `cwd`/`identity_file` expands on both. On Windows,
-`command: [htop]` resolves through `PATH` and `PATHEXT`. File watchers on
+`command: [htop]` resolves through `PATH` and `PATHEXT`, and each list item
+reaches the program as one argument, spaces and quotes included, by the C
+runtime's quoting rules (so no quotes of your own are needed) (T-074). File watchers on
 Windows report editor save-via-rename differently, so test with VS Code and
 Notepad.
 

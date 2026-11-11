@@ -248,7 +248,7 @@ pub fn rerun(
     )]
     let options = tty::Options {
         shell: Some(tty::Shell::new(
-            command.program.clone(),
+            program_for_pty(&command.program),
             command.args.clone(),
         )),
         // A missing directory falls back to home: alacritty would otherwise
@@ -268,6 +268,10 @@ pub fn rerun(
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
         .chain(command.env.clone())
         .collect(),
+        // Each argument reaches the program as one, spaces included: a key
+        // file under `OneDrive - Firma` stays one `-i` path (T-074).
+        #[cfg(windows)]
+        escape_args: true,
         ..Default::default()
     };
     let pty = tty::new(&options, size.window_size(), 0).map_err(|e| e.to_string())?;
@@ -283,6 +287,17 @@ pub fn rerun(
     // Detached: the thread ends when the program exits and its output is drained.
     let _ = event_loop.spawn();
     Ok((notifier, child_pid))
+}
+
+/// The program as the PTY's command line starts with it. On Windows,
+/// alacritty_terminal quotes the arguments but not the program, so a path
+/// with a space is quoted here; Windows paths can't hold `"` themselves.
+fn program_for_pty(program: &str) -> String {
+    if cfg!(windows) && program.contains(char::is_whitespace) && !program.starts_with('"') {
+        format!("\"{program}\"")
+    } else {
+        program.to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -759,8 +774,6 @@ mod tests {
                 r#"printf 'before\033]7;%s\033\\after\n' "$TERN_TEST_URL""#.to_owned(),
             ],
         );
-        // No spaces or double quotes: alacritty joins the arguments
-        // unescaped into one command line.
         #[cfg(windows)]
         let (program, script) = (
             "pwsh",
@@ -878,8 +891,6 @@ mod tests {
         let dir = root.path().join("my dir äöü");
         std::fs::create_dir(&dir).expect("create the dir");
         let snippet = Path::new(env!("CARGO_MANIFEST_DIR")).join("shell-integration/tern.ps1");
-        // A script file: its paths have spaces, which the command line
-        // alacritty builds wouldn't keep.
         let script = format!(
             ". '{}'\nSet-Location -LiteralPath '{}'\n$null = prompt\n[Console]::Write('after')\n",
             snippet.display(),
@@ -908,6 +919,52 @@ mod tests {
             same_dir(session.reported.local(), &dir),
             "reported {:?}, not {dir:?}",
             session.reported.local()
+        );
+    }
+
+    /// T-074: on Windows, a program path and arguments with spaces reach
+    /// the program whole: a script under `dir with space` gets `a b` and
+    /// `"quoted"` as two arguments, unchanged.
+    #[cfg(windows)]
+    #[test]
+    fn arguments_with_spaces_and_quotes_reach_the_program_whole() {
+        if !has_pwsh() {
+            return;
+        }
+        let root = crate::config::tests::TempDir::new("pty-args");
+        let dir = root.path().join("dir with space");
+        std::fs::create_dir(&dir).expect("create the dir");
+        let script = dir.join("args.ps1");
+        let print = "[Console]::Write(\"[$($args.Count)|$($args -join '|')]\")";
+        std::fs::write(&script, print).expect("write the script");
+        let pwsh = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join("pwsh.exe"))
+            .find(|exe| exe.is_file())
+            .expect("pwsh is on PATH");
+        // pwsh itself from a folder with a space in its name.
+        let program = dir.join("pwsh link.exe");
+        if std::fs::hard_link(&pwsh, &program).is_err() {
+            std::fs::copy(&pwsh, &program).expect("copy pwsh");
+        }
+        let command = Command {
+            program: program.display().to_string(),
+            args: ["-NoProfile", "-NonInteractive", "-File"]
+                .map(String::from)
+                .into_iter()
+                .chain([
+                    script.display().to_string(),
+                    "a b".into(),
+                    "\"quoted\"".into(),
+                ])
+                .collect(),
+            env: BTreeMap::new(),
+        };
+        let session = spawn(&command, WIDE, None, 100, false, timing()).expect("spawn pwsh");
+        wait_for(&session, "]");
+        let lines = all_lines(&*session.term.lock());
+        assert!(
+            lines.iter().any(|line| line == r#"[2|a b|"quoted"]"#),
+            "{lines:?}"
         );
     }
 
