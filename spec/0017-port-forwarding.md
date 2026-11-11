@@ -54,18 +54,21 @@ after its tab closes, until it's deleted or Tern quits.
 
 - **Forward** = id, host (the pane's connection: its `ssh` arguments and
   label, as the SFTP sidebar takes them, so `~/.ssh/config` hosts work
-  too), kind (`local | remote | dynamic`), listen (`port` or
-  `address:port`, IPv6 in brackets), `to` (`host:port`, for local and
-  remote), and state (`starting | up | failed(reason)`).
+  too), kind (`local | remote | dynamic`), listen port, `network`
+  (off unless the user turns it on: listen on every IPv4 interface
+  instead of `127.0.0.1`), `to` (`host:port`, for local and remote), and
+  state (`starting | up | failed(reason)`). There is no free-typed bind
+  address (owner, 2026-11-11).
 - **Registry:** one per app run, owned by the workspace, keyed by host.
   Every SSH pane of a host shows that host's forwards; none belongs to a
   pane. Held in memory only.
 - **Command [load-bearing]:** the pane's `ssh` options, then
   `-N -o ExitOnForwardFailure=yes` and one `-L`, `-R` or `-D`, then the
-  host: `ssh -l me -N -o ExitOnForwardFailure=yes -L localhost:5432:db.internal:5432 bastion`.
-  The bind address is what the user typed, else `localhost`, always
-  written out: without one, `GatewayPorts yes` in `~/.ssh/config` would
-  make `ssh` listen on every interface (TM-fwd-01). The value is built
+  host: `ssh -l me -N -o ExitOnForwardFailure=yes -L 127.0.0.1:5432:db.internal:5432 bastion`.
+  The bind address is `127.0.0.1`, or `0.0.0.0` with `network` on, and
+  is always written out: without one, `GatewayPorts yes` in
+  `~/.ssh/config` would make `ssh` listen on every interface (TM-fwd-01).
+  The same holds for `-R` (on the server) and `-D`. The value is built
   from the add row's typed fields only and passed as one argument
   (TM-fwd-05). It runs with stdout to null, stderr on a pipe the
   forward's thread reads to the end, keeping only the last line cut at
@@ -86,7 +89,7 @@ after its tab closes, until it's deleted or Tern quits.
 ### Module surface
 
 - `forwards::Registry`: `add(host, Forward) -> Id`, `remove(Id)`, `retry(Id)`, `of(host)`, `all()`, `stop_all()`; emits a change event the sidebar redraws on
-- `forwards::Forward::arg()` (the `-L`/`-R`/`-D` value) and `summary()` (`5432 → db.internal:5432`, `remote 9000 → localhost:3000`, `SOCKS 1080`)
+- `forwards::Forward::arg()` (the `-L`/`-R`/`-D` value) and `summary()` (`5432 → db.internal:5432`, `remote 9000 → localhost:3000`, `SOCKS 1080`, `5432 (network) → db.internal:5432`)
 - `ssh::forward_args(pane_args, &Forward) -> Vec<String>`, next to `ssh::sftp_args`
 - Commands `pane.portForwards` (open the sidebar on Port forwards) and `forwards.stop` (pick a running forward to stop), in the palette and bindable, no default keys
 
@@ -96,17 +99,19 @@ after its tab closes, until it's deleted or Tern quits.
    Port forwards; the sidebar keeps the last view it showed. Opening it
    connects nothing.
 2. **Add:** a row at the top takes kind (Local, Remote, SOCKS), listen
-   and to, checked as typed: a port outside 1–65535, a missing `to` for
-   Local and Remote, an address that is neither an IP (IPv6 in brackets)
-   nor a name of letters, digits, `.`, `-` and `_` not starting with `-`
-   (TM-fwd-05), or a listen address and port this host already has a
-   forward on keeps Add disabled with the reason. Add starts the
+   port, to, and an "Allow from network" checkbox, off each time the row
+   opens. They are checked as typed: a port outside 1–65535, a missing
+   `to` for Local and Remote, a `to` host that is neither an IP (IPv6 in
+   brackets) nor a name of letters, digits, `.`, `-` and `_` not
+   starting with `-` (TM-fwd-05), or a listen port this host already has
+   a forward on keeps Add disabled with the reason. Add starts the
    forward and lists it as starting.
-3. **Not loopback:** a listen address other than `127.0.0.1`, `::1` or
-   `localhost` shows, before Add, "Reachable from other machines on the
-   network" (SOCKS: "an open proxy into `<host>`'s network"; Remote:
-   "Reachable from other machines on `<host>`'s network, if the server
-   allows it").
+3. **Allow from network:** only checking the box binds `0.0.0.0`, and
+   while it is checked the row shows, before Add, "Reachable from other
+   machines on the network" (SOCKS: "an open proxy into `<host>`'s
+   network"; Remote: "Reachable from other machines on `<host>`'s
+   network, if the server allows it"). Such a forward's row and summary
+   say "network" (`5432 (network) → db.internal:5432`).
 4. **Prompts:** a password, passphrase or host-key question opens the
    dialog over the pane the forward was added from, marked as the
    forward's, by spec 0006's flow 4 and its keychain fill. Esc cancels:
@@ -143,7 +148,7 @@ Both use the system OpenSSH client: `-N`, `-L`, `-R`, `-D` and
 connection sharing (`ControlMaster`), which could add a forward to the
 pane's own connection, doesn't exist on Windows, hence one process per
 forward. Linux: a listen port below 1024 needs privileges, and `ssh`'s
-reason says so. Windows: listening on a non-loopback address makes
+reason says so. Windows: a forward with "Allow from network" makes
 Windows Defender Firewall ask about `ssh.exe` once; loopback asks
 nothing. Stopping uses the process handle on both. Tying forwards to
 Tern's life differs: `PR_SET_PDEATHSIG` on Linux, a Job object on
@@ -159,9 +164,9 @@ Nothing is written to disk, and nothing is sent beyond the SSH
 connections the user starts. Trust boundaries:
 
 - **New: listening sockets [load-bearing].** A local or SOCKS forward lets
-  whatever reaches its address use the user's SSH access. Loopback by
-  default limits that to this machine's processes, as `ssh -L` does.
-  Another address is only ever what the user typed, after flow 3's
+  whatever reaches its address use the user's SSH access. `127.0.0.1` by
+  default limits that to this machine's processes. `0.0.0.0` only ever
+  comes from the user checking "Allow from network", after flow 3's
   warning; Tern never adds `-g` or `GatewayPorts`.
 - A remote forward opens a port on the server that reaches this machine;
   the server's `GatewayPorts` decides who can use it.
@@ -178,15 +183,15 @@ connections the user starts. Trust boundaries:
 
 ## Acceptance criteria
 
-1. In a pane connected to `bastion`, adding Local `5432` → `db.internal:5432` starts one `ssh` with exactly `-N -o ExitOnForwardFailure=yes -L localhost:5432:db.internal:5432` before the host, shows it up within 3 s, and `psql -h localhost -p 5432` in a local pane reaches the database.
-2. SOCKS `1080` serves `curl --socks5-hostname localhost:1080 http://intranet/`, and the port listens on loopback only (`ss -ltn` on Linux, `Get-NetTCPConnection -State Listen` on Windows), also with `GatewayPorts yes` for the host in `~/.ssh/config`.
-3. Remote `9000` → `localhost:3000` makes `curl localhost:9000` on the server reach the dev server on this machine.
+1. In a pane connected to `bastion`, adding Local `5432` → `db.internal:5432` starts one `ssh` with exactly `-N -o ExitOnForwardFailure=yes -L 127.0.0.1:5432:db.internal:5432` before the host, shows it up within 3 s, and `psql -h 127.0.0.1 -p 5432` in a local pane reaches the database.
+2. SOCKS `1080` serves `curl --socks5-hostname 127.0.0.1:1080 http://intranet/`, and the port listens on `127.0.0.1` only (`ss -ltn` on Linux, `Get-NetTCPConnection -State Listen` on Windows), also with `GatewayPorts yes` for the host in `~/.ssh/config`.
+3. Remote `9000` → `localhost:3000` makes `curl 127.0.0.1:9000` on the server reach the dev server on this machine.
 4. Adding a forward on a port another program already listens on shows it failed with `ssh`'s "Address already in use" line, and Retry after that program exits brings it up.
 5. Delete closes the port within a second, and no `ssh` of that forward is left running.
 6. Closing the SSH tab keeps the forward working; `forwards.stop` lists it, and picking it closes the port. A new tab to the same host shows the forward in its sidebar.
 7. Quitting Tern leaves no forward's `ssh` running and nothing about forwards in `config.yaml` or `session.json`; the relaunch listens on no forwarded port. Killing Tern instead (`kill -9`; on Windows, End task) leaves no forward's `ssh` running either.
 8. A host with a remembered password starts a forward without typing; one without asks in the dialog over the pane, and Esc there marks the forward failed with "cancelled".
-9. Typing `0.0.0.0` as the listen address shows the network warning before Add; a port of `70000` or `-oProxyCommand=x` as the `to` host keeps Add disabled.
+9. Only checking "Allow from network" makes a forward listen on `0.0.0.0`, and it shows the network warning before Add; a port of `70000` or `-oProxyCommand=x` as the `to` host keeps Add disabled.
 10. On Windows 11, criteria 1, 2 and 5 hold with the built-in `ssh.exe`, and a loopback forward raises no firewall prompt.
 
 ## Open questions
