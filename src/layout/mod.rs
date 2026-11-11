@@ -756,6 +756,7 @@ mod tests {
     use crate::config::tests::TempDir;
     use crate::session::tests::{files_leaf, leaf, split, tab};
     use crate::terminal::pty::Command;
+    use gpui::AppContext;
     use std::collections::BTreeMap;
     use std::time::Instant;
 
@@ -955,5 +956,64 @@ mod tests {
                 folder: Some("/srv".into()),
             })
         );
+    }
+
+    /// Spec 0003, flow 6 (T-063): a restored tab whose saved focus is its
+    /// files pane gives that pane the keyboard and the active border. What
+    /// runs after the first frame starts real threads (the Local listing,
+    /// the config watcher), which GPUI's test scheduler rejects, so that
+    /// step is checked in the running app instead.
+    #[gpui::test]
+    fn a_restored_tab_focused_on_its_files_pane_keeps_that_focus(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            init(cx);
+            gpui_component::init(cx);
+        });
+        let shown = tab(
+            split(
+                Axis::Row,
+                0.5,
+                leaf(1, "shell", None, None),
+                files_leaf(2, None, None),
+            ),
+            2,
+        );
+        let session = Session::new(None, vec![shown], 0);
+        let boot = Boot::restore(&session, (1200.0, 800.0), |saved, _| idle_pane(saved))
+            .expect("a session with tabs");
+        let opened = Rc::new(std::cell::RefCell::new(None));
+        let (_, cx) = cx.add_window_view({
+            let opened = opened.clone();
+            move |window, cx| {
+                let workspace = cx.new(|cx| {
+                    Workspace::new(
+                        boot,
+                        Config::default(),
+                        FontSettings::from_config(&Config::default().font),
+                        theme::DARK,
+                        Vec::new(),
+                        None,
+                        Arc::new(Timing::new(Instant::now())),
+                        false,
+                        window,
+                        cx,
+                    )
+                });
+                *opened.borrow_mut() = Some(workspace.clone());
+                gpui_component::Root::new(workspace, window, cx)
+            }
+        });
+        let workspace = opened.take().expect("the window built the workspace");
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.tabs.active().focused, 2, "the border's pane");
+            let files = workspace.files[&2].pane.read(cx).focus_handle(cx);
+            assert!(
+                files.is_some_and(|handle| handle.contains_focused(window, cx)),
+                "the keyboard is in the files pane"
+            );
+        });
     }
 }
