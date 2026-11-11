@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 7
 tasks: [T-076, T-075]
 related: [spec 0006, spec 0008, spec 0016, OQ-033, threat model 0001]
