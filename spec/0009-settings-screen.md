@@ -1,7 +1,7 @@
 ---
 status: implemented    # draft | approved | implemented
 phase: 1
-tasks: [T-017, T-011, T-058, T-046]
+tasks: [T-017, T-011, T-058, T-046, T-057]
 related: [spec 0004, spec 0005, spec 0006, OQ-010 ✅]
 ---
 
@@ -85,8 +85,11 @@ can be changed from the screen, the change applies within a second, and
    entry.
 4. **Profiles:** "Add" opens an empty profile form (type local or SSH);
    its directory field has a "Browse…" button that opens the OS's folder
-   picker (the XDG portal on Linux) and fills in the pick, `~` for home;
-   saving appends its block under `profiles:`. Editing rewrites its block;
+   picker (the XDG portal on Linux) and fills in the pick, `~` for home,
+   and an SSH profile's key file field has one that opens the file picker
+   the same way. Cancelling a picker leaves the field as it was, and a
+   picker that can't open says why in a notice; typing the path keeps
+   working. Saving appends its block under `profiles:`. Editing rewrites its block;
    deleting it asks first and removes its block only.
 5. **Failure:** a write that fails or is refused shows a notice and leaves
    the field showing what the file holds.
@@ -130,6 +133,7 @@ checks apply to it as to any hand edit.
 6. A `font: { size: 13 }` in flow style gets a notice naming `font.size` and isn't rewritten.
 7. The profile form has no password field, and nothing the screen writes contains a secret.
 8. The screen works by keyboard alone: Tab moves through the fields, and Esc leaves the screen.
+9. "Browse…" beside an SSH profile's key file opens the OS's file picker (the portal on Linux, the Windows dialog on Windows); picking `~/.ssh/id_ed25519` fills the field with exactly that, and cancelling leaves the field unchanged.
 
 ## Open questions
 

@@ -126,11 +126,15 @@ pub struct ProfileForm {
     pub env: Vec<(String, String)>,
 }
 
-/// `path` as a form shows it: under the home folder, written with `~`.
+/// `path` as a form shows it: under the home folder, written with `~` and
+/// `/` after it, so Windows doesn't get `~/.ssh\id_ed25519`.
 pub fn home_relative(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|home| path.strip_prefix(home).ok()) {
         Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Some(rest) => format!("~/{}", rest.display()),
+        Some(rest) => {
+            let parts: Vec<_> = rest.iter().map(|part| part.to_string_lossy()).collect();
+            format!("~/{}", parts.join("/"))
+        }
         None => path.display().to_string(),
     }
 }
@@ -604,5 +608,15 @@ font:
             ..ssh
         };
         assert_eq!(ProfileForm::of(&elsewhere, Some(&home)).cwd, "/srv/www");
+    }
+
+    /// Spec 0009, criterion 9: a pick under home on Windows is written
+    /// with `/` after the `~`, not `~/.ssh\id_ed25519`.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_path_under_home_is_written_with_slashes() {
+        let home = Path::new(r"C:\Users\me");
+        let picked = Path::new(r"C:\Users\me\.ssh\id_ed25519");
+        assert_eq!(home_relative(picked, Some(home)), "~/.ssh/id_ed25519");
     }
 }

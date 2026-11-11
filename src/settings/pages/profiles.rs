@@ -6,11 +6,18 @@ use crate::settings::change::{self, Change, ProfileForm};
 use crate::settings::{Page, Row, SettingsView};
 use gpui::{
     AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, PathPromptOptions,
-    Styled, Window, div, px,
+    SharedString, Styled, Window, div, px,
 };
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputState};
+
+/// What a form field's "Browse…" button asks the OS's picker for.
+#[derive(Clone, Copy, PartialEq)]
+enum Pick {
+    Folder,
+    File,
+}
 
 /// The profile being added or edited.
 pub(in crate::settings) struct Form {
@@ -75,13 +82,20 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Asks the OS's folder picker for the profile form's directory and
-    /// writes the pick into its field; cancelling leaves the field alone,
-    /// and a picker that can't open says why.
-    fn pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Asks the OS's picker for a path for the profile form's `field`, a
+    /// folder or a file, and writes the pick into that field, `~` for home
+    /// (spec 0009, flow 4); cancelling leaves the field alone, and a picker
+    /// that can't open says why.
+    fn pick_path(
+        &mut self,
+        field: &'static str,
+        pick: Pick,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
+            files: pick == Pick::File,
+            directories: pick == Pick::Folder,
             multiple: false,
             prompt: Some("Choose".into()),
         });
@@ -95,7 +109,11 @@ impl SettingsView {
             let paths = match failed {
                 Ok(paths) => paths,
                 Err(error) => {
-                    let notice = format!("The folder picker didn't open: {error}");
+                    let what = match pick {
+                        Pick::Folder => "folder",
+                        Pick::File => "file",
+                    };
+                    let notice = format!("The {what} picker didn't open: {error}");
                     let _ = cx.update(|window, cx| show_notice(notice, window, cx));
                     return;
                 }
@@ -108,7 +126,7 @@ impl SettingsView {
                 let input = this.form.as_ref().and_then(|form| {
                     form.inputs
                         .iter()
-                        .find(|(label, _)| *label == "Directory")
+                        .find(|(label, _)| *label == field)
                         .map(|(_, input)| input.clone())
                 });
                 if let Some(input) = input {
@@ -203,17 +221,25 @@ impl SettingsView {
                         .flex()
                         .gap(px(6.))
                         .child(div().flex_1().child(Input::new(input).small()));
-                    let field = match *label {
-                        "Directory" => field.child(
-                            Button::new("profile-browse-cwd")
+                    let name: &'static str = label;
+                    let pick = match name {
+                        "Directory" => Some(Pick::Folder),
+                        "Key file" => Some(Pick::File),
+                        _ => None,
+                    };
+                    let field = match pick {
+                        Some(pick) => field.child(
+                            Button::new(SharedString::from(format!("profile-browse-{label}")))
                                 .label("Browse…")
                                 .small()
                                 .ghost()
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.pick_folder(window, cx)),
-                                ),
+                                // Where a test clicks; a no-op outside test builds.
+                                .debug_selector(move || format!("profile-browse-{name}"))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.pick_path(name, pick, window, cx);
+                                })),
                         ),
-                        _ => field,
+                        None => field,
                     };
                     Self::row(*label, field)
                 }))
@@ -343,7 +369,7 @@ impl SettingsView {
 #[cfg(test)]
 mod tests {
     use crate::settings::Page;
-    use crate::settings::tests::open_screen;
+    use crate::settings::tests::{Screen, open_screen};
     use gpui::TestAppContext;
 
     /// Spec 0009, flow 4 and criterion 8: with a profile form field holding
@@ -373,5 +399,96 @@ mod tests {
         assert!(!open, "Cancel closed the form");
         screen.cx.simulate_keystrokes("escape");
         assert_eq!(screen.closed.get(), 1);
+    }
+
+    /// Opens an empty profile form, an SSH one if `ssh`, on the Profiles
+    /// page and draws it.
+    fn open_profile_form(screen: &mut Screen<'_>, ssh: bool) {
+        screen.click("settings-tab-Profiles");
+        let view = screen.view.clone();
+        screen
+            .cx
+            .update(|window, cx| view.update(cx, |view, cx| view.open_form(ssh, None, window, cx)));
+        screen.cx.run_until_parked();
+        screen.cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// What the open form's field `label` holds.
+    fn field(screen: &mut Screen<'_>, label: &str) -> String {
+        let view = screen.view.clone();
+        screen.cx.update(|_, cx| {
+            let form = view.read(cx).form.as_ref().expect("the form is open");
+            let (_, input) = form
+                .inputs
+                .iter()
+                .find(|(name, _)| *name == label)
+                .unwrap_or_else(|| panic!("the form has no {label} field"));
+            input.read(cx).value().to_string()
+        })
+    }
+
+    /// Spec 0009, flow 4: the SSH form has a "Browse…" button for its key
+    /// file and none for a directory, and the local form the other way
+    /// round.
+    #[gpui::test]
+    fn the_ssh_form_browses_for_a_key_file_and_the_local_form_for_a_directory(
+        cx: &mut TestAppContext,
+    ) {
+        let mut screen = open_screen(cx);
+        open_profile_form(&mut screen, true);
+        assert!(screen.cx.debug_bounds("profile-browse-Key file").is_some());
+        assert!(screen.cx.debug_bounds("profile-browse-Directory").is_none());
+
+        screen.click("profile-cancel");
+        open_profile_form(&mut screen, false);
+        assert!(screen.cx.debug_bounds("profile-browse-Directory").is_some());
+        assert!(screen.cx.debug_bounds("profile-browse-Key file").is_none());
+    }
+
+    /// Spec 0009, flow 4 and criterion 9: "Browse…" beside an SSH
+    /// profile's key file opens the file picker for one file; picking
+    /// `~/.ssh/id_ed25519` fills the field with exactly that, and
+    /// cancelling the picker leaves the field unchanged.
+    #[gpui::test]
+    fn browsing_for_a_key_file_fills_in_the_pick_and_cancelling_keeps_the_field(
+        cx: &mut TestAppContext,
+    ) {
+        let home = dirs::home_dir().expect("home dir");
+        let mut screen = open_screen(cx);
+        open_profile_form(&mut screen, true);
+
+        screen.click("profile-browse-Key file");
+        assert!(screen.cx.did_prompt_for_paths(), "no picker opened");
+        screen.cx.simulate_path_prompt_response(|options| {
+            assert!(options.files, "the picker doesn't offer files");
+            assert!(!options.directories, "the picker offers folders");
+            assert!(!options.multiple, "the picker allows several files");
+            Some(vec![home.join(".ssh").join("id_ed25519")])
+        });
+        screen.cx.run_until_parked();
+        assert_eq!(field(&mut screen, "Key file"), "~/.ssh/id_ed25519");
+
+        screen.click("profile-browse-Key file");
+        screen.cx.simulate_path_prompt_response(|_| None);
+        screen.cx.run_until_parked();
+        assert_eq!(field(&mut screen, "Key file"), "~/.ssh/id_ed25519");
+    }
+
+    /// Spec 0009, flow 4: "Browse…" beside a local profile's directory
+    /// opens the folder picker, and picking the home folder fills in `~`.
+    #[gpui::test]
+    fn browsing_for_a_directory_picks_a_folder_and_writes_home_as_tilde(cx: &mut TestAppContext) {
+        let home = dirs::home_dir().expect("home dir");
+        let mut screen = open_screen(cx);
+        open_profile_form(&mut screen, false);
+
+        screen.click("profile-browse-Directory");
+        screen.cx.simulate_path_prompt_response(|options| {
+            assert!(options.directories, "the picker doesn't offer folders");
+            assert!(!options.files, "the picker offers files");
+            Some(vec![home.clone()])
+        });
+        screen.cx.run_until_parked();
+        assert_eq!(field(&mut screen, "Directory"), "~");
     }
 }
