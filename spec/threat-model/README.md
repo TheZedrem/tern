@@ -13,6 +13,9 @@ stable so tasks and bugs can cite them.
 2. **Escape sequences from programs and remote hosts** (§Security 1):
    titles, OSC 8 links and OSC 52 clipboard writes, before T-002 honors
    any of them. Done: 0002.
+3. **Plugins** (spec 0016): a program the user enabled sends actions that
+   reach terminals and the UI. Planned: 0004 (T-065), before any plugin
+   code.
 
 ## Register
 

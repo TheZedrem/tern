@@ -21,7 +21,7 @@ local, single-user app: no accounts, no backend, no telemetry.
 | 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, host import from MobaXterm, Tabby, PuTTY and WinSCP, connect via system `ssh` in a PTY, one file browser over the local disk or any host, drawn as a sidebar next to any pane or as a files pane (with file permissions: view and change mode, owner and group), secrets in the OS keychain; opt-in update check | 0006, 0008, 0010, 0011, 0013, 0014, 0015 |
 | 3 — Command history | Detect the commands the user runs and suggest past ones inline as they type, like Windows Terminal and Warp | — |
 | 4 — Theming | Edit themes in the app with a live preview, saved as `themes/*.yaml` files (spec 0005) | — |
-| 5 — Plugins | A plugin system: runtime, API and per-plugin permissions; an extensible app sidebar with the SSH hosts as its first built-in panel and plugins adding their own; themes installable as plugins | — |
+| 5 — Plugins | A plugin system: runtime, API and per-plugin permissions; an extensible app sidebar with the SSH hosts as its first built-in panel and plugins adding their own; themes installable as plugins | 0016 |
 | 6 — Plugin store | Plugin registries the user configures; browse, install and update plugins in the app, with an opt-in update check like spec 0011's | — |
 | 7 — Port forwarding | Local, remote and dynamic SSH forwards on a profile, passed to the system `ssh` as `-L`/`-R`/`-D` (deferred in spec 0006) | — |
 | 8 — Command profiles | Custom profiles that run a command (e.g. a coding agent like `claude` or `codex`) instead of the shell, launched in the focused pane's cwd; from an SSH pane there's no local cwd, so a folder picker asks for one. Any profile can also be set to ask for its working directory on launch | — |
@@ -39,14 +39,20 @@ a corner.
 - **Theme plugins are data, not code.** The active theme is needed for the
   first frame, so a theme plugin is YAML the boot path reads directly. Code
   plugins load after the first frame, never before it.
-- **No native-code plugins.** Rust has no stable ABI and a dylib runs with
-  every right the app has. The runtime (WASM or an embedded script
-  language) is an open question for the Phase 5 spec, and its crate needs
-  the owner's approval.
-- **Permissions are granted by the user, per plugin.** Network, file
-  system and reading terminal output are each declared by the plugin and
-  granted by the user, so the ground rules below still hold. Phase 5 gets
-  its own STRIDE threat model.
+- **Plugins are standalone programs, never code inside Tern's process.**
+  Rust has no stable ABI and a dylib runs with every right the app has. A
+  plugin is a program that exchanges JSON lines with Tern over stdio
+  (spec 0016, the owner's design, 2026-11-11), which needs no new crate.
+- **Tern can't sandbox a plugin, and says so (OQ-031).** A plugin runs
+  with the user's rights: its own network and file access are beyond
+  Tern's control. Tern warns the user to install plugins only from a
+  source they trust, and enabling a plugin is that trust decision; no
+  plugin starts before it.
+- **Rights are granted by the user, per plugin.** What crosses Tern's
+  protocol (typing into a terminal, reading its output, opening tabs,
+  hearing about the user's panes) is declared by the plugin and granted
+  by the user, and every write to or read from a terminal is confirmed
+  each time. Phase 5 gets its own STRIDE threat model.
 - **The store only goes online when the user asks.** Browsing and
   installing are user-started; update checks are opt-in. Downloads are
   verified against a hash in the registry index.
@@ -249,7 +255,10 @@ disk — it can contain secrets the user typed or printed.
    anything else over the network before the first prompt; deferred work
    waits until after the first frame. The only outbound traffic is what the
    user explicitly starts (SSH, SFTP), plus the daily update check the
-   user agrees to once (spec 0011).
+   user agrees to once (spec 0011). A plugin the user enabled is the
+   user's own program and may use the network after the first frame;
+   Tern itself sends nothing for it and warns before it is enabled
+   (spec 0016, OQ-031).
 2. **No telemetry.** Nothing about the user's sessions, hosts, or commands
    is collected or sent anywhere.
 3. **Secrets live in the OS keychain only** — never in `config.yaml`,
