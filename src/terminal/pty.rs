@@ -291,7 +291,9 @@ pub fn rerun(
 
 /// The program as the PTY's command line starts with it. On Windows,
 /// alacritty_terminal quotes the arguments but not the program, so a path
-/// with a space is quoted here; Windows paths can't hold `"` themselves.
+/// with a space is quoted here; unquoted, Windows tries each prefix up to
+/// a space first and could start `C:\Program.exe`. Windows paths can't
+/// hold `"` themselves.
 fn program_for_pty(program: &str) -> String {
     if cfg!(windows) && program.contains(char::is_whitespace) && !program.starts_with('"') {
         format!("\"{program}\"")
@@ -761,6 +763,10 @@ mod tests {
         found
     }
 
+    /// ConPTY can drop what a process wrote just before it exits, so the
+    /// pwsh programs in these tests wait after their last write; a test
+    /// ends as soon as the text shows.
+    ///
     /// A program that prints `before`, an OSC 7 report of `url`, then
     /// `after` and exits: `sh` on Unix (ST-terminated), `pwsh` on Windows
     /// (BEL-terminated), so the report crosses ConPTY there.
@@ -781,7 +787,7 @@ mod tests {
                 .map(String::from)
                 .into_iter()
                 .chain([
-                    "[Console]::Write('before'+[char]27+']7;'+$env:TERN_TEST_URL+[char]7+'after')"
+                    "[Console]::Write('before'+[char]27+']7;'+$env:TERN_TEST_URL+[char]7+'after');Start-Sleep 5"
                         .to_owned(),
                 ])
                 .collect(),
@@ -892,7 +898,7 @@ mod tests {
         std::fs::create_dir(&dir).expect("create the dir");
         let snippet = Path::new(env!("CARGO_MANIFEST_DIR")).join("shell-integration/tern.ps1");
         let script = format!(
-            ". '{}'\nSet-Location -LiteralPath '{}'\n$null = prompt\n[Console]::Write('after')\n",
+            ". '{}'\nSet-Location -LiteralPath '{}'\n$null = prompt\n[Console]::Write('after')\nStart-Sleep 5\n",
             snippet.display(),
             dir.display()
         );
@@ -922,8 +928,8 @@ mod tests {
         );
     }
 
-    /// T-074: on Windows, a program path and arguments with spaces reach
-    /// the program whole: a script under `dir with space` gets `a b` and
+    /// T-074: on Windows, arguments with spaces and quotes reach the
+    /// program whole: a script under `dir with space` gets `a b` and
     /// `"quoted"` as two arguments, unchanged.
     #[cfg(windows)]
     #[test]
@@ -935,19 +941,10 @@ mod tests {
         let dir = root.path().join("dir with space");
         std::fs::create_dir(&dir).expect("create the dir");
         let script = dir.join("args.ps1");
-        let print = "[Console]::Write(\"[$($args.Count)|$($args -join '|')]\")";
+        let print = "[Console]::Write(\"[$($args.Count)|$($args -join '|')]\"); Start-Sleep 5";
         std::fs::write(&script, print).expect("write the script");
-        let pwsh = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .map(|dir| dir.join("pwsh.exe"))
-            .find(|exe| exe.is_file())
-            .expect("pwsh is on PATH");
-        // pwsh itself from a folder with a space in its name.
-        let program = dir.join("pwsh link.exe");
-        if std::fs::hard_link(&pwsh, &program).is_err() {
-            std::fs::copy(&pwsh, &program).expect("copy pwsh");
-        }
         let command = Command {
-            program: program.display().to_string(),
+            program: "pwsh".into(),
             args: ["-NoProfile", "-NonInteractive", "-File"]
                 .map(String::from)
                 .into_iter()
