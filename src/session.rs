@@ -4,6 +4,7 @@
 //! the way the app was left. Never scrollback, commands or the
 //! environment [load-bearing].
 
+use crate::config::{Profile, ProfileKind};
 use crate::layout::tree::{Axis, LeafId, Node};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -98,6 +99,28 @@ impl Session {
             tabs,
             active,
         }
+    }
+
+    /// Shows the rightmost plain shell of `profile`, which a boot with
+    /// `open_new_tab` then starts instead of adding a tab (spec 0003, flow
+    /// 6, Reuse). False, and nothing changed, if there is none; an SSH
+    /// profile never has one.
+    pub fn focus_plain_shell(&mut self, profile: &Profile) -> bool {
+        let found = matches!(profile.kind, ProfileKind::Local(_))
+            .then(|| self.plain_shell(&profile.id))
+            .flatten();
+        if let Some(ix) = found {
+            self.active = ix;
+        }
+        found.is_some()
+    }
+
+    /// The rightmost tab that is a plain shell of profile `id`: one
+    /// terminal leaf, not split and not a files pane.
+    pub fn plain_shell(&self, id: &str) -> Option<usize> {
+        self.tabs.iter().rposition(|tab| {
+            matches!(&tab.root, SavedNode::Leaf(leaf) if leaf.files.is_none() && leaf.profile == id)
+        })
     }
 
     /// Repairs what a restore can live with: a focused, zoomed or shown
@@ -601,5 +624,84 @@ pub(crate) mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod 644");
         save(&path, &two_tabs()).expect("save over it");
         assert_eq!(mode(&path), 0o600);
+    }
+
+    /// AC13's saved tabs (spec 0003): a local shell in `/tmp`, an SSH
+    /// host's, a titled local shell in `~/src`, and a split of two local
+    /// shells; the SSH tab was shown last. Shared with the boot tests.
+    pub(crate) fn shell_ssh_shell_split() -> Session {
+        let tabs = vec![
+            tab(leaf(1, "shell", Some("/tmp"), None), 1),
+            tab(leaf(2, "ssh:prod", None, Some("me@prod: ~")), 2),
+            tab(leaf(3, "shell", Some("/home/me/src"), Some("git log")), 3),
+            tab(
+                split(
+                    Axis::Row,
+                    0.5,
+                    leaf(4, "shell", None, None),
+                    leaf(5, "shell", None, None),
+                ),
+                4,
+            ),
+        ];
+        Session::new(None, tabs, 1)
+    }
+
+    /// AC13 (spec 0003), flow 6, Reuse: of two plain local shells, the
+    /// rightmost is the one to focus; the SSH tab and the split of two
+    /// shells behind it don't qualify.
+    #[test]
+    fn the_rightmost_plain_shell_of_the_default_profile_is_reused() {
+        assert_eq!(shell_ssh_shell_split().plain_shell("shell"), Some(2));
+    }
+
+    /// Spec 0003, flow 6, Reuse: SSH, files and split tabs never qualify,
+    /// nor does a shell of a profile other than the default one, so with
+    /// only those there is nothing to reuse.
+    #[test]
+    fn ssh_files_split_and_other_profile_tabs_are_never_reused() {
+        let tabs = vec![
+            tab(leaf(1, "ssh:prod", None, None), 1),
+            tab(files_leaf(2, None, Some("/home/me")), 2),
+            tab(files_leaf(3, Some("prod"), Some("/srv")), 3),
+            tab(
+                split(
+                    Axis::Column,
+                    0.5,
+                    leaf(4, "shell", None, None),
+                    leaf(5, "shell", None, None),
+                ),
+                4,
+            ),
+            tab(
+                split(
+                    Axis::Row,
+                    0.5,
+                    leaf(6, "shell", None, None),
+                    files_leaf(7, None, None),
+                ),
+                6,
+            ),
+            tab(leaf(8, "zsh", Some("/tmp"), None), 8),
+        ];
+        let session = Session::new(None, tabs, 0);
+        assert_eq!(session.plain_shell("shell"), None);
+        // The `zsh` tab is a plain shell when `zsh` is the default profile.
+        assert_eq!(session.plain_shell("zsh"), Some(5));
+        assert_eq!(Session::new(None, Vec::new(), 0).plain_shell("shell"), None);
+    }
+
+    /// Spec 0003, flow 6, Reuse: focusing shows the plain shell, and an SSH
+    /// default profile reuses nothing, even a single tab of itself.
+    #[test]
+    fn only_a_local_default_profile_focuses_a_plain_shell() {
+        let mut session = shell_ssh_shell_split();
+        assert!(session.focus_plain_shell(&Profile::shell()));
+        assert_eq!(session.active, 2);
+
+        let ssh = Profile::ssh_alias("prod").expect("an alias profile");
+        let mut session = Session::new(None, vec![tab(leaf(1, &ssh.id, None, None), 1)], 0);
+        assert!(!session.focus_plain_shell(&ssh));
+        assert_eq!(session.active, 0);
     }
 }

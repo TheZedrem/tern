@@ -767,9 +767,10 @@ impl Render for Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Profile;
     use crate::config::tests::TempDir;
-    use crate::session::tests::{files_leaf, leaf, split, tab};
+    use crate::config::{Profile, SHELL};
+    use crate::session::tests::{files_leaf, leaf, shell_ssh_shell_split, split, tab};
+    use crate::session::{SavedNode, SavedTab};
     use crate::terminal::pty::Command;
     use gpui::AppContext;
     use std::collections::BTreeMap;
@@ -791,7 +792,9 @@ mod tests {
     }
 
     /// Three tabs, the middle one shown: a shell in `~/notes`; one pane a
-    /// quarter wide beside two stacked; an SSH host's beside a shell.
+    /// quarter wide beside two stacked; an SSH host's beside a shell. The
+    /// `~/notes` tab is a plain shell, so a real boot would reuse it (spec
+    /// 0003, Reuse); tests of `restore_behind` call it directly.
     fn three_tabs() -> Session {
         let notes = tab(
             leaf(1, "shell", Some("/home/me/notes"), Some("vim todo.md")),
@@ -888,6 +891,139 @@ mod tests {
             .collect();
         assert_eq!(boot.pending, waiting);
         assert!(!waiting.contains_key(&new_leaf));
+    }
+
+    /// Boots `session` the way `main` does with `open_new_tab: true` and the
+    /// local `shell` as `default_profile` (spec 0003, flow 6): a restored
+    /// plain shell is shown and started, else a new tab is added behind
+    /// the session. Returns the boot and the IDs of the panes started.
+    fn boot_with_new_tab(mut session: Session) -> (Boot, Vec<LeafId>) {
+        let mut started = Vec::new();
+        let boot = if session.focus_plain_shell(&Profile::shell()) {
+            Boot::restore(&session, (1200.0, 800.0), |saved, _| {
+                started.push(saved.id);
+                idle_pane(saved)
+            })
+        } else {
+            Boot::restore_behind(&session, || {
+                idle_pane(&SavedLeaf {
+                    id: 0,
+                    profile: SHELL.into(),
+                    cwd: None,
+                    title: None,
+                    files: None,
+                })
+            })
+            .inspect(|boot| started.extend(boot.panes.iter().map(|(leaf, _)| *leaf)))
+        }
+        .expect("a session with tabs");
+        (boot, started)
+    }
+
+    /// What quitting right after `boot` saves: its tabs as they booted,
+    /// each pane as restored, a new tab's as a shell of `default_profile`.
+    fn quit(boot: &Boot, before: &Session) -> Session {
+        let saved: HashMap<LeafId, SavedLeaf> = before
+            .tabs
+            .iter()
+            .flat_map(|saved| saved.root.leaves())
+            .map(|saved| (saved.id, saved.clone()))
+            .collect();
+        let tabs = boot
+            .tabs
+            .tabs()
+            .iter()
+            .map(|shown| SavedTab {
+                name: shown.name.clone(),
+                root: SavedNode::of(&shown.root, &mut |id| {
+                    saved.get(&id).cloned().unwrap_or(SavedLeaf {
+                        id,
+                        profile: SHELL.into(),
+                        cwd: None,
+                        title: None,
+                        files: None,
+                    })
+                }),
+                focused: shown.focused,
+                zoomed: shown.zoomed,
+            })
+            .collect();
+        Session::new(None, tabs, boot.tabs.active_index())
+    }
+
+    /// AC13 (spec 0003), flow 6, Reuse: with `open_new_tab: true` and saved
+    /// tabs [shell in `/tmp`, SSH, shell in `~/src`, split of two shells],
+    /// the same four tabs boot with the third shown. Its pane is the only
+    /// one started, in `~/src` with its saved title; every other pane,
+    /// the last shown SSH tab's too, waits for its tab.
+    #[test]
+    fn a_restored_plain_shell_is_shown_and_the_only_one_started() {
+        let (boot, started) = boot_with_new_tab(shell_ssh_shell_split());
+        assert_eq!(boot.tabs.tabs().len(), 4);
+        assert_eq!(boot.tabs.active_index(), 2);
+        assert_eq!(started, [3]);
+        let [(3, pane)] = &boot.panes[..] else {
+            panic!("only the ~/src shell is a boot pane");
+        };
+        assert_eq!(pane.launch.cwd, Some(PathBuf::from("/home/me/src")));
+        assert_eq!(pane.title.as_deref(), Some("git log"));
+        assert!(boot.files.is_empty());
+        let mut waiting: Vec<LeafId> = boot.pending.keys().copied().collect();
+        waiting.sort();
+        assert_eq!(waiting, [1, 2, 4, 5]);
+        let layouts: Vec<Vec<LeafId>> = boot
+            .tabs
+            .tabs()
+            .iter()
+            .map(|shown| shown.root.leaves())
+            .collect();
+        assert_eq!(layouts, [vec![1], vec![2], vec![3], vec![4, 5]]);
+    }
+
+    /// AC13 (spec 0003): quitting and relaunching five times with
+    /// `open_new_tab: true` leaves the same four tabs, each launch showing
+    /// the `~/src` shell and starting only it. Quitting is modelled as
+    /// saving the tabs as booted; the save itself needs a window.
+    #[test]
+    fn relaunching_onto_a_plain_shell_adds_no_tabs() {
+        let mut session = shell_ssh_shell_split();
+        for launch in 1..=5 {
+            let (boot, started) = boot_with_new_tab(session.clone());
+            assert_eq!(boot.tabs.tabs().len(), 4, "launch {launch}");
+            assert_eq!(boot.tabs.active_index(), 2, "launch {launch}");
+            assert_eq!(started, [3], "launch {launch}");
+            session = quit(&boot, &session);
+        }
+        assert_eq!(session.tabs, shell_ssh_shell_split().tabs);
+    }
+
+    /// AC11 and AC13 (spec 0003): with no plain shell to reuse, the first
+    /// launch adds one tab; that tab is a plain shell, so every later
+    /// launch focuses it instead of adding another.
+    #[test]
+    fn the_tab_added_once_is_reused_on_every_later_launch() {
+        let three_tabs = vec![
+            tab(leaf(1, "ssh:prod", None, Some("me@prod: ~")), 1),
+            tab(
+                split(
+                    Axis::Row,
+                    0.5,
+                    leaf(2, "shell", Some("/tmp"), None),
+                    leaf(3, "shell", None, None),
+                ),
+                2,
+            ),
+            tab(files_leaf(4, None, Some("/home/me")), 4),
+        ];
+        let mut session = Session::new(None, three_tabs, 1);
+        assert_eq!(session.plain_shell(SHELL), None);
+        for launch in 1..=5 {
+            let (boot, started) = boot_with_new_tab(session.clone());
+            assert_eq!(boot.tabs.tabs().len(), 4, "launch {launch}");
+            assert_eq!(boot.tabs.active_index(), 3, "launch {launch}");
+            assert_eq!(started, [boot.tabs.active().focused], "launch {launch}");
+            session = quit(&boot, &session);
+        }
     }
 
     /// Spec 0003, flow 6, and spec 0001, flow 4: each pane of the shown tab

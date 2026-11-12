@@ -49,8 +49,8 @@ impl SettingsView {
             Row::new(
                 Page::General,
                 "Startup",
-                "Open a new tab on launch",
-                "new tab fresh launch startup open terminal",
+                "Open a new tab on launch, or focus a restored local shell",
+                "new tab fresh launch startup open terminal reuse shell",
                 self.switch(
                     "open-new-tab",
                     config.open_new_tab,

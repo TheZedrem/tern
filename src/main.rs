@@ -165,16 +165,18 @@ fn main() {
     let default_profile = config.default_profile();
     let default_cwd = default_profile.cwd().map(Path::to_path_buf);
     // With `open_new_tab`, only the fresh tab's shell starts now (spec 0003,
-    // flow 6). The bench measures the restored tab, so it never adds one.
+    // flow 6). A restored plain local shell is that tab instead, so tabs
+    // don't pile up launch after launch. The bench measures the restored
+    // tab, so it never adds or picks one.
     // TODO(OQ-030): a fresh tab nobody typed in is saved like any tab.
     let open_new_tab = config.open_new_tab && !bench;
-    let boot = restored.as_ref().and_then(|session| {
-        if open_new_tab {
-            layout::Boot::restore_behind(session, || {
+    let boot = restored.and_then(|mut session| {
+        if open_new_tab && !session.focus_plain_shell(&default_profile) {
+            layout::Boot::restore_behind(&session, || {
                 start_pane(&default_profile, default_cwd.clone(), area, None)
             })
         } else {
-            layout::Boot::restore(session, area, |leaf, area| {
+            layout::Boot::restore(&session, area, |leaf, area| {
                 let profile =
                     layout::restored_profile(&config, &leaf.profile, &mut restore_notices);
                 let cwd = leaf

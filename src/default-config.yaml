@@ -29,7 +29,7 @@ scrollback: 10000   # lines each pane keeps
 close_on_exit: clean  # always | clean (exit code 0) | never
 copy_on_select: false # copy a selection as soon as it's made
 restore_session: true # reopen the last run's tabs and splits
-open_new_tab: true    # every launch opens a fresh tab after the restored ones
+open_new_tab: true    # every launch opens a fresh tab after the restored ones, or focuses a restored plain local shell
 open_links: ctrl_click # ctrl_click (Cmd+click on macOS) | click
 tab_bar: top          # top | bottom | left | right (left and right: vertical tabs)
 sftp_sidebar: right   # left | right: where an SSH pane's file sidebar opens (Ctrl+Shift+S)
