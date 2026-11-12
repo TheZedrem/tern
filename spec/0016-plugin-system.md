@@ -22,16 +22,16 @@ need a way to write them in any language, including a shell script.
 Done means: a program in a folder with a manifest can add palette commands
 and sidebar panels, stream a log into its panel, and ask to type into or
 read from a terminal, with nothing running before the user enabled it and
-nothing touching a terminal before the user confirmed it.
+nothing touching a terminal before the user saw and approved it.
 
 ## Scope
 
 **In scope:**
 
 - Plugin folders, the manifest, enabling and rights per plugin
-- The runtime: background and on-demand processes, JSON lines over stdio
+- The runtime: one process per plugin, started by its first event, JSON lines over stdio
 - Events and actions, version 1 of the protocol (`api: 1`)
-- Confirmation of every action that writes to or reads from a terminal
+- The user's approval of everything that writes to or reads from a terminal: a confirmation per action, or a click on a button that shows its command
 - A Plugins tab on the settings screen: enable, rights, the plugin's own settings, its log
 - Panel contents: what a plugin can put into a sidebar panel
 
@@ -66,7 +66,6 @@ nothing touching a terminal before the user confirmed it.
   name: Docker
   version: 0.1.0
   run: [./tern-docker]            # argv; first entry relative to the folder or on PATH
-  mode: background                # or on-demand
   rights: [pane_info, terminal_write]
   events: [pane_opened, pane_closed]
   commands: [{ id: containers, title: "Docker: show containers" }]
@@ -114,17 +113,26 @@ nothing touching a terminal before the user confirmed it.
   asks for, which also shows the plugin's command line and folder. The
   confirmation comes every time a plugin goes from disabled to enabled, and
   can't be turned off.
-- **Two modes, one protocol.** A `background` plugin is started once and
-  kept running; an `on-demand` plugin is started once per event and exits.
-  Both get events as one JSON object per line on stdin and write actions
-  as one JSON object per line on stdout. stderr is the plugin's log,
-  never parsed. Stdin rather than a parameter avoids Windows' 32 k
-  command-line limit and argv quoting, and lets a plugin switch modes
-  without a code change (OQ-032).
+- **One process per plugin, started by its first event [load-bearing].**
+  Enabling starts nothing. Tern starts a plugin's process when an event is
+  due for it and none is running, and writes that event as its first
+  line. A plugin may exit whenever it likes: after exit status 0 its next
+  event starts it again. So a script that reads one line, answers and
+  exits is a complete plugin, and a program that keeps reading stays
+  running; the manifest has no mode. Events are one JSON object per line
+  on stdin, actions one JSON object per line on stdout. stderr is the
+  plugin's log, never parsed. Stdin rather than a parameter avoids
+  Windows' 32 k command-line limit and argv quoting (OQ-032).
+- **One event at a time [load-bearing].** After writing an event, Tern
+  writes the plugin's next one only once the plugin sent `ready` or
+  exited. No event then sits unread in the pipe of a process that exits,
+  so none is lost. A plugin that stays running sends `ready` whenever it
+  can take another event, also before it waits for an `action_result`; a
+  plugin that exits after each event never sends it. `ready` is a flag,
+  not a count: more of them before the next event change nothing.
 - **EOF on stdin means stop [load-bearing].** Tern never signals a plugin
-  any other way before it kills it. An on-demand plugin gets EOF right
-  after its one event: it finishes its actions and exits. A background
-  plugin gets EOF when it is disabled or Tern quits: it ends its own
+  any other way before it kills it. A plugin gets EOF when it is disabled
+  or Tern quits: it ends its own
   children and exits within 2 s, or Tern kills the PID it spawned, only
   while it still holds that process's unreaped handle. Whether Tern kills
   the whole process tree instead is OQ-035 (TM-plug-11).
@@ -132,8 +140,11 @@ nothing touching a terminal before the user confirmed it.
   `start`, `command`, `panel_opened`, `panel_closed`, `panel_action` (a
   button or row was clicked), `panel_input` (the panel's input field was
   submitted), `pane_opened`, `pane_closed`, `settings_changed`,
-  `action_result`, `output`. `pane_opened` and `pane_closed` are sent only when
-  the manifest lists them under `events` and the user ticked them. The
+  `action_result`, `output`. `start`, `pane_opened` and `pane_closed` are
+  sent only when the manifest lists them under `events` and the user
+  ticked them. `start` is for a plugin that has to run without being
+  asked: it is sent once after discovery at each launch, and when the
+  plugin is enabled. The
   others answer the plugin's own commands, panels, settings and actions,
   so they reach every enabled plugin. Panes are opaque IDs unless `pane_info` is granted, which adds
   title, cwd, profile and host.
@@ -141,7 +152,8 @@ nothing touching a terminal before the user confirmed it.
 
   | Action | Does | Right | Confirmed |
   |---|---|---|---|
-  | `set_panel` | Replaces a panel's items: text, rows with buttons, buttons, one input field, a log | — | no |
+  | `ready` | Lets Tern write the plugin's next event | — | no |
+  | `set_panel` | Replaces a panel's items: text, rows with buttons, buttons, command buttons, one input field, a log | — | no |
   | `append_log` | Appends text to a panel's log (streaming) | — | no |
   | `open_panel` | Shows one of its panels; never takes keyboard focus | — | no |
   | `notify` | A notice; one at a time per plugin | — | no |
@@ -169,9 +181,24 @@ nothing touching a terminal before the user confirmed it.
   commands or acts in one of its panels. Each confirmed action adds a line
   to the plugin's log with its kind, target pane, outcome and time, never
   its text (TM-plug-03, -07, -09, -20).
+- **Command buttons [load-bearing].** A button in `set_panel` may carry
+  one `fill_command`, `run_command` or `open_tab`. Tern draws it as a
+  command button: its label and, under it, all of the text or argv it
+  carries, by the untrusted-text rules below, in the terminal's monospace
+  font. The click is the approval: Tern carries the command out without
+  asking the plugin again and without a bar, because the user saw what
+  the click runs. It needs the same right as the action; without it the
+  button is drawn disabled with the reason. A button can't name a pane:
+  its text goes to the terminal pane that last had focus, and a click
+  with no terminal pane open shows a notice. A command button ignores
+  clicks for 0.5 s after its panel's contents changed, so a `set_panel`
+  can't swap the command under a click. The click adds the same line to
+  the plugin's log as a confirmed action and then sends `panel_action`
+  like any button. `read_output` is never on a button, since what it
+  would send isn't known before the click (TM-plug-23).
 - **Untrusted text [load-bearing].** Everything a plugin sends is shown as
   plain text with control characters removed. `fill_command` and
-  `run_command` text containing a control character (newline, ESC, …) or
+  `run_command` text, on a bar or a command button, containing a control character (newline, ESC, …) or
   a format character (Unicode `Cf`: direction overrides, zero-width and
   tag characters) is refused, and so is text over 4 KiB. The bar wraps
   and shows all of the text, never truncated, so it shows all of what would run.
@@ -187,17 +214,19 @@ nothing touching a terminal before the user confirmed it.
   is missing shows a notice when pressed.
 - **Bounds.** A line over 1 MiB is dropped. A panel's log keeps its last
   10,000 lines, in memory only. Each plugin's reader hands lines over a
-  bounded channel, so a flood blocks the plugin, not the UI. An on-demand
-  run is killed after 30 s; on-demand events of one plugin run one after
-  another. Lines are parsed on the reader thread. The plugin's stderr log
+  bounded channel, so a flood blocks the plugin, not the UI. Lines are
+  parsed on the reader thread. The plugin's stderr log
   keeps its last 10,000 lines, in memory only. Events wait in a queue of
   256 per plugin; one that doesn't fit, because the plugin isn't reading
-  its stdin or its on-demand runs fall behind, is dropped with a line in
-  the plugin's log (TM-plug-10).
+  its stdin or never sends `ready`, is dropped with a line in
+  the plugin's log. Tern doesn't kill a plugin for being slow: one that
+  stalls holds up only its own events, until the user disables it
+  (TM-plug-10).
 
 ### Module surface
 
 - `plugins::Host`: owns the found plugins and their processes; `dispatch(plugin, Event)`; hands parsed `Action`s to the workspace on the foreground thread. `Event` and `Action` are enums (serde-tagged), not strings
+- `plugins::Host` also holds each plugin's event queue and its `ready` flag, so one-at-a-time delivery lives in one place
 - Threads: per running plugin one stdout reader, one stderr reader and one stdin writer, so a plugin that doesn't read never blocks the background executor; spawning on the background executor. A plugin inherits only its three pipes, never a PTY's descriptor or handle (TM-plug-14)
 - `plugins::PanelModel`: a panel's items, drawn by the app sidebar (T-064)
 - `Workspace` hosts confirmations through `plugins/confirm.rs`; it doesn't own them (AGENTS.md, hazard 9)
@@ -210,11 +239,12 @@ nothing touching a terminal before the user confirmed it.
    lists the plugin as unusable with the reason; it is never started.
 2. **Enable:** the Plugins tab shows the plugin's command line, rights and
    events; the user enables it, confirms the trusted-source warning, and
-   ticks rights and events; a `background` plugin
-   starts and gets `start`. Disabling closes its stdin and, after 2 s,
-   kills the PID Tern spawned.
-3. **Event:** background: write the line. On-demand: spawn, write, close
-   stdin, read actions until exit. A spawn that fails (missing program, no
+   ticks rights and events. No process starts, unless `start` is ticked:
+   that event is then due. Disabling closes a running plugin's stdin and,
+   after 2 s, kills the PID Tern spawned.
+3. **Event:** it joins the plugin's queue. With no process running, Tern
+   spawns one and writes the event; otherwise it writes it once the
+   plugin sent `ready`. A spawn that fails (missing program, no
    execute bit) shows a notice and marks the plugin stopped.
 4. **Action arrives:** unknown action, malformed line, missing right or a
    panel not in the manifest: dropped, with a line in the plugin's log,
@@ -222,12 +252,17 @@ nothing touching a terminal before the user confirmed it.
 5. **Confirmation:** Allow carries it out; Deny, a second pending request,
    or the target pane closing first drops it. The plugin gets
    `action_result` (`allowed`, `denied`, `refused`, `no_pane`) with the
-   action's `id`; for on-demand that is a new run. `read_output`'s bar
+   action's `id`, an event like any other: it waits for `ready`, and
+   starts a plugin that has exited. `read_output`'s bar
    previews the exact text; the `output` event carries that text and
    nothing else.
-6. **Plugin exits or crashes** (background): one notice, its panels show
-   "stopped" with Restart, and the Plugins tab shows its log. No automatic
-   restart.
+6. **Plugin exits:** with status 0, nothing is shown: its panels keep
+   their contents, and its next event starts it again. Any other exit is
+   a crash: one notice, its panels show "stopped" with Restart, and the
+   Plugins tab shows its log. No automatic restart: a stopped plugin's
+   events are dropped, and its commands show a notice, until Restart
+   (which sends that panel's `panel_opened` again) or until it is
+   disabled and enabled.
 7. **Quit:** close every stdin, wait up to 2 s in total, kill what's left
    by captured PID. Never by name.
 8. **Settings:** manifest fields (`text`, `bool`, `number`, `choice`) and
@@ -241,7 +276,7 @@ nothing touching a terminal before the user confirmed it.
 Nothing. The boot path reads no manifest and starts no plugin: `plugins:`
 is parsed with the config it is already reading, and discovery starts
 after the first frame on a background thread. T-066 reports
-`--bench-startup` with three background plugins enabled against none.
+`--bench-startup` with three plugins enabled that get `start`, against none.
 
 ### Platform notes
 
@@ -264,8 +299,8 @@ after the first frame on a background thread. T-066 reports
   kept after delivery.
 - **Trust boundaries:** a new one, Tern ↔ plugin process. Plugin output is
   untrusted input, like escape sequences (§Security 1): plain text only,
-  and it never reaches a PTY or a command line without the confirmation
-  above (§Security 2). Terminal output crosses to a plugin only per
+  and it never reaches a PTY or a command line without the user's
+  approval above, on a bar or a command button (§Security 2). Terminal output crosses to a plugin only per
   confirmed `read_output`.
 - **Ground rules:** Tern itself sends nothing. A plugin can, as soon as it
   starts after the first frame: enabling it, after the trusted-source
@@ -276,16 +311,16 @@ after the first frame on a background thread. T-066 reports
 
 ## Acceptance criteria
 
-1. A folder with a valid manifest dropped into the plugins folder shows up on the Plugins tab as disabled, and its program has not run (a plugin that creates a file on start created none). Enabling it asks for confirmation with the trusted-source warning and its command line; cancelling leaves it disabled and not started.
-2. With three background plugins enabled, no plugin process exists before the first-frame mark, and `--bench-startup 10` is within noise of a run with none.
-3. A manifest command appears in the palette under its title; running it puts exactly one JSON line with `"event":"command"` on the plugin's stdin. For an on-demand plugin, one process starts per event and sees EOF after the line.
+1. A folder with a valid manifest dropped into the plugins folder shows up on the Plugins tab as disabled, and its program has not run (a plugin that creates a file on start created none). Enabling it asks for confirmation with the trusted-source warning and its command line; cancelling leaves it disabled and not started. A manifest with `api: 2` is listed as unusable and never started.
+2. With three plugins enabled that get `start`, no plugin process exists before the first-frame mark, and `--bench-startup 10` is within noise of a run with none. An enabled plugin without `start` has no process until its first event.
+3. A manifest command appears in the palette under its title; running it puts exactly one JSON line with `"event":"command"` on the plugin's stdin. Run twice in quick succession on a plugin that reads one line and exits 0, it starts two processes, the second after the first exited, each getting one line, with no notice. A plugin that stays running gets the second line only after it sent `ready`.
 4. `run_command` shows a bar on the target pane with the exact text. Typing `ls` and Enter while it shows runs `ls` in the shell and confirms nothing. Deny writes nothing to the PTY; Allow types the text and Enter; the plugin gets `action_result` either way (Linux and Windows).
 5. With `terminal_write` not ticked, `run_command` shows no bar, the plugin gets `refused`, and its log names the missing right. With `pane_opened` declared but not ticked, opening a pane sends the plugin nothing.
 6. After `read_output`, the plugin receives nothing until Allow; the `output` text equals the bar's preview byte for byte; with Deny it gets `denied` and no text.
 7. `fill_command` with a newline, ESC or a right-to-left override (U+202E) in its text is refused, and panel text containing escape sequences renders as plain text.
 8. A plugin writing 100,000 `append_log` lines a second leaves typing in a pane responsive, its panel shows the last 10,000 lines, and Tern's memory stays flat.
-9. Killing a background plugin's process shows one notice and "stopped" with Restart on its panels; other plugins and panes carry on. A manifest with `api: 2` is listed as unusable and never started.
-10. Quitting Tern leaves no plugin process behind on Linux and Windows, and enabling a plugin on Windows flashes no console window.
+9. Killing a running plugin's process shows one notice and "stopped" with Restart on its panels; other plugins and panes carry on. Quitting Tern leaves no plugin process behind on Linux and Windows, and starting a plugin on Windows flashes no console window.
+10. A panel button carrying `run_command` shows all of its text under its label; one click types the text and Enter into the terminal pane that last had focus, with no bar, and the plugin gets `panel_action` (Linux and Windows). With `terminal_write` not ticked the button is disabled, and a click within 0.5 s of a `set_panel` that changed the panel runs nothing.
 
 ## Open questions
 
