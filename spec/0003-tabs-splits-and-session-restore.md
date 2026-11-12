@@ -1,7 +1,7 @@
 ---
-status: implemented    # draft | approved | implemented
+status: approved       # draft | approved | implemented
 phase: 1
-tasks: [T-003, T-006, T-011, T-062, T-046, T-079]
+tasks: [T-003, T-006, T-011, T-062, T-046, T-079, T-086]
 related: [spec 0001, spec 0002, spec 0005]
 ---
 
@@ -78,6 +78,14 @@ title, else the profile's display name.
 2. **Close pane:** the PTY is killed and the sibling takes the freed space.
    Closing the last pane closes the tab, and closing the last tab quits the
    app.
+   **Close tab with the middle button (T-086):** a middle click on a tab,
+   in the bar or the side list, closes that tab exactly as its close
+   button does: the same question when SFTP edits would go (spec 0008,
+   flow 3), the last tab quitting the app. It acts on release over the
+   same tab it was pressed on, so a press dragged off the tab closes
+   nothing, and it never activates the tab first. A middle click
+   anywhere else in the tab bar does nothing; inside a pane it stays the
+   terminal's (paste on Linux, mouse reporting, spec 0002).
 3. **Focus:** directional focus picks the nearest pane in that direction by
    geometry. Clicking a pane focuses it.
    **Active pane:** when a tab shows two or more panes (terminal or files
@@ -174,6 +182,7 @@ frame themselves. Windows 11 always draws its own frame.
 12. In a tab with a terminal and a files pane, the focused one has the accent border and the other is dimmed, in both built-in themes; with one pane, or zoomed, neither shows. Moving focus sends no PTY resize. Setting `active_pane` to border 4 and color `#ff0000` on the settings screen redraws the border 4 px red without a restart; border 0 and dim 0 hide both.
 11. With `open_new_tab: true` and 3 saved tabs (none a plain local shell), relaunch shows 4 tabs, the new last one active, and exactly one shell running; with `false`, the saved active tab is active and no tab is added.
 13. With `open_new_tab: true` and saved tabs [local shell in `/tmp`, SSH, local shell in `~/src`, split of two local shells], relaunch shows the same 4 tabs, the third one active in `~/src`, and exactly one shell running. Quitting and relaunching 5 times leaves 4 tabs.
+14. A middle click on an inactive tab closes it and leaves the active tab shown and focused; on a tab with an unsent SFTP edit it asks first; pressing the middle button on a tab and releasing it on another closes neither; a middle click on the tab bar's empty area, the new-tab button or a pane closes nothing (Linux and Windows) (T-086).
 
 ## Open questions
 
