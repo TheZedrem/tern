@@ -24,7 +24,7 @@ use std::rc::Rc;
 /// The sidebar and its built-in panels.
 #[derive(Clone)]
 pub(super) struct Hosted {
-    sidebar: Entity<Sidebar>,
+    pub(super) sidebar: Entity<Sidebar>,
     files: Entity<PanePanel>,
     /// Registered only while the active pane is an SSH pane.
     forwards: Entity<PanePanel>,
@@ -44,8 +44,8 @@ impl Workspace {
     /// The sidebar, made now if this is its first use: after the first
     /// frame if the session saved it open, else with the first command
     /// that needs it (spec 0018, Startup impact). The built-in panels
-    /// register here the way a plugin's will.
-    fn hosted(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Hosted {
+    /// register here the way a plugin's do.
+    pub(super) fn hosted(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Hosted {
         if let Some(hosted) = &self.sidebar {
             return hosted.clone();
         }
@@ -64,7 +64,7 @@ impl Workspace {
                 Panel {
                     id: PanelId::Files,
                     title: "Files".into(),
-                    icon: IconName::Folder,
+                    icon: IconName::Folder.into(),
                     plugin: None,
                     view: files.clone().into(),
                     focus: Rc::new(move |window, cx| {
@@ -77,7 +77,7 @@ impl Workspace {
                 Panel {
                     id: PanelId::Hosts,
                     title: "SSH hosts".into(),
-                    icon: IconName::Globe,
+                    icon: IconName::Globe.into(),
                     plugin: None,
                     view: hosts.clone().into(),
                     focus: Rc::new(move |window, cx| {
@@ -115,6 +115,8 @@ impl Workspace {
             hosts,
         };
         self.sidebar = Some(hosted.clone());
+        // The panels of the plugins found so far (spec 0018, flow 5).
+        self.sync_plugin_panels(window, cx);
         hosted
     }
 
@@ -145,11 +147,10 @@ impl Workspace {
                         hosted.hosts.update(cx, |hosts, cx| hosts.reload(cx));
                     }
                 }
-                // TODO(T-069): `panel_opened` for a plugin's panel.
+                PanelId::Plugin { .. } => self.plugin_panel_shown(panel, true, cx),
                 _ => {}
             },
-            // TODO(T-069): `panel_closed` for a plugin's panel.
-            SidebarEvent::Hidden(_) => {}
+            SidebarEvent::Hidden(panel) => self.plugin_panel_shown(panel, false, cx),
             SidebarEvent::Changed => {
                 self.save_soon(window, cx);
                 cx.notify();
@@ -295,7 +296,7 @@ impl Workspace {
             let panel = Panel {
                 id: PanelId::Forwards,
                 title: "Port forwards".into(),
-                icon: IconName::Network,
+                icon: IconName::Network.into(),
                 plugin: None,
                 view: view.into(),
                 focus: Rc::new(move |window, cx| {
@@ -629,14 +630,14 @@ pub(super) mod tests {
         }
 
         /// Runs a command the way the palette does.
-        fn run(&mut self, action: impl Action) {
+        pub fn run(&mut self, action: impl Action) {
             self.draw();
             self.cx.dispatch_action(action);
             self.draw();
         }
 
         /// What the session would save of the sidebar.
-        fn saved(&mut self) -> SavedSidebar {
+        pub fn saved(&mut self) -> SavedSidebar {
             self.workspace
                 .read_with(self.cx, |workspace, cx| workspace.saved_sidebar(cx))
         }
@@ -662,7 +663,7 @@ pub(super) mod tests {
         }
 
         /// Whether typing goes to pane `leaf`'s program.
-        fn pane_has_the_keyboard(&mut self, leaf: LeafId) -> bool {
+        pub fn pane_has_the_keyboard(&mut self, leaf: LeafId) -> bool {
             let workspace = self.workspace.clone();
             self.cx.update(|window, cx| {
                 let pane = workspace.read(cx).panes[&leaf].read(cx);
@@ -670,7 +671,7 @@ pub(super) mod tests {
             })
         }
 
-        fn sidebar_has_the_keyboard(&mut self) -> bool {
+        pub fn sidebar_has_the_keyboard(&mut self) -> bool {
             let workspace = self.workspace.clone();
             self.cx.update(|window, cx| {
                 let hosted = workspace.read(cx).sidebar.as_ref();
@@ -697,7 +698,7 @@ pub(super) mod tests {
         }
 
         /// The strip's panels in its order, as of the last frame.
-        fn strip(&mut self) -> Vec<PanelId> {
+        pub fn strip(&mut self) -> Vec<PanelId> {
             self.draw();
             self.workspace.read_with(self.cx, |workspace, cx| {
                 let hosted = workspace.sidebar.as_ref().expect("the sidebar was used");

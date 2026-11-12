@@ -50,7 +50,7 @@ nothing touching a terminal before the user saw and approved it.
 
 ### Affected areas
 
-- `src/plugins/` (new: manifest, host, protocol, confirmations, panel model), `src/commands/` (plugin commands in the palette and keymap), `src/settings/pages/` (Plugins tab), config schema (`plugins:`), `src/default-config.yaml`
+- `src/plugins/` (new: manifest, host, protocol, confirmations, panel model, how a command is shown), `src/sidebar/plugin.rs` (the view that draws a panel's items), `src/commands/` (plugin commands in the palette and keymap), `src/settings/pages/` (Plugins tab), config schema (`plugins:`), `src/default-config.yaml`
 
 ### Model
 
@@ -205,6 +205,17 @@ nothing touching a terminal before the user saw and approved it.
   log as a confirmed action, with its outcome. `read_output` is never on
   a button, since what it would send isn't known before the click
   (TM-plug-23).
+- **Panel items.** `set_panel` carries a list of items, each one of
+  `text`, `row` (text, an optional detail line and buttons; with an `id`
+  the row itself is clickable), `button`, `input` and `log`; code owns
+  the fields. A button with a `command` is a command button; a row's
+  buttons never carry one, since a row has no room to show it. A panel
+  has at most one input field and one log, and the log is drawn under
+  the other items wherever it stands among them. A `set_panel` with an
+  item Tern doesn't know, a second input field or log, or a command Tern
+  refuses (Untrusted text) is dropped whole, with a line in the plugin's
+  log: a panel is never drawn in part. `append_log` adds one log line
+  per line of its text.
 - **Untrusted text [load-bearing].** Everything a plugin sends is shown as
   plain text with control characters removed. `fill_command` and
   `run_command` text, on a bar or a command button, containing a control character (newline, ESC, …) or
@@ -216,7 +227,7 @@ nothing touching a terminal before the user saw and approved it.
   non-ASCII characters, so a look-alike letter (a Cyrillic `с` in `сurl`)
   stands out. It is a plain ASCII check: no locale, no script table, and
   nothing is refused for it (owner, 2026-11-12).
-  `open_tab` shows each argv element separately under the same rules. On
+  `open_tab` shows each argv element in a box of its own under the same rules. On
   Windows, an `open_tab` whose program contains `"` or ends in `.bat` or
   `.cmd` is refused, since `cmd.exe` would re-parse its arguments.
   `read_output`'s bar states the line and character count above a

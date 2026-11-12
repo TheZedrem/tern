@@ -1,8 +1,8 @@
 //! What the sidebar hosts (spec 0018, Model): a panel, registered by the
-//! built-in panels and, with T-069, by plugins in the same way.
+//! built-in panels and by plugins' in the same way.
 
 use gpui::{AnyView, App, SharedString, Window};
-use gpui_component::IconName;
+use gpui_component::Icon;
 use std::rc::Rc;
 
 /// Which panel: what the session saves and what `open_panel` names.
@@ -13,8 +13,6 @@ pub enum PanelId {
     /// The active SSH pane's port forwards; listed only while an SSH pane
     /// is active.
     Forwards,
-    // Registered by T-069.
-    #[allow(dead_code, reason = "plugin panels are registered by T-069")]
     Plugin {
         plugin: String,
         panel: String,
@@ -53,7 +51,7 @@ pub type Focus = Rc<dyn Fn(&mut Window, &mut App)>;
 pub struct Panel {
     pub id: PanelId,
     pub title: SharedString,
-    pub icon: IconName,
+    pub icon: Icon,
     /// The owning plugin's name, as the host knows it, never as an action
     /// says it: the header's `Plugin <name>` line (TM-plug-01). `None` for
     /// a built-in panel.

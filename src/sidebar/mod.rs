@@ -10,17 +10,19 @@
 pub mod hosts;
 pub mod pane;
 mod panel;
+pub mod plugin;
 
 use crate::config::SidebarSide;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, ClickEvent, Context, DragMoveEvent, EventEmitter, FocusHandle,
     InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, actions, div, px,
+    StatefulInteractiveElement, Styled, Task, Window, actions, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, IconName, Selectable, Sizable};
 pub use panel::{Panel, PanelId};
+use std::time::Duration;
 
 /// The width until the edge is dragged, and the least it can be dragged
 /// to; the most is half the window (spec 0018, Model).
@@ -28,6 +30,9 @@ pub const WIDTH: f32 = 260.0;
 pub const MIN_WIDTH: f32 = 200.0;
 /// The inner edge it's resized by, as wide as a split's divider.
 const EDGE: f32 = 4.0;
+/// How long clicks are ignored after something other than the user changed
+/// what is under the pointer (TM-plug-23).
+pub const CLICK_GUARD: Duration = Duration::from_millis(500);
 
 /// The sidebar's key context: plain keys bound here exist only while the
 /// keyboard is inside it.
@@ -46,6 +51,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("left", FocusPreviousControl, Some(STRIP_CONTEXT)),
     ]);
     hosts::init(cx);
+    plugin::init(cx);
 }
 
 /// The width a sidebar `width` wide is drawn with in a window
@@ -61,10 +67,7 @@ pub enum SidebarEvent {
     Shown { panel: PanelId, by_user: bool },
     /// `panel` left the screen: another one took over, or the sidebar
     /// closed.
-    Hidden(
-        // T-069 turns it into `panel_closed`.
-        #[allow(dead_code, reason = "read by T-069, for a plugin panel")] PanelId,
-    ),
+    Hidden(PanelId),
     /// Open, width or the shown panel changed: the session saves them and
     /// the window lays out again.
     Changed,
@@ -92,6 +95,8 @@ pub struct Sidebar {
     open: bool,
     width: f32,
     side: SidebarSide,
+    /// Running while clicks are ignored (see [`Self::show_unasked`]).
+    guard: Option<Task<()>>,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -112,6 +117,7 @@ impl Sidebar {
             // A saved width is a file's: never under the least.
             width: width.max(MIN_WIDTH),
             side,
+            guard: None,
         }
     }
 
@@ -186,6 +192,30 @@ impl Sidebar {
         }
     }
 
+    /// [`Self::show`] for a panel that asked for it itself (spec 0018,
+    /// flow 6): if that changes what the sidebar shows, the sidebar ignores
+    /// clicks for [`CLICK_GUARD`], so a panel can't come up under a click
+    /// meant for another.
+    pub fn show_unasked(&mut self, id: &PanelId, cx: &mut Context<Self>) {
+        if self.shows(id) {
+            return;
+        }
+        self.show(id, cx);
+        let wait = cx.background_executor().timer(CLICK_GUARD);
+        self.guard = Some(cx.spawn(async move |this, cx| {
+            wait.await;
+            let _ = this.update(cx, |this, cx| {
+                this.guard = None;
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Whether clicks are ignored right now.
+    pub fn ignores_clicks(&self) -> bool {
+        self.guard.is_some()
+    }
+
     /// Opens the sidebar on the panel it showed last, or closes it (spec
     /// 0018, flow 1). The keyboard stays where it was, unless it was
     /// inside: then it goes back to the pane.
@@ -226,6 +256,9 @@ impl Sidebar {
     /// if it was there, and moves to the new panel if it was in the old
     /// one (spec 0018, flow 3).
     fn pick(&mut self, id: PanelId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ignores_clicks() {
+            return;
+        }
         let inside = self.has_focus(window, cx);
         self.switch(id, true, cx);
         if inside {
@@ -317,7 +350,11 @@ impl Sidebar {
             .ghost()
             .xsmall()
             .tooltip("Close sidebar")
-            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.toggle(window, cx)));
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                if !this.ignores_clicks() {
+                    this.toggle(window, cx);
+                }
+            }));
         div()
             .flex()
             .items_start()
@@ -381,6 +418,7 @@ impl Render for Sidebar {
         let width = fitted(self.width, f32::from(window.viewport_size().width));
         div()
             .id("sidebar")
+            .relative()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             // A press on the sidebar's own surface must not take the
@@ -401,6 +439,11 @@ impl Render for Sidebar {
             .map(|sidebar| match side {
                 SidebarSide::Left => sidebar.child(body).child(edge),
                 SidebarSide::Right => sidebar.child(edge).child(body),
+            })
+            // Over everything while clicks are ignored, so none reaches a
+            // panel either.
+            .when(self.ignores_clicks(), |sidebar| {
+                sidebar.child(div().absolute().inset_0().occlude())
             })
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<DraggedEdge>, window, cx| {
@@ -574,7 +617,7 @@ mod tests {
                 let panel = Panel {
                     id,
                     title: title.into(),
-                    icon: IconName::Folder,
+                    icon: IconName::Folder.into(),
                     plugin: plugin.map(Into::into),
                     view: body.into(),
                     focus: Rc::new(move |window, cx| {
@@ -1027,8 +1070,8 @@ mod tests {
         /// Clicks along the strip of an open sidebar on Files, the pane
         /// holding the keyboard before each click, until a click shows SSH
         /// hosts: the buttons carry no test selector. Stops right after
-        /// that click.
-        fn click_the_hosts_button(&mut self) {
+        /// that click, and returns where it was.
+        fn click_the_hosts_button(&mut self) -> gpui::Point<gpui::Pixels> {
             let left = self.window_width() - WIDTH;
             for y in [10.0, 16.0, 22.0] {
                 for step in 0..40 {
@@ -1038,7 +1081,7 @@ mod tests {
                     self.cx.simulate_click(at, Modifiers::none());
                     self.draw();
                     if self.shown() == PanelId::Hosts {
-                        return;
+                        return at;
                     }
                 }
             }
@@ -1153,5 +1196,118 @@ mod tests {
         rig.drag_the_edge(&[window - 320.0]);
         assert!(rig.pane_has_the_keyboard(), "the drag took the keyboard");
         assert!(!rig.sidebar_has_the_keyboard());
+    }
+
+    impl Rig<'_> {
+        /// Lets `time` pass on the test clock.
+        fn wait(&mut self, time: Duration) {
+            self.cx.executor().advance_clock(time);
+            self.cx.run_until_parked();
+            self.draw();
+        }
+
+        fn ignores_clicks(&mut self) -> bool {
+            self.act(|sidebar, _, _| sidebar.ignores_clicks())
+        }
+    }
+
+    /// Spec 0018, flow 6 [load-bearing] and TM-plug-23: "After an
+    /// `open_panel` changed what the sidebar shows, the sidebar ignores
+    /// clicks for 0.5 s", and no longer. It "opens the sidebar if needed
+    /// and shows the panel, without focus", and isn't the user's own act.
+    /// One for the panel that is on screen already changes nothing, so it
+    /// starts no 0.5 s.
+    #[gpui::test]
+    fn a_panel_shown_unasked_makes_the_sidebar_ignore_clicks_for_half_a_second(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut rig, _, _) = rig(cx);
+        let docker = plugin("docker", "containers");
+        rig.register(docker.clone(), "Containers", Some("docker"));
+        rig.seen();
+        assert_eq!(CLICK_GUARD, Duration::from_millis(500));
+        assert!(!rig.ignores_clicks());
+
+        // Onto a closed sidebar.
+        rig.act(|sidebar, _, cx| sidebar.show_unasked(&docker, cx));
+        assert!(rig.is_open());
+        assert_eq!(rig.shown(), docker);
+        assert_eq!(rig.shown_and_hidden(), [Seen::Shown(docker.clone(), false)]);
+        assert!(rig.ignores_clicks());
+        assert!(rig.pane_has_the_keyboard(), "it took the keyboard");
+        rig.wait(Duration::from_millis(499));
+        assert!(rig.ignores_clicks(), "clicks came back before 0.5 s");
+        rig.wait(Duration::from_millis(1));
+        assert!(
+            !rig.ignores_clicks(),
+            "clicks are still ignored after 0.5 s"
+        );
+
+        // The panel is on screen already: nothing changes under a click.
+        rig.act(|sidebar, _, cx| sidebar.show_unasked(&docker, cx));
+        assert!(
+            !rig.ignores_clicks(),
+            "nothing changed, yet clicks are ignored"
+        );
+        assert_eq!(rig.seen(), []);
+
+        // From another panel of an open sidebar.
+        rig.act(|sidebar, window, cx| sidebar.pick(PanelId::Files, window, cx));
+        rig.seen();
+        rig.act(|sidebar, _, cx| sidebar.show_unasked(&docker, cx));
+        assert_eq!(
+            rig.shown_and_hidden(),
+            [
+                Seen::Hidden(PanelId::Files),
+                Seen::Shown(docker.clone(), false)
+            ]
+        );
+        assert!(rig.ignores_clicks());
+        assert!(rig.pane_has_the_keyboard(), "it took the keyboard");
+        assert!(!rig.sidebar_has_the_keyboard());
+        rig.wait(CLICK_GUARD);
+        assert!(!rig.ignores_clicks());
+
+        // Onto a sidebar the user closed on that very panel: it comes up
+        // where there was none.
+        rig.act(|sidebar, window, cx| sidebar.toggle(window, cx));
+        rig.act(|sidebar, _, cx| sidebar.show_unasked(&docker, cx));
+        assert!(rig.is_open());
+        assert!(rig.ignores_clicks(), "a sidebar opening changed the screen");
+    }
+
+    /// Spec 0018, flow 6 and AC10: within the 0.5 s after an `open_panel`
+    /// a click on the sidebar does nothing, so a panel that came up under
+    /// the pointer can't catch a click meant for what was there; the same
+    /// click after it acts again.
+    #[gpui::test]
+    fn a_click_right_after_a_panel_was_shown_unasked_does_nothing(cx: &mut TestAppContext) {
+        let (mut rig, _, _) = rig(cx);
+        let docker = plugin("docker", "containers");
+        rig.register(docker.clone(), "Containers", Some("docker"));
+        rig.act(|sidebar, window, cx| sidebar.toggle(window, cx));
+        let hosts_button = rig.click_the_hosts_button();
+        rig.act(|sidebar, window, cx| sidebar.pick(PanelId::Files, window, cx));
+
+        rig.act(|sidebar, _, cx| sidebar.show_unasked(&docker, cx));
+        rig.seen();
+        rig.cx.simulate_click(hosts_button, Modifiers::none());
+        rig.draw();
+        assert_eq!(rig.shown(), docker, "a click within 0.5 s switched panels");
+        assert_eq!(rig.seen(), []);
+        assert!(rig.is_open());
+        assert!(
+            rig.pane_has_the_keyboard(),
+            "the ignored click took the keyboard"
+        );
+
+        rig.wait(CLICK_GUARD);
+        rig.cx.simulate_click(hosts_button, Modifiers::none());
+        rig.draw();
+        assert_eq!(rig.shown(), PanelId::Hosts, "clicks stayed ignored");
+        assert_eq!(
+            rig.shown_and_hidden(),
+            [Seen::Hidden(docker), Seen::Shown(PanelId::Hosts, true)]
+        );
     }
 }

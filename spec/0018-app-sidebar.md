@@ -1,5 +1,5 @@
 ---
-status: approved     # draft | approved | implemented
+status: implemented  # draft | approved | implemented
 phase: 5
 tasks: [T-064, T-080, T-049, T-084, T-085, T-069]
 related: [spec 0003, spec 0004, spec 0006, spec 0008, spec 0009, spec 0013, spec 0016, spec 0017, threat model 0003, threat model 0005, OQ-036, OQ-038, OQ-039]
@@ -108,7 +108,10 @@ meant for the shell.
   itself, follows its newest line while scrolled to the end, and lays out
   only its visible rows. A stopped plugin's panels stay listed in place
   under the same header, with spec 0016's "stopped" and Restart as the
-  body.
+  body. With the keyboard in a plugin's panel, Up and Down walk its rows
+  and buttons, Enter acts on the selected one (Restart on a stopped
+  plugin's panel), and Tab moves between them and the input field;
+  `sidebar.focus` lands in the input field if the panel has one.
 - **The keyboard stays with the shell [load-bearing].** Opening, closing,
   switching, a plugin filling a panel and `open_panel` never move
   keyboard focus. It enters the sidebar only by a click on something in

@@ -6,11 +6,15 @@
 //! It gates the protocol, not the process: a plugin runs as the user
 //! (OQ-031).
 
+pub mod command;
 mod manifest;
+pub mod panel;
+mod panels;
 mod process;
 mod protocol;
 
 pub use manifest::{Right, Subscription};
+pub use panels::ListedPanel;
 pub use protocol::{Action, PaneInfo};
 
 use crate::config::PluginSettings;
@@ -47,6 +51,9 @@ pub enum HostEvent {
     Action { plugin: String, action: Action },
     /// A plugin couldn't start, or crashed.
     Notice(String),
+    /// What [`Host::panels`] lists changed: plugins were found, one was
+    /// enabled or disabled, or one stopped or was restarted.
+    PanelsChanged,
 }
 
 /// Where a found plugin is.
@@ -79,6 +86,9 @@ struct Plugin {
     runs: u64,
     queue: VecDeque<Event>,
     stopped: bool,
+    /// The user ran one of its commands or acted in one of its panels
+    /// since its last `open_panel`, which lets the next one through.
+    acted: bool,
     log: VecDeque<String>,
 }
 
@@ -138,6 +148,7 @@ impl Host {
                 self.enabled_now(ix, cx);
             }
         }
+        cx.emit(HostEvent::PanelsChanged);
         cx.notify();
     }
 
@@ -170,6 +181,7 @@ impl Host {
                 _ => {}
             }
         }
+        cx.emit(HostEvent::PanelsChanged);
         cx.notify();
     }
 
@@ -212,7 +224,7 @@ impl Host {
 
     /// An action the workspace can't carry out yet: said in the plugin's
     /// log, and refused if it waits for a result.
-    // TODO(T-068, T-069): gone once every action is carried out.
+    // TODO(T-067, T-068): gone once every action is carried out.
     pub fn unhandled(&mut self, plugin: &str, action: &Action, cx: &mut Context<Self>) {
         let Some(ix) = self.index(plugin) else {
             return;
@@ -382,6 +394,7 @@ impl Host {
                 cx.emit(HostEvent::Notice(format!(
                     "Plugin {name} couldn't start: {error}"
                 )));
+                cx.emit(HostEvent::PanelsChanged);
             }
         }
     }
@@ -449,6 +462,16 @@ impl Host {
             self.log(ix, dropped, cx);
             return;
         }
+        // One per act of the user's on the plugin, so it can't reopen
+        // what the user closed or pop up by itself (spec 0018, flow 6).
+        if matches!(action, Action::OpenPanel { .. })
+            && !std::mem::take(&mut self.plugins[ix].acted)
+        {
+            let dropped = "`open_panel` was dropped: it follows only a command of the plugin's \
+                           that the user ran, or something they did in one of its panels";
+            self.log(ix, dropped.into(), cx);
+            return;
+        }
         let plugin = self.plugins[ix].id.clone();
         cx.emit(HostEvent::Action { plugin, action });
     }
@@ -482,6 +505,7 @@ impl Host {
             let notice = format!("Plugin {name} stopped: it {said}");
             self.log(ix, said, cx);
             cx.emit(HostEvent::Notice(notice));
+            cx.emit(HostEvent::PanelsChanged);
         }
         cx.notify();
     }
@@ -556,6 +580,7 @@ impl Plugin {
             runs: 0,
             queue: VecDeque::new(),
             stopped: false,
+            acted: false,
             log: VecDeque::new(),
         }
     }
@@ -583,7 +608,7 @@ async fn breathe() {
 /// tasks from outside GPUI's test scheduler, so each test allows it to park
 /// and waits in real time; only the 2 s grace runs on the test clock.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::tests::TempDir;
     use gpui::{Entity, TestAppContext};
@@ -730,7 +755,7 @@ switch ($mode) {
 
     /// The command line of the plugin in `mode`: what its manifest names
     /// and what the user confirmed.
-    fn run(mode: &str) -> Vec<String> {
+    pub(crate) fn run(mode: &str) -> Vec<String> {
         let interpreter: &[&str] = if cfg!(windows) {
             &[
                 "powershell.exe",
@@ -747,7 +772,7 @@ switch ($mode) {
     }
 
     /// What the user ticked for an enabled plugin running in `mode`.
-    fn grant(mode: &str, rights: &[Right], events: &[Subscription]) -> PluginSettings {
+    pub(crate) fn grant(mode: &str, rights: &[Right], events: &[Subscription]) -> PluginSettings {
         PluginSettings {
             enabled: true,
             run: run(mode),
@@ -799,7 +824,7 @@ switch ($mode) {
     }
 
     /// A plugins folder of its own for one test.
-    struct Lab {
+    pub(crate) struct Lab {
         /// The app of the host, to quit before the folder goes.
         app: RefCell<Option<TestAppContext>>,
         dir: TempDir,
@@ -824,7 +849,7 @@ switch ($mode) {
 
     impl Lab {
         /// `name` must be unique among all tests.
-        fn new(name: &str) -> Self {
+        pub(crate) fn new(name: &str) -> Self {
             Self {
                 app: RefCell::new(None),
                 dir: TempDir::new(&format!("plugins-host-{name}")),
@@ -833,19 +858,31 @@ switch ($mode) {
 
         /// Plugin `id` running the script in `mode`; `declares` are the
         /// manifest's further lines. Returns its folder.
-        fn plugin(&self, id: &str, mode: &str, declares: &str) -> PathBuf {
+        pub(crate) fn plugin(&self, id: &str, mode: &str, declares: &str) -> PathBuf {
             let run = serde_json::to_string(&run(mode)).expect("an argv is JSON");
             let manifest = format!("api: 1\nid: {id}\nname: Name of {id}\nrun: {run}\n{declares}");
             self.folder(id, &manifest)
         }
 
         /// Plugin `id` with the script and `manifest` as its `plugin.yaml`.
-        fn folder(&self, id: &str, manifest: &str) -> PathBuf {
+        pub(crate) fn folder(&self, id: &str, manifest: &str) -> PathBuf {
             let folder = self.dir.path().join(id);
             std::fs::create_dir_all(&folder).expect("create the plugin's folder");
             std::fs::write(folder.join("plugin.yaml"), manifest).expect("write plugin.yaml");
             std::fs::write(folder.join(SCRIPT.0), SCRIPT.1).expect("write the plugin");
             folder
+        }
+
+        /// The plugins folder, for a host a test makes itself.
+        pub(crate) fn root(&self) -> PathBuf {
+            self.dir.path().to_owned()
+        }
+
+        /// Has the lab quit `cx`'s app before its folder goes, which ends
+        /// the plugins a host there started.
+        pub(crate) fn ends_with(&self, cx: &TestAppContext) {
+            cx.executor().allow_parking();
+            self.app.replace(Some(cx.clone()));
         }
 
         /// A host that found this lab's plugins, with `granted` as the
@@ -864,11 +901,12 @@ switch ($mode) {
             cx.update(|cx| {
                 let seen = Rc::clone(&seen);
                 cx.subscribe(&host, move |_, event: &HostEvent, _| {
-                    seen.borrow_mut().push(match event {
+                    seen.borrow_mut().extend(match event {
                         HostEvent::Action { plugin, action } => {
-                            Said::Action(plugin.clone(), action.clone())
+                            Some(Said::Action(plugin.clone(), action.clone()))
                         }
-                        HostEvent::Notice(notice) => Said::Notice(notice.clone()),
+                        HostEvent::Notice(notice) => Some(Said::Notice(notice.clone())),
+                        HostEvent::PanelsChanged => None,
                     });
                 })
                 .detach();
@@ -883,7 +921,7 @@ switch ($mode) {
 
     /// Runs the app's tasks until `done`, in real time: a plugin's threads
     /// aren't on the test scheduler.
-    fn wait_until(
+    pub(crate) fn wait_until(
         cx: &mut TestAppContext,
         what: &str,
         mut done: impl FnMut(&mut TestAppContext) -> bool,
@@ -900,7 +938,7 @@ switch ($mode) {
     }
 
     /// Gives something that must not happen the time to happen.
-    fn settle(cx: &mut TestAppContext) {
+    pub(crate) fn settle(cx: &mut TestAppContext) {
         let deadline = Instant::now() + SETTLE;
         while Instant::now() < deadline {
             cx.run_until_parked();
@@ -965,7 +1003,7 @@ switch ($mode) {
     }
 
     /// The events the plugin in `folder` got so far, in order.
-    fn events(folder: &Path) -> Vec<Value> {
+    pub(crate) fn events(folder: &Path) -> Vec<Value> {
         let parse = |line: String| {
             serde_json::from_str(&line)
                 .unwrap_or_else(|error| panic!("an event isn't JSON ({error}): {line}"))
@@ -984,13 +1022,17 @@ switch ($mode) {
         lines(folder, file)
     }
 
-    fn wait_for_events(cx: &mut TestAppContext, folder: &Path, count: usize) -> Vec<Value> {
+    pub(crate) fn wait_for_events(
+        cx: &mut TestAppContext,
+        folder: &Path,
+        count: usize,
+    ) -> Vec<Value> {
         wait_for_lines(cx, folder, "events.log", count);
         events(folder)
     }
 
     /// The name of each event, in order.
-    fn names(events: &[Value]) -> Vec<&str> {
+    pub(crate) fn names(events: &[Value]) -> Vec<&str> {
         let names = events.iter().map(|event| event["event"].as_str());
         names.map(|name| name.expect("an event's name")).collect()
     }
@@ -1002,7 +1044,7 @@ switch ($mode) {
     }
 
     /// The PIDs of every start of the plugin in `folder`.
-    fn pids(folder: &Path) -> Vec<String> {
+    pub(crate) fn pids(folder: &Path) -> Vec<String> {
         lines(folder, "pids")
     }
 
@@ -1431,7 +1473,7 @@ switch ($mode) {
             "\n",
             r#"{"action":"append_log","panel":"other","text":"SECRET-TEXT"}"#,
             "\n",
-            r#"{"action":"open_panel","panel":"containers"}"#,
+            r#"{"action":"append_log","panel":"containers","text":"up"}"#,
             "\n",
         );
         std::fs::write(chatty.join("say"), says).expect("write say");
@@ -1443,8 +1485,9 @@ switch ($mode) {
         });
         open(&host, cx, 2);
         assert_eq!(panes(&wait_for_events(cx, &chatty, 2)), [1, 2]);
-        let shown = Action::OpenPanel {
+        let shown = Action::AppendLog {
             panel: "containers".into(),
+            text: "up".into(),
         };
         assert_eq!(actions(&seen), [("chatty".to_owned(), shown)]);
         let log = log(&host, cx, "chatty");
@@ -1894,5 +1937,302 @@ switch ($mode) {
         assert_eq!(panes(&events(&slow)), expected, "a dropped event arrived");
         assert_eq!(pids(&slow).len(), 1);
         assert_eq!(notices(&seen), [""; 0], "a slow plugin is no notice");
+    }
+
+    /// A manifest's panel `containers`.
+    const ONE_PANEL: &str = "panels: [{ id: containers, title: Containers }]\n";
+
+    /// What the host lists of plugin `id`'s panels.
+    fn listed(host: &Entity<Host>, cx: &mut TestAppContext, id: &str) -> Vec<ListedPanel> {
+        let all = host.read_with(cx, |host, _| host.panels());
+        all.into_iter().filter(|panel| panel.plugin == id).collect()
+    }
+
+    /// Counts how often the host says its list of panels changed.
+    fn panel_changes(host: &Entity<Host>, cx: &mut TestAppContext) -> Rc<std::cell::Cell<usize>> {
+        let changes = Rc::new(std::cell::Cell::new(0));
+        cx.update(|cx| {
+            let changes = Rc::clone(&changes);
+            cx.subscribe(host, move |_, event: &HostEvent, _| {
+                if matches!(event, HostEvent::PanelsChanged) {
+                    changes.set(changes.get() + 1);
+                }
+            })
+            .detach();
+        });
+        changes
+    }
+
+    fn open_panel(panel: &str) -> Action {
+        Action::OpenPanel {
+            panel: panel.into(),
+        }
+    }
+
+    /// Spec 0018, flow 5, Order and Header: the sidebar lists the panels
+    /// of "an enabled, usable plugin", "each plugin's in manifest order",
+    /// under the name of "the Host's record of the plugin" (TM-plug-01),
+    /// with the rights in force ("the granted ones that the manifest still
+    /// declares", spec 0016). A plugin that is disabled, not in the config
+    /// or unusable lists none, and listing starts no process. They come
+    /// and go as the user enables and disables, and the host says so.
+    #[gpui::test]
+    fn the_host_lists_the_panels_of_enabled_usable_plugins_in_manifest_order(
+        cx: &mut TestAppContext,
+    ) {
+        let lab = Lab::new("panels-listed");
+        let panels = concat!(
+            "panels:\n",
+            "  - { id: second, title: Logs, icon: scroll-text }\n",
+            "  - { id: first, title: Containers }\n",
+        );
+        let declares = format!("rights: [terminal_write, open_tab]\n{panels}");
+        let docker = lab.plugin("docker", "stay", &declares);
+        let off = lab.plugin("off", "stay", panels);
+        lab.plugin("unnamed", "stay", panels);
+        lab.plugin("plain", "stay", "");
+        let argv = serde_json::to_string(&run("stay")).expect("an argv is JSON");
+        lab.folder(
+            "future",
+            &format!("api: 2\nid: future\nname: Future\nrun: {argv}\n{panels}"),
+        );
+        // Ticked: one right the manifest declares, one it doesn't.
+        let ticked = [Right::TerminalWrite, Right::TerminalRead];
+        let disabled = || PluginSettings {
+            enabled: false,
+            ..grant("stay", &[], &[])
+        };
+        let (host, seen) = lab.host(
+            cx,
+            [
+                ("docker", grant("stay", &ticked, &[])),
+                ("off", disabled()),
+                ("plain", grant("stay", &[], &[])),
+                ("future", grant("stay", &[], &[])),
+            ],
+        );
+
+        let panel =
+            |plugin: &str, panel: &str, title: &str, icon: Option<&str>, rights: &[Right]| {
+                ListedPanel {
+                    plugin: plugin.into(),
+                    name: format!("Name of {plugin}"),
+                    panel: panel.into(),
+                    title: title.into(),
+                    icon: icon.map(str::to_owned),
+                    stopped: false,
+                    rights: rights.to_vec(),
+                }
+            };
+        let write = [Right::TerminalWrite];
+        let of_docker = [
+            panel("docker", "second", "Logs", Some("scroll-text"), &write),
+            panel("docker", "first", "Containers", None, &write),
+        ];
+        let all = host.read_with(cx, |host, _| host.panels());
+        assert_eq!(all, of_docker, "only the enabled, usable plugin's");
+
+        let changes = panel_changes(&host, cx);
+        regrant(
+            &host,
+            cx,
+            [
+                ("docker", disabled()),
+                ("off", grant("stay", &[], &[])),
+                ("plain", grant("stay", &[], &[])),
+                ("future", grant("stay", &[], &[])),
+            ],
+        );
+        assert!(changes.get() >= 1, "the workspace wasn't told");
+        let all = host.read_with(cx, |host, _| host.panels());
+        let of_off = [
+            panel("off", "second", "Logs", Some("scroll-text"), &[]),
+            panel("off", "first", "Containers", None, &[]),
+        ];
+        assert_eq!(all, of_off, "docker was disabled, off enabled");
+
+        settle(cx);
+        for folder in [&docker, &off] {
+            assert_eq!(pids(folder), [""; 0], "listing a panel started its plugin");
+        }
+        assert_eq!(notices(&seen), [""; 0]);
+    }
+
+    /// Spec 0018, flow 6 [load-bearing] and AC10; spec 0016, Actions:
+    /// `open_panel` is "carried out once per act of the user's on the
+    /// plugin, else dropped with a log line". A panel coming on screen is
+    /// no act; a click in a panel or its input field submitted is one,
+    /// and lets exactly one `open_panel` through.
+    #[gpui::test]
+    fn open_panel_is_carried_out_once_per_act_of_the_users(cx: &mut TestAppContext) {
+        let lab = Lab::new("open-panel");
+        let unasked = lab.plugin("unasked", "stay", ONE_PANEL);
+        let clicked = lab.plugin("clicked", "stay", ONE_PANEL);
+        let typed = lab.plugin("typed", "stay", ONE_PANEL);
+        let ask = "{\"action\":\"open_panel\",\"panel\":\"containers\"}\n";
+        std::fs::write(unasked.join("say"), ask).expect("write say");
+        std::fs::write(clicked.join("say"), format!("{ask}{ask}")).expect("write say");
+        std::fs::write(typed.join("say"), ask).expect("write say");
+        let enabled = || grant("stay", &[], &[]);
+        let (host, seen) = lab.host(
+            cx,
+            [
+                ("unasked", enabled()),
+                ("clicked", enabled()),
+                ("typed", enabled()),
+            ],
+        );
+
+        // Its panel is shown, which starts it, and it asks at once.
+        host.update(cx, |host, cx| {
+            host.panel_opened("unasked", "containers", cx);
+        });
+        wait_until(cx, "the unasked open_panel to be dropped", |cx| {
+            !log(&host, cx, "unasked").is_empty()
+        });
+        host.update(cx, |host, cx| {
+            host.panel_action("clicked", "containers", "refresh", cx);
+            host.panel_input("typed", "containers", "nginx", cx);
+        });
+        wait_until(cx, "the second open_panel to be dropped", |cx| {
+            !log(&host, cx, "clicked").is_empty()
+        });
+        wait_until(cx, "the open_panel after an input", |_| {
+            actions(&seen).iter().any(|(plugin, _)| plugin == "typed")
+        });
+        settle(cx);
+
+        let mut shown = actions(&seen);
+        shown.sort_by(|a, b| a.0.cmp(&b.0));
+        let expected = [
+            ("clicked".to_owned(), open_panel("containers")),
+            ("typed".to_owned(), open_panel("containers")),
+        ];
+        assert_eq!(shown, expected, "one per act, none without");
+        for (id, dropped) in [("unasked", 1), ("clicked", 1), ("typed", 0)] {
+            let log = log(&host, cx, id);
+            assert_eq!(log.len(), dropped, "{id}: {log:?}");
+            assert!(
+                log.iter().all(|line| line.contains("open_panel")),
+                "{log:?}"
+            );
+        }
+        assert_eq!(notices(&seen), [""; 0], "a dropped open_panel is no notice");
+    }
+
+    /// Spec 0016, Events; spec 0018, Module surface: what the user does
+    /// in a panel reaches its plugin as `panel_opened`, `panel_action`
+    /// (with the `id` of the row or button), `panel_input` (with the
+    /// text) and `panel_closed`, each naming the panel. A disabled
+    /// plugin's panel tells it nothing, so nothing starts it.
+    #[gpui::test]
+    fn what_the_user_does_in_a_panel_reaches_its_plugin(cx: &mut TestAppContext) {
+        let lab = Lab::new("panel-events");
+        let docker = lab.plugin("docker", "stay", ONE_PANEL);
+        let off = lab.plugin("off", "stay", ONE_PANEL);
+        let disabled = PluginSettings {
+            enabled: false,
+            ..grant("stay", &[], &[])
+        };
+        let (host, seen) = lab.host(cx, [("docker", grant("stay", &[], &[])), ("off", disabled)]);
+        let typed = "nginx \"quoted\" \\ é";
+
+        for plugin in ["docker", "off"] {
+            host.update(cx, |host, cx| {
+                host.panel_opened(plugin, "containers", cx);
+                host.panel_action(plugin, "containers", "web.restart", cx);
+                host.panel_input(plugin, "containers", typed, cx);
+                host.panel_closed(plugin, "containers", cx);
+            });
+        }
+        let got = wait_for_events(cx, &docker, 4);
+        assert_eq!(
+            names(&got),
+            [
+                "panel_opened",
+                "panel_action",
+                "panel_input",
+                "panel_closed"
+            ]
+        );
+        for event in &got {
+            assert_eq!(event["panel"], "containers", "{event}");
+            assert_eq!(event["api"], 1, "{event}");
+        }
+        assert_eq!(got[1]["id"], "web.restart");
+        assert_eq!(got[2]["text"], typed);
+
+        // Restart is a stopped plugin's: on a running one it sends nothing.
+        host.update(cx, |host, cx| host.restart("docker", "containers", cx));
+        settle(cx);
+        assert_eq!(events(&docker).len(), 4, "{:?}", names(&events(&docker)));
+        assert_eq!(pids(&docker).len(), 1, "one process took all four");
+        assert_eq!(pids(&off), [""; 0], "a disabled plugin was started");
+        assert_eq!(notices(&seen), [""; 0]);
+    }
+
+    /// Spec 0016, flow 6 and AC9; spec 0018, Body and AC9: a crashed
+    /// plugin's panels "stay listed in place", as stopped, and its events
+    /// are dropped "until Restart (which sends that panel's
+    /// `panel_opened` again)", which starts it again.
+    #[gpui::test]
+    fn a_crashed_plugins_panels_stay_listed_as_stopped_until_restart(cx: &mut TestAppContext) {
+        let lab = Lab::new("panel-restart");
+        let panels = concat!(
+            "panels:\n",
+            "  - { id: containers, title: Containers }\n",
+            "  - { id: logs, title: Logs }\n",
+        );
+        let crasher = lab.plugin("crasher", "crash", panels);
+        let (host, seen) = lab.host(cx, [("crasher", grant("crash", &[], &[]))]);
+        let changes = panel_changes(&host, cx);
+        let ids = |listed: &[ListedPanel]| -> Vec<String> {
+            listed.iter().map(|panel| panel.panel.clone()).collect()
+        };
+        let before = listed(&host, cx, "crasher");
+        assert_eq!(ids(&before), ["containers", "logs"]);
+        assert!(before.iter().all(|panel| !panel.stopped), "{before:?}");
+
+        host.update(cx, |host, cx| {
+            host.panel_opened("crasher", "containers", cx);
+        });
+        wait_until(cx, "the crash", |cx| {
+            state(&host, cx, "crasher") == Some(State::Stopped)
+        });
+        let stopped = listed(&host, cx, "crasher");
+        assert_eq!(ids(&stopped), ["containers", "logs"], "a panel left");
+        assert!(stopped.iter().all(|panel| panel.stopped), "{stopped:?}");
+        assert_eq!(stopped[0].name, "Name of crasher");
+        assert!(changes.get() >= 1, "the workspace wasn't told of the crash");
+
+        // A stopped plugin's events are dropped: nothing restarts it.
+        host.update(cx, |host, cx| {
+            host.panel_action("crasher", "containers", "refresh", cx);
+            host.panel_closed("crasher", "containers", cx);
+        });
+        settle(cx);
+        assert_eq!(pids(&crasher).len(), 1, "it was restarted by an event");
+
+        let told = changes.get();
+        host.update(cx, |host, cx| host.restart("crasher", "logs", cx));
+        let restarted = host.read_with(cx, |host, _| host.panels());
+        assert!(
+            restarted.iter().all(|panel| !panel.stopped),
+            "{restarted:?}"
+        );
+        assert!(changes.get() > told, "the workspace wasn't told of Restart");
+        let got = wait_for_events(cx, &crasher, 2);
+        assert_eq!(names(&got), ["panel_opened", "panel_opened"]);
+        assert_eq!(got[0]["panel"], "containers");
+        assert_eq!(got[1]["panel"], "logs", "Restart sends that panel's");
+        assert_eq!(pids(&crasher).len(), 2, "Restart didn't start it");
+
+        // It crashes on that event too: stopped again, one notice each.
+        wait_until(cx, "the second crash", |cx| {
+            state(&host, cx, "crasher") == Some(State::Stopped)
+        });
+        settle(cx);
+        assert_eq!(notices(&seen).len(), 2, "{:?}", notices(&seen));
+        assert_eq!(ids(&listed(&host, cx, "crasher")), ["containers", "logs"]);
     }
 }

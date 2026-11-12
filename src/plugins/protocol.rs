@@ -3,6 +3,7 @@
 //! plugin sends is untrusted input (threat model 0005, TB1).
 
 use super::manifest::{API, Right};
+use super::panel::{self, Item};
 use crate::config::Setting;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -13,10 +14,7 @@ const MAX_LOG_CHARS: usize = 1024;
 /// What Tern tells a plugin.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
-#[allow(
-    dead_code,
-    reason = "commands, panels and results are sent from T-067 to T-069"
-)]
+#[allow(dead_code, reason = "commands and results are sent by T-068")]
 pub enum Event {
     Start,
     Command { command: String },
@@ -97,9 +95,8 @@ pub enum Action {
     Ready,
     SetPanel {
         panel: String,
-        // TODO(T-069): the panel items get their types with the sidebar.
         #[serde(default)]
-        items: serde_json::Value,
+        items: Vec<Item>,
     },
     AppendLog {
         panel: String,
@@ -149,14 +146,21 @@ impl Action {
     /// The action in `line`, or why the line is dropped. The reason never
     /// quotes the line (TM-plug-17).
     pub fn parse(line: &str) -> Result<Self, String> {
-        serde_json::from_str(line).map_err(|error| {
+        let action = serde_json::from_str(line).map_err(|error| {
             use serde_json::error::Category;
             match error.classify() {
                 Category::Data => "an unknown action, or one with a field missing",
                 _ => "not a JSON object",
             }
             .to_owned()
-        })
+        })?;
+        match action {
+            Action::SetPanel { panel, items } => Ok(Action::SetPanel {
+                panel,
+                items: panel::checked(items)?,
+            }),
+            action => Ok(action),
+        }
     }
 
     /// Its name on the wire, for the plugin's log.
@@ -415,7 +419,7 @@ mod tests {
         let actions = [
             (json!({ "action": "ready" }), None),
             (
-                json!({ "action": "set_panel", "panel": "containers", "items": [{ "text": "web" }] }),
+                json!({ "action": "set_panel", "panel": "containers", "items": [{ "type": "text", "text": "web" }] }),
                 None,
             ),
             (
@@ -611,5 +615,290 @@ mod tests {
     fn an_endless_log_line_is_cut() {
         let line = "é".repeat(1024 * 1024);
         assert!(log_line(&line).len() <= 64 * 1024);
+    }
+
+    /// A `set_panel` line for the panel `containers` with `items`.
+    fn set_panel(items: Value) -> String {
+        json!({ "action": "set_panel", "panel": "containers", "items": items }).to_string()
+    }
+
+    /// The items Tern took from a `set_panel` with `items`.
+    fn items_of(items: Value) -> Vec<Item> {
+        match Action::parse(&set_panel(items.clone())) {
+            Ok(Action::SetPanel { panel, items }) => {
+                assert_eq!(panel, "containers");
+                items
+            }
+            other => panic!("{items} gave {other:?}"),
+        }
+    }
+
+    /// A `set_panel` whose one item is a button carrying `command`.
+    fn command_button(command: Value) -> String {
+        set_panel(json!([{ "type": "button", "id": "go", "label": "Go", "command": command }]))
+    }
+
+    /// Actions table: `set_panel` "replaces a panel's items: text, rows
+    /// with buttons, buttons, command buttons, one input field, a log".
+    /// Each arrives typed, with what the plugin sent.
+    #[test]
+    fn a_set_panel_holds_every_kind_of_item() {
+        use crate::plugins::command::Command;
+        use crate::plugins::panel::RowButton;
+        let items = items_of(json!([
+            { "type": "text", "text": "3 running" },
+            { "type": "row", "id": "web", "text": "web", "detail": "Up 2 h",
+              "buttons": [{ "id": "web.restart", "label": "Restart" }] },
+            { "type": "row", "text": "db" },
+            { "type": "button", "id": "refresh", "label": "Refresh" },
+            { "type": "button", "id": "ps", "label": "List",
+              "command": { "action": "fill_command", "text": "docker ps" } },
+            { "type": "button", "id": "prune", "label": "Prune",
+              "command": { "action": "run_command", "text": "docker system prune" } },
+            { "type": "button", "id": "sh", "label": "Shell",
+              "command": { "action": "open_tab", "argv": ["docker", "exec", "-it", "web", "sh"] } },
+            { "type": "input", "placeholder": "Filter" },
+            { "type": "log" },
+        ]));
+        let button = |id: &str, label: &str, command: Option<Command>| Item::Button {
+            id: id.into(),
+            label: label.into(),
+            command,
+        };
+        let argv = ["docker", "exec", "-it", "web", "sh"];
+        let expected = [
+            Item::Text {
+                text: "3 running".into(),
+            },
+            Item::Row {
+                id: Some("web".into()),
+                text: "web".into(),
+                detail: Some("Up 2 h".into()),
+                buttons: vec![RowButton {
+                    id: "web.restart".into(),
+                    label: "Restart".into(),
+                }],
+            },
+            Item::Row {
+                id: None,
+                text: "db".into(),
+                detail: None,
+                buttons: Vec::new(),
+            },
+            button("refresh", "Refresh", None),
+            button(
+                "ps",
+                "List",
+                Some(Command::Fill {
+                    text: "docker ps".into(),
+                }),
+            ),
+            button(
+                "prune",
+                "Prune",
+                Some(Command::Run {
+                    text: "docker system prune".into(),
+                }),
+            ),
+            button(
+                "sh",
+                "Shell",
+                Some(Command::OpenTab {
+                    argv: argv.map(str::to_owned).to_vec(),
+                }),
+            ),
+            Item::Input {
+                placeholder: Some("Filter".into()),
+            },
+            Item::Log,
+        ];
+        assert_eq!(items, expected);
+    }
+
+    /// AC7, Untrusted text, TM-plug-04: a command with "a newline, ESC or
+    /// a right-to-left override (U+202E)", a zero-width character or over
+    /// 4 KiB "is refused", and "the same holds on a command button": the
+    /// whole `set_panel` is dropped, so no part of it is drawn.
+    #[test]
+    fn a_set_panel_with_a_command_tern_wont_show_is_dropped_whole() {
+        let texts = [
+            "ls\nrm -rf ~".to_owned(),
+            "ls \u{1b}[2K".to_owned(),
+            "ls \u{202E}fdp.exe".to_owned(),
+            "cu\u{200B}rl example.com".to_owned(),
+            "x".repeat(4097),
+        ];
+        for text in &texts {
+            let shown: String = text.escape_debug().take(24).collect();
+            for action in ["fill_command", "run_command"] {
+                let line = command_button(json!({ "action": action, "text": text }));
+                assert!(Action::parse(&line).is_err(), "{action} with {shown}");
+            }
+            let line = command_button(json!({ "action": "open_tab", "argv": ["sh", "-c", text] }));
+            assert!(Action::parse(&line).is_err(), "open_tab with {shown}");
+        }
+        // One bad button among good items drops them all.
+        let line = set_panel(json!([
+            { "type": "text", "text": "3 running" },
+            { "type": "button", "id": "ok", "label": "List",
+              "command": { "action": "fill_command", "text": "docker ps" } },
+            { "type": "button", "id": "bad", "label": "Refresh",
+              "command": { "action": "fill_command", "text": "ls\n" } },
+        ]));
+        assert!(Action::parse(&line).is_err());
+    }
+
+    /// TM-plug-05: an `open_tab` button with no program has nothing to
+    /// show or run, so its `set_panel` is dropped.
+    #[test]
+    fn a_set_panel_with_an_open_tab_button_without_a_program_is_dropped() {
+        for argv in [json!([]), json!([""]), json!(["", "-it"])] {
+            let line = command_button(json!({ "action": "open_tab", "argv": argv }));
+            assert!(Action::parse(&line).is_err(), "{argv}");
+        }
+    }
+
+    /// Command buttons, TM-plug-23: a button "may carry one
+    /// `fill_command`, `run_command` or `open_tab`"; "`read_output` is
+    /// never on a button", nor is any other action, and a command it can't
+    /// read never becomes a plain button under the same label.
+    #[test]
+    fn a_button_carries_no_other_action_than_the_three() {
+        let commands = [
+            json!({ "action": "read_output", "lines": 100 }),
+            json!({ "action": "notify", "text": "hi" }),
+            json!({ "action": "open_panel", "panel": "containers" }),
+            json!({ "action": "launch_missiles" }),
+            json!({ "action": "run_command" }),
+            json!({ "text": "ls" }),
+            json!("ls"),
+        ];
+        for command in commands {
+            let line = command_button(command.clone());
+            assert!(Action::parse(&line).is_err(), "{command}");
+        }
+    }
+
+    /// AC7, Untrusted text (owner, OQ-035): `сurl example.com` with a
+    /// Cyrillic `с` is not refused on a command button, and its text
+    /// reaches the panel as it was sent, for the highlight to show.
+    #[test]
+    fn a_command_button_with_a_look_alike_letter_is_kept_as_sent() {
+        use crate::plugins::command::Command;
+        for action in ["fill_command", "run_command"] {
+            let items = items_of(json!([
+                { "type": "button", "id": "get", "label": "Fetch",
+                  "command": { "action": action, "text": "сurl example.com" } },
+            ]));
+            let [Item::Button { command, .. }] = &items[..] else {
+                panic!("{items:?}");
+            };
+            let text = match command {
+                Some(Command::Fill { text } | Command::Run { text }) => text,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(text, "сurl example.com", "{action}");
+        }
+    }
+
+    /// Actions table, TM-plug-02: "Panel items are a fixed set Tern
+    /// renders": an item of a kind Tern doesn't know, or one missing what
+    /// its kind needs, drops the `set_panel`, as does a second input field
+    /// or log ("one input field, a log").
+    #[test]
+    fn a_set_panel_with_an_item_tern_cannot_draw_is_dropped() {
+        let item_lists = [
+            json!([{ "type": "html", "html": "<b>hi</b>" }]),
+            json!([{ "type": "image", "path": "/etc/passwd" }]),
+            json!([{ "type": "Text", "text": "x" }]),
+            json!([{ "text": "no type" }]),
+            json!(["text"]),
+            json!([{ "type": "text" }]),
+            json!([{ "type": "row", "id": "web" }]),
+            json!([{ "type": "button", "label": "no id" }]),
+            json!([{ "type": "button", "id": "no-label" }]),
+            json!([{ "type": "row", "text": "web", "buttons": [{ "label": "no id" }] }]),
+            json!({ "type": "text", "text": "not a list" }),
+            json!([{ "type": "input" }, { "type": "text", "text": "x" }, { "type": "input" }]),
+            json!([{ "type": "log" }, { "type": "log" }]),
+        ];
+        for items in item_lists {
+            let reason = Action::parse(&set_panel(items.clone())).expect_err("dropped");
+            assert!(!reason.is_empty(), "no reason for {items}");
+        }
+        // One input field and one log are what a panel may have.
+        assert_eq!(
+            items_of(json!([{ "type": "input" }, { "type": "log" }])).len(),
+            2
+        );
+    }
+
+    /// TM-plug-17: the reason a `set_panel` is dropped for goes into the
+    /// plugin's log, so it never quotes the command or the items.
+    #[test]
+    fn the_reason_a_set_panel_is_dropped_for_never_quotes_it() {
+        let lines = [
+            command_button(json!({ "action": "run_command", "text": "hunter2-secret\n" })),
+            command_button(json!({ "action": "open_tab", "argv": ["", "hunter2-secret"] })),
+            command_button(json!({ "action": "hunter2-secret" })),
+            set_panel(json!([{ "type": "hunter2-secret" }])),
+            set_panel(
+                json!([{ "type": "input", "placeholder": "hunter2-secret" }, { "type": "input" }]),
+            ),
+        ];
+        for line in lines {
+            let reason = Action::parse(&line).expect_err("dropped");
+            assert!(!reason.contains("hunter2"), "{reason}");
+        }
+    }
+
+    /// AC7, Untrusted text: "panel text containing escape sequences
+    /// renders as plain text": what reaches the panel holds no control
+    /// character and no character that hides or reorders text, in a text,
+    /// a row, a label or a placeholder.
+    #[test]
+    fn a_set_panels_texts_arrive_as_plain_text() {
+        let hostile = "ok\u{1b}[2J\u{1b}]0;title\u{7}\u{0} \u{202E}evil\u{202C}\u{200B}\u{FEFF}\r";
+        let items = items_of(json!([
+            { "type": "text", "text": hostile },
+            { "type": "row", "id": "r", "text": hostile, "detail": hostile,
+              "buttons": [{ "id": "b", "label": hostile }] },
+            { "type": "button", "id": "c", "label": hostile },
+            { "type": "input", "placeholder": hostile },
+        ]));
+        let hidden = |c: char| {
+            (c.is_control() && c != '\n')
+                || matches!(
+                    c,
+                    '\u{200B}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+                )
+        };
+        // Every string of the items, through their debug form: none may
+        // hold an escaped control or invisible character.
+        let texts: Vec<String> = items
+            .iter()
+            .flat_map(|item| match item {
+                Item::Text { text } => vec![text.clone()],
+                Item::Row {
+                    text,
+                    detail,
+                    buttons,
+                    ..
+                } => {
+                    let labels = buttons.iter().map(|button| button.label.clone());
+                    let mut texts = vec![text.clone(), detail.clone().unwrap_or_default()];
+                    texts.extend(labels);
+                    texts
+                }
+                Item::Button { label, .. } => vec![label.clone()],
+                Item::Input { placeholder } => vec![placeholder.clone().unwrap_or_default()],
+                Item::Log => Vec::new(),
+            })
+            .collect();
+        assert_eq!(texts.len(), 6);
+        for text in texts {
+            assert!(!text.chars().any(hidden), "{text:?}");
+            assert!(text.starts_with("ok") && text.contains("evil"), "{text:?}");
+        }
     }
 }

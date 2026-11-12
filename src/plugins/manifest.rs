@@ -70,13 +70,8 @@ pub struct Manifest {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Named {
     pub id: String,
-    #[allow(
-        dead_code,
-        reason = "shown by the palette and the sidebar (T-068, T-069)"
-    )]
     pub title: String,
     /// A panel's icon, by the name of one of Tern's own.
-    #[allow(dead_code, reason = "drawn by the sidebar (T-069)")]
     pub icon: Option<String>,
 }
 
@@ -345,7 +340,7 @@ fn is_id(id: &str) -> bool {
 }
 
 /// Untrusted text as it's shown: the title rules, cut at `max` characters.
-fn shown(text: &str, max: usize) -> String {
+pub(super) fn shown(text: &str, max: usize) -> String {
     clean_title(text).chars().take(max).collect()
 }
 

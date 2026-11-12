@@ -289,7 +289,7 @@ pub struct Workspace {
     /// The app's port forwards, from the first one on (spec 0017).
     forwards: Option<Entity<crate::forwards::registry::Registry>>,
     /// The plugin host, from the first frame on (spec 0016).
-    plugins: Option<Entity<crate::plugins::Host>>,
+    plugins: Option<plugins::Plugins>,
     /// A close the user chose "Upload and close" for, waiting on the
     /// uploads (spec 0008, flow 3).
     closing: Option<Closing>,
