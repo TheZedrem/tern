@@ -206,6 +206,11 @@ nothing touching a terminal before the user saw and approved it.
   a format character (Unicode `Cf`: direction overrides, zero-width and
   tag characters) is refused, and so is text over 4 KiB. The bar wraps
   and shows all of the text, never truncated, so it shows all of what would run.
+  Every non-ASCII character in that text is drawn highlighted, on a bar
+  and on a command button, under a line saying the command contains
+  non-ASCII characters, so a look-alike letter (a Cyrillic `с` in `сurl`)
+  stands out. It is a plain ASCII check: no locale, no script table, and
+  nothing is refused for it (owner, 2026-11-12).
   `open_tab` shows each argv element separately under the same rules. On
   Windows, an `open_tab` whose program contains `"` or ends in `.bat` or
   `.cmd` is refused, since `cmd.exe` would re-parse its arguments.
@@ -326,7 +331,7 @@ after the first frame on a background thread. T-066 reports
 4. `run_command` shows a bar on the target pane with the exact text. Typing `ls` and Enter while it shows runs `ls` in the shell and confirms nothing. Deny writes nothing to the PTY; Allow types the text and Enter; the plugin gets `action_result` either way (Linux and Windows).
 5. With `terminal_write` not ticked, `run_command` shows no bar, the plugin gets `refused`, and its log names the missing right. With `pane_opened` declared but not ticked, opening a pane sends the plugin nothing.
 6. After `read_output`, the plugin receives nothing until Allow; the `output` text equals the bar's preview byte for byte; with Deny it gets `denied` and no text.
-7. `fill_command` with a newline, ESC or a right-to-left override (U+202E) in its text is refused, and panel text containing escape sequences renders as plain text.
+7. `fill_command` with a newline, ESC or a right-to-left override (U+202E) in its text is refused, and panel text containing escape sequences renders as plain text. `run_command` with `сurl example.com` (Cyrillic `с`) shows its bar with only the `с` highlighted and the non-ASCII line above it; `curl example.com` shows neither. The same holds on a command button.
 8. A plugin writing 100,000 `append_log` lines a second leaves typing in a pane responsive, its panel shows the last 10,000 lines, and Tern's memory stays flat.
 9. Killing a running plugin's process shows one notice and "stopped" with Restart on its panels; other plugins and panes carry on. Quitting Tern leaves no plugin process behind on Linux and Windows, and starting a plugin on Windows flashes no console window.
 10. A panel button carrying `run_command` shows all of its text under its label; one click types the text and Enter into the terminal pane that last had focus, with no bar, and the plugin gets `panel_action` (Linux and Windows). With `terminal_write` not ticked the button is disabled, and a click within 0.5 s of a `set_panel` that changed the panel runs nothing.

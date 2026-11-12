@@ -10,6 +10,9 @@ Manifest commands in the palette and the keymap (`plugin.<plugin>.<command>`),
 that never takes keyboard focus, plus `plugin.allowRequest` and
 `plugin.denyRequest` (spec 0016, §Model Confirmation, flow 5), with threat
 model 0005's TM-plug-01 (labels), -03 to -09, -16 (read count) and -20.
+The bar highlights every non-ASCII character of the command under a line
+saying so (§Model Untrusted text, AC7); the highlighting lives in one
+place that T-069's command buttons use too.
 Also carries out a command button's click (§Model Command buttons,
 TM-plug-23): the same text rules, right check and log line, no bar; the
 button itself is drawn in T-069. Checked on

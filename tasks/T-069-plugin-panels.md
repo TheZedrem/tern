@@ -8,7 +8,8 @@ A plugin's manifest panels appear in the app sidebar; `set_panel`,
 `append_log` and `open_panel` fill and show them, clicks and input come
 back as `panel_action` and `panel_input`, a log keeps its last 10,000
 lines, and a stopped plugin's panels offer Restart (spec 0016). Draws
-command buttons with all of their command under the label, disabled
+command buttons with all of their command under the label, its non-ASCII
+characters highlighted as on a bar (§Model Untrusted text), disabled
 without the right, ignoring clicks for 0.5 s after the panel changed
 (§Model Command buttons); T-068 carries the click out. Registers each
 panel with `sidebar::Sidebar::register` as the built-in ones do, maps a
