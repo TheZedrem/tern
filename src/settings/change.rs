@@ -3,6 +3,7 @@
 //! no new config notice.
 
 use super::yaml;
+use crate::commands;
 use crate::config::{self, Config, Profile, ProfileKind};
 use std::path::Path;
 
@@ -13,6 +14,15 @@ pub enum Change {
     /// same YAML, so the edit can be checked.
     Set {
         path: Vec<&'static str>,
+        value: String,
+        reads: fn(&Config) -> String,
+    },
+    /// The top-level scalar `to` set like [`Change::Set`], and the line of
+    /// `from`, the name it had before, removed: a setting that was renamed
+    /// is written under its new name only.
+    Renamed {
+        from: &'static str,
+        to: &'static str,
         value: String,
         reads: fn(&Config) -> String,
     },
@@ -36,6 +46,7 @@ impl Change {
     pub fn describe(&self) -> String {
         match self {
             Change::Set { path, .. } => path.join("."),
+            Change::Renamed { to, .. } => (*to).to_owned(),
             Change::Bind { command, .. } => format!("keybindings (for {command})"),
             Change::Profile { id, .. } => format!("profiles.{id}"),
         }
@@ -45,8 +56,14 @@ impl Change {
     pub fn apply(&self, text: &str) -> Option<String> {
         match self {
             Change::Set { path, value, .. } => yaml::set_scalar(text, path, value),
+            Change::Renamed {
+                from, to, value, ..
+            } => yaml::set_scalar(&yaml::remove(text, &[from])?, &[to], value),
             Change::Bind { command, keys } => {
-                let text = yaml::remove_where(text, "keybindings", |_, bound| bound == *command)?;
+                let text = yaml::remove_where(text, "keybindings", |_, bound| {
+                    // An entry under the command's old name is its key too.
+                    commands::current_id(bound) == *command
+                })?;
                 match keys {
                     Some(keys) => yaml::upsert(
                         &text,
@@ -71,12 +88,14 @@ impl Change {
         }
         let config = &after.config;
         match self {
-            Change::Set { value, reads, .. } => reads(config) == *value,
+            Change::Set { value, reads, .. } | Change::Renamed { value, reads, .. } => {
+                reads(config) == *value
+            }
             Change::Bind { command, keys } => {
                 let bound: Vec<&str> = config
                     .keybindings
                     .iter()
-                    .filter(|binding| binding.command == *command)
+                    .filter(|binding| commands::current_id(&binding.command) == *command)
                     .map(|binding| binding.keys.as_str())
                     .collect();
                 match keys {
@@ -246,7 +265,7 @@ pub fn new_id(name: &str, taken: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{LocalProfile, SshProfile, TEMPLATE, parse};
+    use crate::config::{LocalProfile, SidebarSide, SshProfile, TEMPLATE, parse};
     use std::path::PathBuf;
 
     /// A config with two profiles, each with a comment, and keys around them.
@@ -389,6 +408,132 @@ font:
         for value in ["ask", "weekly", "\"\""] {
             assert!(update_check(value).edited(TEMPLATE).is_err(), "{value}");
         }
+    }
+
+    /// What the settings screen writes when the sidebar's side is picked
+    /// (spec 0018, Migration): `app_sidebar`, and its old name's line gone.
+    fn sidebar_side(value: &str) -> Change {
+        Change::Renamed {
+            from: "sftp_sidebar",
+            to: "app_sidebar",
+            value: value.into(),
+            reads: |config| side_name(config).to_owned(),
+        }
+    }
+
+    /// `app_sidebar` as the file writes it.
+    fn side_name(config: &Config) -> &'static str {
+        match config.app_sidebar {
+            SidebarSide::Left => "left",
+            SidebarSide::Right => "right",
+        }
+    }
+
+    /// Spec 0018, Migration [load-bearing] and AC4: on a config that holds
+    /// only the old `sftp_sidebar: left`, changing the side leaves
+    /// `app_sidebar` and no `sftp_sidebar` line. Every other line, with
+    /// its comment, stays as it was, and the file reads back as picked
+    /// without a notice.
+    #[test]
+    fn changing_the_side_writes_app_sidebar_and_removes_the_sftp_sidebar_line() {
+        let text = "\
+# my settings
+scrollback: 500   # lines
+sftp_sidebar: left # where the files open
+font:
+  size: 13 # pt
+";
+        for value in ["right", "left"] {
+            let edited = sidebar_side(value).edited(text).unwrap();
+            assert!(!edited.contains("sftp_sidebar"), "{value}:\n{edited}");
+            let written: Vec<&str> = edited
+                .lines()
+                .filter(|line| line.starts_with("app_sidebar:"))
+                .collect();
+            assert_eq!(written.len(), 1, "{value}:\n{edited}");
+            assert!(
+                written[0].starts_with(&format!("app_sidebar: {value}")),
+                "{value}: {}",
+                written[0]
+            );
+            for kept in [
+                "# my settings",
+                "scrollback: 500   # lines",
+                "font:",
+                "  size: 13 # pt",
+            ] {
+                assert!(
+                    edited.lines().any(|line| line == kept),
+                    "{value}: `{kept}` is gone from\n{edited}"
+                );
+            }
+            let loaded = parse(&edited);
+            assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+            assert_eq!(side_name(&loaded.config), value);
+            assert_eq!(loaded.config.scrollback, 500);
+            assert_eq!(loaded.config.font.size, 13.0);
+        }
+    }
+
+    /// Spec 0018, Migration: in a file that has both names, changing the
+    /// side rewrites `app_sidebar` and takes the stale `sftp_sidebar` line
+    /// out, so one name is left.
+    #[test]
+    fn changing_the_side_of_a_config_with_both_names_leaves_app_sidebar_only() {
+        let text = "sftp_sidebar: left\nscrollback: 500\napp_sidebar: left # mine\n";
+        let edited = sidebar_side("right").edited(text).unwrap();
+        assert!(!edited.contains("sftp_sidebar"), "{edited}");
+        let written: Vec<&str> = edited
+            .lines()
+            .filter(|line| line.starts_with("app_sidebar:"))
+            .collect();
+        assert_eq!(written.len(), 1, "{edited}");
+        assert!(written[0].starts_with("app_sidebar: right"), "{edited}");
+        assert!(edited.contains("scrollback: 500\n"), "{edited}");
+        assert_eq!(parse(&edited).config.app_sidebar, SidebarSide::Right);
+    }
+
+    /// Spec 0018, Module surface, and spec 0009 in-place edits: on the
+    /// template, changing the side rewrites the `app_sidebar` line alone
+    /// and keeps its comment.
+    #[test]
+    fn changing_the_side_on_the_template_rewrites_only_the_app_sidebar_line() {
+        let edited = sidebar_side("left").edited(TEMPLATE).unwrap();
+        let (gone, added) = changed(TEMPLATE, &edited);
+        assert_eq!(gone.len(), 1, "{gone:?}");
+        assert!(gone[0].starts_with("app_sidebar: right"), "{gone:?}");
+        assert_eq!(added.len(), 1, "{added:?}");
+        assert!(added[0].starts_with("app_sidebar: left "), "{added:?}");
+        assert!(added[0].contains(" # "), "the comment is gone: {added:?}");
+        assert!(!edited.contains("sftp_sidebar"), "{edited}");
+        assert_eq!(parse(&edited).config.app_sidebar, SidebarSide::Left);
+    }
+
+    /// Spec 0018, Module surface (`sftp.toggle` stays an accepted name for
+    /// `sidebar.toggle` in `keybindings:`), with spec 0009, flow 3
+    /// ("Record" takes the next key combination as the command's key): in
+    /// a config that binds the sidebar under its old name, recording a new
+    /// key for "Toggle sidebar" leaves that key as the only one the config
+    /// gives it.
+    #[test]
+    fn recording_a_key_for_the_sidebar_replaces_a_binding_under_its_old_name() {
+        use crate::commands::keymap::plan;
+
+        let text = "keybindings:\n  ctrl+shift+y: sftp.toggle\n  ctrl+shift+n: tab.new\n";
+        let record = Change::Bind {
+            command: "sidebar.toggle",
+            keys: Some("ctrl+shift+k".into()),
+        };
+        let edited = record.edited(text).unwrap();
+        let loaded = parse(&edited);
+        let (planned, notices) = plan(&loaded.config.keybindings);
+        assert!(notices.is_empty(), "{notices:?}");
+        let keys: Vec<&str> = planned
+            .iter()
+            .filter(|(_, command)| command.id == "sidebar.toggle")
+            .map(|(keys, _)| keys.as_str())
+            .collect();
+        assert_eq!(keys, ["ctrl-shift-k"], "{edited}");
     }
 
     /// Spec 0009, in-place edits and AC 6: a key in flow style isn't

@@ -175,7 +175,7 @@ impl FilesPane {
             BrowserEvent::Notice(notice) => cx.emit(FilesEvent::Notice(notice.clone())),
             BrowserEvent::Settled => cx.emit(FilesEvent::Settled),
             BrowserEvent::Run(file) => cx.emit(FilesEvent::Run(file.clone())),
-            BrowserEvent::Close => {}
+            BrowserEvent::Leave => {}
         });
         if connect {
             // Its SFTP connection asks this pane for its command, which

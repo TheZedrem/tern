@@ -1,6 +1,6 @@
 ---
 status: later
-blocked-by: [T-064, T-066, T-080]
+blocked-by: []
 ---
 # T-069: Plugin panels in the app sidebar
 
@@ -10,8 +10,13 @@ back as `panel_action` and `panel_input`, a log keeps its last 10,000
 lines, and a stopped plugin's panels offer Restart (spec 0016). Draws
 command buttons with all of their command under the label, disabled
 without the right, ignoring clicks for 0.5 s after the panel changed
-(§Model Command buttons); T-068 carries the click out. Needs the
-app sidebar's spec and build first. Builds threat model 0005's
+(§Model Command buttons); T-068 carries the click out. Registers each
+panel with `sidebar::Sidebar::register` as the built-in ones do, maps a
+manifest icon name to the embedded set, turns the sidebar's `Shown` and
+`Hidden` into `panel_opened` and `panel_closed`, and builds spec 0018's
+flow 6: one `open_panel` per act of the user's, none while the keyboard
+is in another panel, and the sidebar ignoring clicks for 0.5 s after
+one. T-080 left these four to this task. Builds threat model 0005's
 TM-plug-01 (panel header), -02, -10 (visible rows only), -17 and -23.
 Area: src.
 

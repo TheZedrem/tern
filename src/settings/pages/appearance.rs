@@ -1,7 +1,7 @@
 //! The Appearance tab: font, colors, where the bars sit, the cursor, how
 //! the focused pane stands out.
 
-use crate::config::{Config, CursorStyle, SftpSide, TabBarSide};
+use crate::config::{Config, CursorStyle, SidebarSide, TabBarSide};
 use crate::settings::change::Change;
 use crate::settings::{Field, Page, Pick, Row, SettingsView, choice};
 use gpui::{Context, IntoElement};
@@ -77,17 +77,21 @@ impl SettingsView {
             ),
             Row::new(
                 Page::Appearance,
-                "SFTP",
-                "SFTP sidebar",
-                "sftp files sidebar panel left right side remote browser",
+                "Sidebar",
+                "Sidebar",
+                "sidebar sftp files hosts panel left right side remote browser",
                 self.options(
-                    "sftp-sidebar",
+                    "app-sidebar",
                     &[("left", "Left"), ("right", "Right")],
                     sftp_side(config),
                     |value| {
-                        choice(vec!["sftp_sidebar"], value, |config| {
-                            sftp_side(config).to_owned()
-                        })
+                        // The setting's old name goes with the first change.
+                        Change::Renamed {
+                            from: "sftp_sidebar",
+                            to: "app_sidebar",
+                            value: value.to_owned(),
+                            reads: |config| sftp_side(config).to_owned(),
+                        }
                     },
                     cx,
                 )
@@ -175,10 +179,10 @@ fn tab_bar_side(config: &Config) -> &'static str {
     }
 }
 
-/// `sftp_sidebar` as the file writes it.
+/// `app_sidebar` as the file writes it.
 fn sftp_side(config: &Config) -> &'static str {
-    match config.sftp_sidebar {
-        SftpSide::Left => "left",
-        SftpSide::Right => "right",
+    match config.app_sidebar {
+        SidebarSide::Left => "left",
+        SidebarSide::Right => "right",
     }
 }

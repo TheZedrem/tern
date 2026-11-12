@@ -139,6 +139,7 @@ impl Workspace {
     pub(super) fn render_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> TabBar {
         let renaming = self.rename.as_ref().map(|rename| rename.tab);
         let settings = Self::settings_button("settings-button", cx);
+        let sidebar = Self::sidebar_button("sidebar-button", cx);
         let tabs = self.tabs.tabs().iter().enumerate().map(|(ix, tab)| {
             let title = self.tab_title(tab, cx);
             let is_renaming = renaming == Some(tab.id);
@@ -227,6 +228,7 @@ impl Workspace {
             .flex()
             .items_center()
             .child(new_tab)
+            .child(sidebar)
             .child(settings)
             .when(client_decorated, |suffix| {
                 suffix.child(Self::window_controls(window))
@@ -373,6 +375,7 @@ impl Workspace {
             .children(tabs)
             .child(new_tab)
             .child(rest)
+            .child(Self::sidebar_button("side-sidebar-button", cx))
             .child(Self::settings_button("side-settings-button", cx))
     }
 

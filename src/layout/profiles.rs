@@ -148,7 +148,12 @@ impl Workspace {
     }
 
     /// Opens profile or host `id` in a new tab.
-    fn open_profile_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_profile_tab(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let profile = self.config.profile_or_default(id);
         let leaf = self.tabs.new_tab();
         self.spawn_pane(leaf, profile, None, window, cx);

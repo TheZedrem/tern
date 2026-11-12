@@ -49,10 +49,11 @@ earlier Tauri version took 1.07 s to start and was dropped.
 - Import hosts from MobaXterm, Tabby, PuTTY and WinSCP in one click. PuTTY's
   `.ppk` keys need converting with `puttygen` first, and Pageant users must
   turn on Pageant's OpenSSH pipe for `ssh` to use it
-- An SFTP sidebar on every SSH pane: browse, download, upload (drag and drop too), rename and delete
+- A sidebar that stays open across tabs (`Ctrl+Shift+S`), showing the active pane's files: an SSH pane's over SFTP, a local shell's from its folder. Browse, download, upload (drag and drop too), rename and delete
+- Your SSH hosts in the same sidebar, filtered as you type and opened with a double click
 - Edit remote files in your own editor; saves are uploaded on a click, on save or on focus
 - A files pane that shows the local disk or any saved host as a tree next to your terminals
-- Port forwards (local, remote and SOCKS) from the SSH pane's sidebar, listening on 127.0.0.1 unless you allow the network; never saved
+- Port forwards (local, remote and SOCKS) from the sidebar, listening on 127.0.0.1 unless you allow the network; never saved
 
 **Privacy**
 
@@ -96,12 +97,12 @@ shell. You can rebind all of them in the settings or in `config.yaml`.
 | `Ctrl+Shift+W` | Close the pane |
 | `Alt+1`–`9`, `Alt+←↑→↓` | Go to a tab, or to the next pane in that direction |
 | `Ctrl+Shift+F` | Search the scrollback |
-| `Ctrl+Shift+S` | SFTP sidebar of an SSH pane |
+| `Ctrl+Shift+S` | Sidebar: the pane's files, SSH hosts, an SSH pane's port forwards |
 | `Ctrl+Shift+B` / `Ctrl+Shift+O` | Files pane / switch its host |
 
 ## Shell integration
 
-To have splits, restored tabs and an SSH pane's SFTP sidebar open in the
+To have splits, restored tabs and an SSH pane's files in the sidebar open in the
 folder you're in, source the snippet for your shell from its rc file. It
 reports the working directory with OSC 7 at each prompt; nothing is set
 up automatically.
@@ -113,14 +114,14 @@ up automatically.
 | PowerShell 7 | `$PROFILE` | `. /path/to/tern/shell-integration/tern.ps1` |
 
 On Linux, local panes follow `cd` without it. On a server, the snippet
-lets the SFTP sidebar start in the shell's folder. A report counts as
+lets the sidebar's files start in the shell's folder. A report counts as
 local only for this machine and an existing directory.
 
 ## Roadmap
 
 **Next**
 
-- In the file browser: fuzzy filter, path suggestions, permissions, deleting to the trash, a local sidebar, dragging files out ([tasks](tasks/))
+- In the file browser: fuzzy filter, path suggestions, permissions, deleting to the trash, dragging files out ([tasks](tasks/))
 - Signed apt and dnf repositories ([T-031](tasks/T-031-package-repositories.md))
 
 **Toward 1.0** ([roadmap](spec/architecture.md#roadmap))

@@ -397,6 +397,12 @@ impl TerminalPane {
         }
     }
 
+    /// Where a browser of this pane's local disk starts (spec 0018, Files
+    /// panel): [`Self::cwd`], else the folder the pane was started in.
+    pub fn local_folder(&self) -> Option<PathBuf> {
+        self.cwd().or_else(|| self.launch.cwd.clone())
+    }
+
     /// Stops the program: the event loop exits, which hangs up the PTY.
     pub fn shutdown(&mut self) {
         if let State::Running(running) = &self.state {

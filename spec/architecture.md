@@ -135,11 +135,12 @@ One crate. `src/main.rs` is the boot path and does only what the first
 frame needs. Everything else is a module under `src/`:
 
 - `terminal/` — the pane: PTY lifecycle, terminal element, input mapping, search. `mod.rs` holds `TerminalPane` and its render; `launch.rs` starts and restarts the program, `exit.rs` titles and exit handling, `answers.rs` prompt answering, `mouse.rs` mouse, selection and clipboard, `font.rs` font settings, `input.rs` keys and IME, `search.rs` the search bar
-- `layout/` — tabs, title bar, split tree, session restore. `mod.rs` holds `Workspace`, `Boot`, the action wiring and render; each feature it hosts has its own file: `session.rs`, `panes.rs`, `files.rs` (files panes and the SFTP sidebar), `profiles.rs` (palette and profiles), `reload.rs` (config reload and the settings screen), `closing.rs`, `splits.rs` (splits and drag and drop), `chrome.rs` (tab bar and title bar)
+- `layout/` — tabs, title bar, split tree, session restore. `mod.rs` holds `Workspace`, `Boot`, the action wiring and render; each feature it hosts has its own file: `session.rs`, `panes.rs`, `files.rs` (files panes and each SSH pane's views for the sidebar), `sidebar.rs` (the sidebar's wiring: commands, placement, saving), `profiles.rs` (palette and profiles), `reload.rs` (config reload and the settings screen), `closing.rs`, `splits.rs` (splits and drag and drop), `chrome.rs` (tab bar and title bar)
 - `commands/` — actions, keymap, palette
 - `ssh/` — hosts, the ssh command, askpass (spec 0006)
 - `files/` — the one file browser: its view, tree and every feature on it, the Local target, and the two places it is drawn, the sidebar and the files pane (spec 0013). `browser.rs` holds `Browser`; its features live in `browser/`: `navigate.rs`, `transfers.rs`, `changes.rs` (rename, delete, new folder), `edits.rs`, `menu.rs`, `render.rs`
 - `sftp/` — the SFTP target: connections, transfers and edit copies (spec 0008)
+- `sidebar/` — the window's sidebar (spec 0018): `mod.rs` holds `Sidebar`, which draws the strip, the header and the shown panel and knows no panel by name; `panel.rs` the `Panel` every panel registers as; `pane.rs` the panel that follows the active pane (Files and Port forwards) and `hosts.rs` the SSH hosts panel
 - `plugins/` — the plugin host (spec 0016): `mod.rs` holds `Host`, which finds plugins and hands each its events one at a time; `manifest.rs` reads `plugin.yaml`, `protocol.rs` the events and actions, `process.rs` one plugin's process, its pipes and the kill of its tree
 - `settings/` — the settings screen (spec 0009): `mod.rs` the view and shared rows, one file per tab in `pages/`
 - `config/` (`mod.rs` the types, `load.rs` the lenient reader, `edit.rs` in-place edits, `watch.rs` the watcher), `theme.rs`, `session.rs` — files on disk
@@ -220,7 +221,7 @@ All local, all plain files the user can read — nothing leaves the machine.
 |---|---|---|---|
 | Config | `<config_dir>/tern/config.yaml` | Settings, profiles, keybindings, inline themes | Until the user edits/deletes it |
 | User themes | `<config_dir>/tern/themes/*.yaml` | Color schemes | Same |
-| Session state | `<data_local_dir>/tern/session.json` | Window size, tab/split layout, each pane's profile, cwd and title; a files pane's target and folder (spec 0013) | Overwritten on every save; never scrollback |
+| Session state | `<data_local_dir>/tern/session.json` | Window size, tab/split layout, each pane's profile, cwd and title; a files pane's target and folder (spec 0013); the sidebar's open flag, width and shown panel (spec 0018) | Overwritten on every save; never scrollback |
 | Update check | `<data_local_dir>/tern/update.json` | Time of the last check | Overwritten on each check (spec 0011) |
 | SFTP edit copies | `<data_local_dir>/tern/edit/<run>/…`, `<run>.lock` | Remote files the user opened for editing (`0600`), and each running Tern's lock | Until their SFTP session ends; a crashed run's after the next launch's first frame (spec 0008) |
 | Secrets (Phase 2) | OS keychain | SSH passwords / key passphrases the user chose to remember | Until the user forgets or replaces it (spec 0006) |

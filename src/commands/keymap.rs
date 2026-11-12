@@ -3,7 +3,7 @@
 //! default keys, so they reach the shell again, and a key the config binds
 //! leaves the command it was the default of.
 
-use super::{AppCommand, by_id};
+use super::{AppCommand, by_config_id, by_id};
 use crate::config::{Keybinding, NewTab};
 use gpui::{App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, OperatingSystem};
 use std::collections::BTreeSet;
@@ -93,7 +93,7 @@ pub fn plan_for(
     let mut notices = Vec::new();
     let mut own = Vec::new();
     for entry in user {
-        let checked = by_id(&entry.command)
+        let checked = by_config_id(&entry.command)
             .ok_or_else(|| format!("there is no command `{}`", entry.command))
             .and_then(|command| Ok((gpui_keys(&entry.keys)?, command)));
         match checked {
@@ -159,7 +159,7 @@ pub fn defaults_for(new_tab: NewTab) -> Vec<(String, &'static str)> {
         (format!("{app}-c"), "pane.copy"),
         (format!("{app}-v"), "pane.paste"),
         (format!("{app}-f"), "pane.search"),
-        (format!("{app}-s"), "sftp.toggle"),
+        (format!("{app}-s"), "sidebar.toggle"),
         (format!("{app}-b"), "files.open"),
         (format!("{app}-o"), "files.switchTarget"),
         ("ctrl-tab".into(), "tab.next"),
@@ -475,7 +475,7 @@ mod tests {
             ("ctrl-shift-c", "pane.copy"),
             ("ctrl-shift-v", "pane.paste"),
             ("ctrl-shift-f", "pane.search"),
-            ("ctrl-shift-s", "sftp.toggle"),
+            ("ctrl-shift-s", "sidebar.toggle"),
             ("ctrl-shift-b", "files.open"),
             ("ctrl-shift-o", "files.switchTarget"),
             ("ctrl-=", "font.increase"),
@@ -492,6 +492,52 @@ mod tests {
             .map(|(keys, id)| (canonical(&keys), id))
             .collect();
         assert_eq!(actual, expected);
+    }
+
+    /// Spec 0018, Module surface and AC1: with the default config,
+    /// `Ctrl+Shift+S` toggles the sidebar and no key focuses it.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn ctrl_shift_s_toggles_the_sidebar_and_no_key_focuses_it_by_default() {
+        let (planned, notices) = plan(&[]);
+        let ran = runs(&planned, "ctrl-shift-s").map(|command| command.id);
+        assert_eq!(ran, Some("sidebar.toggle"));
+        assert_eq!(keys_of(&planned, "sidebar.toggle"), ["ctrl-shift-s"]);
+        assert!(keys_of(&planned, "sidebar.focus").is_empty());
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Spec 0018, Module surface and AC4: a `keybindings:` entry that
+    /// still names `sftp.toggle` binds its key to the sidebar toggle,
+    /// without a notice from the config or the keymap. Like any command
+    /// the config binds (spec 0004), the toggle then leaves its default
+    /// key to the shell.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_keybinding_for_sftp_toggle_toggles_the_sidebar_without_a_notice() {
+        let loaded = config::parse("keybindings:\n  \"ctrl+shift+y\": sftp.toggle\n");
+        let (planned, notices) = plan(&loaded.config.keybindings);
+        let all: Vec<&String> = loaded.notices.iter().chain(&notices).collect();
+        assert!(all.is_empty(), "{all:?}");
+        let ran = runs(&planned, "ctrl-shift-y").map(|command| command.id);
+        assert_eq!(ran, Some("sidebar.toggle"));
+        assert_eq!(keys_of(&planned, "sidebar.toggle"), ["ctrl-shift-y"]);
+        assert!(
+            runs(&planned, "ctrl-shift-s").is_none(),
+            "`ctrl-shift-s` still runs a command"
+        );
+    }
+
+    /// Spec 0018, Module surface ("existing configs keep working"): a
+    /// config that spelled out the old default, `ctrl+shift+s:
+    /// sftp.toggle`, still toggles the sidebar with that key.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn the_old_default_binding_written_out_still_toggles_the_sidebar() {
+        let (planned, notices) = plan(&[entry("ctrl+shift+s", "sftp.toggle", 3)]);
+        let ran = runs(&planned, "ctrl-shift-s").map(|command| command.id);
+        assert_eq!(ran, Some("sidebar.toggle"));
+        assert!(notices.is_empty(), "{notices:?}");
     }
 
     /// The command `key` runs in `defaults`, if any.

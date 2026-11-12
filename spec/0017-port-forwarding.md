@@ -7,8 +7,10 @@ related: [spec 0006, spec 0008, spec 0016, OQ-033, OQ-034, threat model 0001, th
 
 # Spec: Port forwarding
 
-Pins local, remote and dynamic (SOCKS) port forwards created from an SSH
-pane's sidebar, which switches between its files and its forwards. Each
+Pins local, remote and dynamic (SOCKS) port forwards created for an SSH
+pane in the sidebar's Port forwards panel
+([spec 0018](0018-app-sidebar.md)), listed only while an SSH pane is
+active. Each
 forward is its own background `ssh -N` to the pane's host, lives until
 the user stops it or Tern quits, and is never saved. Phase 7 started
 ahead of Phases 3–6 (owner's call, 2026-11-11). Resolves OQ-033.
@@ -29,7 +31,7 @@ after its tab closes, until it's deleted or Tern quits.
 
 **In scope:**
 
-- A switch at the top of the SSH pane's sidebar (spec 0008) between Files and Port forwards
+- The Port forwards panel of the sidebar (spec 0018), listed while an SSH pane is active
 - Local (`-L`), remote (`-R`) and dynamic (`-D`) TCP forwards, one `ssh -N` process each, for the pane's host
 - Their state (starting, up, failed with `ssh`'s reason), delete, and retry
 - `ssh`'s prompts for a forward, answered in the app like the pane's own (spec 0006)
@@ -94,13 +96,13 @@ after its tab closes, until it's deleted or Tern quits.
 - `forwards::Forward::arg()` (the `-L`/`-R`/`-D` value) and `summary()` (`5432 → db.internal:5432`, `remote 9000 → localhost:3000`, `SOCKS 1080`, `5432 (network) → db.internal:5432`)
 - `ssh::forward_args(pane_args, &Forward) -> Vec<String>`, next to `ssh::sftp_args`
 - Commands `pane.portForwards` (open the sidebar on Port forwards, the keyboard in the add row) and `forwards.stop` (pick a running forward to stop), in the palette and bindable, no default keys
-- Keys of the Port forwards view: Tab and Shift+Tab walk the kind buttons, fields, checkbox, Add and the list; Enter in a field adds; Esc closes the sidebar. In the list, Up and Down select, Enter retries a failed forward, Delete or Backspace deletes
+- Keys of the Port forwards view: Tab and Shift+Tab walk the kind buttons, fields, checkbox, Add and the list; Enter in a field adds; Esc gives the keyboard back to the pane and leaves the sidebar open (spec 0018). In the list, Up and Down select, Enter retries a failed forward, Delete or Backspace deletes
 
 ### Flows
 
-1. **Open:** `pane.portForwards`, or the switch in an open sidebar, shows
-   Port forwards; the sidebar keeps the last view it showed. Opening it
-   connects nothing.
+1. **Open:** `pane.portForwards`, or the Port forwards button in the
+   sidebar's strip while an SSH pane is active, shows the Port forwards
+   panel (spec 0018). Opening it connects nothing.
 2. **Add:** a form at the top takes kind (Local, Remote, SOCKS), listen
    port, to, and a "Let other machines connect" checkbox, off each time
    the form opens. It says in words which side listens and where the

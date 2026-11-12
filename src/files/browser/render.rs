@@ -5,7 +5,7 @@ use super::{
     Browser, BrowserEvent, CONTEXT, Collapse, Connection, DeleteSelected, Dismiss,
     DownloadSelected, DownloadSelectedTo, EditSelected, Expand, FocusNextControl, FocusPath,
     FocusPreviousControl, GoUp, INDENT, LeavePath, NewFolder, OpenSelected, PATH_CONTEXT,
-    ROW_HEIGHT, Refresh, RenameSelected, SelectNext, SelectPrevious, ShowMenu, Source, UploadFiles,
+    ROW_HEIGHT, Refresh, RenameSelected, SelectNext, SelectPrevious, ShowMenu, UploadFiles,
 };
 use crate::files::MAX_ENTRIES;
 use crate::files::tree::Row;
@@ -271,7 +271,6 @@ impl Render for Browser {
         let (border, muted, drop) = (theme.border, theme.muted_foreground, theme.drag_border);
         let shown = self.link.is_some() && self.tree.root().is_some();
         let sftp = !self.is_local();
-        let closable = matches!(self.source, Source::Pane(_));
         let header = div()
             .flex()
             .items_center()
@@ -311,17 +310,7 @@ impl Render for Browser {
                     .xsmall()
                     .tooltip("Refresh (F5)")
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-            )
-            .when(closable, |header| {
-                header.child(
-                    Button::new("files-close")
-                        .icon(IconName::Close)
-                        .ghost()
-                        .xsmall()
-                        .tooltip("Close sidebar")
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(BrowserEvent::Close))),
-                )
-            });
+            );
         let path_row = div()
             .flex()
             .items_center()
@@ -465,7 +454,14 @@ impl Render for Browser {
                     input.select_all(window, cx);
                 });
             }))
-            .on_action(cx.listener(|this, _: &Dismiss, _, cx| this.answer(false, cx)))
+            .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
+                // With nothing to answer, Esc in the sidebar gives the
+                // keyboard back to the pane; a files pane ignores it.
+                if this.asks.is_empty() {
+                    cx.emit(BrowserEvent::Leave);
+                }
+                this.answer(false, cx);
+            }))
             .on_action(cx.listener(|this, _: &GoUp, _, cx| this.go_up(cx)))
             .on_action(cx.listener(|this, _: &Refresh, _, cx| this.refresh(cx)))
             .on_action(cx.listener(|this, _: &DeleteSelected, _, cx| {

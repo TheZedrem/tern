@@ -57,9 +57,12 @@ actions!(
         /// Asks GitHub for a newer release now, whatever `update_check`
         /// says (spec 0011, flow 6).
         CheckForUpdates,
-        /// Opens or closes the focused SSH pane's SFTP sidebar (spec 0008,
-        /// flow 1).
-        ToggleSftp,
+        /// Opens the sidebar on the panel it showed last, or closes it
+        /// (spec 0018, flow 1).
+        ToggleSidebar,
+        /// Puts the keyboard in the sidebar's shown panel, or gives it
+        /// back to the pane (spec 0018, flow 2).
+        FocusSidebar,
         /// Splits the focused pane with a files pane on its target, or
         /// focuses the tab's files pane (spec 0013, flow 1).
         OpenFiles,
@@ -152,8 +155,11 @@ pub const COMMANDS: &[AppCommand] = &[
     command("host.forget", Some("Forget saved password…"), || {
         Box::new(ForgetPassword)
     }),
-    command("sftp.toggle", Some("Toggle SFTP sidebar"), || {
-        Box::new(ToggleSftp)
+    command("sidebar.toggle", Some("Toggle sidebar"), || {
+        Box::new(ToggleSidebar)
+    }),
+    command("sidebar.focus", Some("Focus sidebar"), || {
+        Box::new(FocusSidebar)
     }),
     command("pane.portForwards", Some("Show port forwards"), || {
         Box::new(ShowPortForwards)
@@ -207,6 +213,20 @@ const fn command(
 /// The command config calls `id`.
 pub fn by_id(id: &str) -> Option<&'static AppCommand> {
     COMMANDS.iter().find(|command| command.id == id)
+}
+
+/// The ID of the command a `keybindings:` entry names `id`: itself, or
+/// what an old name became, so existing configs keep working (spec 0018).
+pub fn current_id(id: &str) -> &str {
+    match id {
+        "sftp.toggle" => "sidebar.toggle",
+        id => id,
+    }
+}
+
+/// The command a `keybindings:` entry names: [`by_id`], old names too.
+pub fn by_config_id(id: &str) -> Option<&'static AppCommand> {
+    by_id(current_id(id))
 }
 
 #[cfg(test)]
@@ -355,14 +375,67 @@ mod tests {
         );
     }
 
-    /// Spec 0008, flow 1: "Toggle SFTP sidebar" is in the palette,
-    /// bindable as `sftp.toggle`, and toggles the sidebar.
+    /// Spec 0018, flow 1: "Toggle sidebar" is in the palette,
+    /// bindable as `sidebar.toggle`, and toggles the sidebar.
     #[test]
-    fn toggling_the_sftp_sidebar_is_in_the_palette_and_bindable_as_sftp_toggle() {
-        let command = by_id("sftp.toggle").expect("no command has the ID `sftp.toggle`");
-        assert_eq!(command.title, Some("Toggle SFTP sidebar"));
+    fn toggling_the_sidebar_is_in_the_palette_and_bindable_as_sidebar_toggle() {
+        let command = by_id("sidebar.toggle").expect("no command has the ID `sidebar.toggle`");
+        assert_eq!(command.title, Some("Toggle sidebar"));
         let action = (command.action)();
-        assert!(action.partial_eq(&ToggleSftp), "runs {}", action.name());
+        assert!(action.partial_eq(&ToggleSidebar), "runs {}", action.name());
+    }
+
+    /// Spec 0018, Module surface: "Focus sidebar" is in the palette,
+    /// bindable as `sidebar.focus`, runs its action, and has no default
+    /// key.
+    #[test]
+    fn focusing_the_sidebar_is_in_the_palette_bindable_and_unbound_by_default() {
+        let command = by_id("sidebar.focus").expect("no command has the ID `sidebar.focus`");
+        assert_eq!(command.title, Some("Focus sidebar"));
+        let action = (command.action)();
+        assert!(action.partial_eq(&FocusSidebar), "runs {}", action.name());
+        let bound: Vec<String> = [crate::config::NewTab::Ask, crate::config::NewTab::Default]
+            .into_iter()
+            .flat_map(keymap::defaults_for)
+            .filter(|(_, command)| *command == "sidebar.focus")
+            .map(|(key, _)| key)
+            .collect();
+        assert!(bound.is_empty(), "bound to {bound:?} by default");
+    }
+
+    /// Spec 0018, Module surface and AC4: `sftp.toggle` left the palette.
+    /// It is no command of its own any more, and nothing the palette lists
+    /// is titled after the SFTP sidebar.
+    #[test]
+    fn sftp_toggle_is_not_in_the_palette() {
+        assert!(by_id("sftp.toggle").is_none(), "still a command");
+        let sftp: Vec<&str> = COMMANDS
+            .iter()
+            .filter(|command| {
+                command.id.starts_with("sftp.")
+                    || command
+                        .title
+                        .is_some_and(|title| title.to_lowercase().contains("sftp"))
+            })
+            .map(|command| command.id)
+            .collect();
+        assert!(sftp.is_empty(), "in the palette: {sftp:?}");
+    }
+
+    /// Spec 0018, Module surface: in `keybindings:`, `sftp.toggle` is
+    /// still accepted as the old name of `sidebar.toggle`. Every other ID
+    /// means what it always did, and an unknown one stays unknown.
+    #[test]
+    fn a_keybinding_may_still_name_the_sidebar_toggle_sftp_toggle() {
+        let old = by_config_id("sftp.toggle").expect("the old name isn't accepted");
+        assert_eq!(old.id, "sidebar.toggle");
+        let action = (old.action)();
+        assert!(action.partial_eq(&ToggleSidebar), "runs {}", action.name());
+        for command in COMMANDS {
+            let found = by_config_id(command.id).map(|found| found.id);
+            assert_eq!(found, Some(command.id));
+        }
+        assert!(by_config_id("sftp.explode").is_none());
     }
 
     /// Spec 0013, flow 1 and §Settings: "Open files" and "Open files in a

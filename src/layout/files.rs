@@ -1,15 +1,13 @@
-//! The workspace's files panes (spec 0013) and the sidebar of SSH panes:
-//! adding them, their events, and the sidebar's drawing and resizing. The
-//! sidebar switches between the pane's files (spec 0008) and its host's
-//! port forwards (spec 0017, `super::forwards`).
+//! The workspace's files panes (spec 0013): adding them and their events.
+//! Also the views the sidebar draws for a terminal pane (spec 0018): its
+//! own file browser (an SSH pane's host, spec 0008, or a local pane's
+//! disk) and an SSH pane's port forwards (spec 0017, `super::forwards`),
+//! kept per pane here and shown by `super::sidebar`.
 
-use super::splits::{DIVIDER, DividerGhost};
 use super::tree::{Axis, LeafId};
 use super::{Workspace, show_notice};
-use crate::commands::ToggleSftp;
 use crate::commands::palette::{Entry, Palette};
 use crate::commands::{OpenFiles, OpenFilesInNewTab, SwitchFilesTarget};
-use crate::config::SftpSide;
 use crate::files::browser::{Browser, BrowserEvent, BrowserSettings, Source};
 use crate::files::local;
 use crate::files::pane::{FilesEvent, FilesPane, Target};
@@ -18,45 +16,21 @@ use crate::secrets;
 use crate::ssh;
 use crate::terminal::pty::GridSize;
 use crate::terminal::{Launch, PaneProfile, Start, TerminalPane};
-use gpui::prelude::FluentBuilder;
-use gpui::{
-    AnyElement, AppContext, ClickEvent, Context, DragMoveEvent, Entity, InteractiveElement,
-    IntoElement, ParentElement, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
-};
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{ActiveTheme, Selectable, Sizable};
+use gpui::{AppContext, Context, Entity, Subscription, Window};
 use std::path::Path;
 use std::sync::Arc;
 
-/// The SFTP sidebar's width until it's dragged, and the least it can be
-/// dragged to; the most is half the window (spec 0008, Model).
-pub(super) const SFTP_WIDTH: f32 = 300.0;
-const SFTP_MIN_WIDTH: f32 = 200.0;
-
-/// Dragging the SFTP sidebar's inner edge to resize it (spec 0008).
-#[derive(Clone)]
-struct DraggedSftpEdge;
-
-/// What an SSH pane's sidebar shows: its files, or its host's port
-/// forwards. It keeps the last one it showed (spec 0017, flow 1).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Shown {
-    Files,
-    Forwards,
-}
-
-/// An SSH pane's sidebar, and whether it's open. It outlives being closed:
-/// the SFTP session goes on until the pane closes (spec 0008, Model). Each
-/// view is made the first time it's shown, so showing forwards connects
-/// nothing.
-pub(super) struct Sidebar {
+/// What the sidebar draws for one terminal pane. It outlives the sidebar
+/// showing another pane or closing: an SFTP session goes on until the
+/// pane closes (spec 0008, Model). Each view is made the first time it's
+/// shown, so showing forwards or a local disk connects nothing.
+#[derive(Default)]
+pub(super) struct PaneViews {
     pub(super) files: Option<SidebarView<Browser>>,
     pub(super) forwards: Option<SidebarView<ForwardsView>>,
-    pub(super) shown: Shown,
-    pub(super) open: bool,
 }
 
-/// One of a sidebar's views, and its events.
+/// One of a pane's views in the sidebar, and its events.
 pub(super) struct SidebarView<V> {
     pub(super) view: Entity<V>,
     pub(super) _events: Subscription,
@@ -272,74 +246,10 @@ impl Workspace {
         self.show_active(window, cx);
     }
 
-    /// Opens the active pane's sidebar on its files, starting its SFTP
-    /// session the first time (spec 0008, flow 1), or closes it if it shows
-    /// them already. A local pane has none.
-    pub(super) fn toggle_sftp(
-        &mut self,
-        _: &ToggleSftp,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let leaf = self.tabs.active().focused;
-        if let Some(sidebar) = self.sftp.get_mut(&leaf)
-            && sidebar.open
-            && sidebar.shown == Shown::Files
-        {
-            sidebar.open = false;
-            self.focus_active(window, cx);
-            cx.notify();
-            return;
-        }
-        if !self.show_sidebar(leaf, Shown::Files, window, cx) {
-            show_notice("SFTP needs an SSH pane".into(), window, cx);
-        }
-    }
-
-    /// Opens `leaf`'s sidebar on `shown`, making the sidebar and that view
-    /// if they're new. `false` if `leaf` isn't an SSH pane.
-    pub(super) fn show_sidebar(
-        &mut self,
-        leaf: LeafId,
-        shown: Shown,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let pane = self.panes.get(&leaf).cloned();
-        let Some(pane) = pane.filter(|pane| pane.read(cx).ssh_target().is_some()) else {
-            return false;
-        };
-        let sidebar = self.sftp.entry(leaf).or_insert(Sidebar {
-            files: None,
-            forwards: None,
-            shown,
-            open: true,
-        });
-        sidebar.shown = shown;
-        sidebar.open = true;
-        let (files, forwards) = (sidebar.files.is_none(), sidebar.forwards.is_none());
-        match shown {
-            Shown::Files if files => {
-                let files = self.sidebar_files(leaf, &pane, window, cx);
-                if let Some(sidebar) = self.sftp.get_mut(&leaf) {
-                    sidebar.files = Some(files);
-                }
-            }
-            Shown::Forwards if forwards => {
-                if let Some(view) = self.sidebar_forwards(leaf, &pane, window, cx)
-                    && let Some(sidebar) = self.sftp.get_mut(&leaf)
-                {
-                    sidebar.forwards = Some(view);
-                }
-            }
-            _ => {}
-        }
-        cx.notify();
-        true
-    }
-
-    /// The sidebar's file browser on `pane`'s host, which connects now.
-    fn sidebar_files(
+    /// The sidebar's file browser for pane `leaf` (spec 0018, Files
+    /// panel): an SSH pane's host, which connects now, or the Local
+    /// target for a local pane, which connects nothing.
+    pub(super) fn sidebar_files(
         &mut self,
         leaf: LeafId,
         pane: &Entity<TerminalPane>,
@@ -347,139 +257,30 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> SidebarView<Browser> {
         let settings = BrowserSettings::of(&self.config);
-        let source = Source::Pane(pane.downgrade());
-        // The folder the pane's shell last reported, read once (spec 0008).
-        let start = pane.read(cx).remote_cwd();
+        // The folder the pane's shell last reported, read once (spec
+        // 0008): it doesn't follow later `cd`s.
+        let (source, start) = if pane.read(cx).ssh_target().is_some() {
+            (Source::Pane(pane.downgrade()), pane.read(cx).remote_cwd())
+        } else {
+            let folder = pane.read(cx).local_folder();
+            let folder = folder.and_then(|cwd| cwd.to_str().map(str::to_owned));
+            (Source::Local, folder)
+        };
         let view = cx.new(|cx| Browser::new(source, start, true, settings, window, cx));
         let events = cx.subscribe_in(
             &view,
             window,
             move |this, _, event, window, cx| match event {
-                BrowserEvent::Close => this.close_sidebar(leaf, window, cx),
+                BrowserEvent::Leave => this.focus_active(window, cx),
                 BrowserEvent::Notice(notice) => show_notice(notice.clone(), window, cx),
                 BrowserEvent::Settled => this.finish_closing(window, cx),
-                // A remote file never runs.
-                BrowserEvent::Run(_) => {}
+                // Only a local file runs, in a pane beside this one.
+                BrowserEvent::Run(file) => this.run_file(leaf, file, window, cx),
             },
         );
         SidebarView {
             view,
             _events: events,
         }
-    }
-
-    /// Closes `leaf`'s sidebar from inside it; the keyboard goes back to
-    /// the pane.
-    pub(super) fn close_sidebar(
-        &mut self,
-        leaf: LeafId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(sidebar) = self.sftp.get_mut(&leaf) {
-            sidebar.open = false;
-        }
-        self.focus_active(window, cx);
-        cx.notify();
-    }
-
-    /// The switch at the top of an open sidebar (spec 0017, flow 1).
-    fn render_switch(&self, shown: Shown, cx: &mut Context<Self>) -> impl IntoElement {
-        let leaf = self.tabs.active().focused;
-        let border = cx.theme().border;
-        let button = |id: &'static str, label: &'static str, view: Shown| {
-            Button::new(id)
-                .label(label)
-                .ghost()
-                .xsmall()
-                .selected(shown == view)
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.show_sidebar(leaf, view, window, cx);
-                }))
-        };
-        div()
-            .flex()
-            .gap(px(2.))
-            .px(px(6.))
-            .py(px(4.))
-            .border_b_1()
-            .border_color(border)
-            .child(button("sidebar-files", "Files", Shown::Files))
-            .child(button("sidebar-forwards", "Port forwards", Shown::Forwards))
-    }
-
-    /// The active pane's SFTP sidebar if it's open, with the inner edge it
-    /// is resized by (spec 0008, Model).
-    pub(super) fn render_sftp(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let sidebar = self
-            .sftp
-            .get(&self.tabs.active().focused)
-            .filter(|sidebar| sidebar.open)?;
-        let theme = cx.theme();
-        let (background, border) = (theme.tab_bar, theme.border);
-        let edge = div()
-            .id("sftp-edge")
-            .w(px(DIVIDER))
-            .h_full()
-            .flex_shrink_0()
-            .bg(border)
-            .cursor_col_resize()
-            .on_drag(DraggedSftpEdge, |_, _, _, cx| cx.new(|_| DividerGhost));
-        let shown = match sidebar.shown {
-            Shown::Files => sidebar
-                .files
-                .as_ref()
-                .map(|files| files.view.clone().into_any_element()),
-            Shown::Forwards => sidebar
-                .forwards
-                .as_ref()
-                .map(|forwards| forwards.view.clone().into_any_element()),
-        };
-        let body = div()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .flex()
-            .flex_col()
-            .child(self.render_switch(sidebar.shown, cx))
-            .child(div().flex_1().min_h_0().children(shown));
-        let side = self.config.sftp_sidebar;
-        Some(
-            div()
-                .id("sftp")
-                .w(px(self.sftp_width))
-                .h_full()
-                .flex_shrink_0()
-                .flex()
-                .bg(background)
-                .map(|sidebar| match side {
-                    SftpSide::Left => sidebar.child(body).child(edge),
-                    SftpSide::Right => sidebar.child(edge).child(body),
-                })
-                .on_drag_move(cx.listener(
-                    |this, event: &DragMoveEvent<DraggedSftpEdge>, window, cx| {
-                        this.drag_sftp_edge(event, window, cx);
-                    },
-                ))
-                .into_any_element(),
-        )
-    }
-
-    /// Sets the SFTP sidebar's width from the mouse: from its outer edge,
-    /// which stays put, between [`SFTP_MIN_WIDTH`] and half the window.
-    fn drag_sftp_edge(
-        &mut self,
-        event: &DragMoveEvent<DraggedSftpEdge>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (bounds, x) = (event.bounds, event.event.position.x);
-        let width = match self.config.sftp_sidebar {
-            SftpSide::Left => x - bounds.left(),
-            SftpSide::Right => bounds.right() - x,
-        };
-        let most = (f32::from(window.viewport_size().width) / 2.0).max(SFTP_MIN_WIDTH);
-        self.sftp_width = f32::from(width).clamp(SFTP_MIN_WIDTH, most);
-        cx.notify();
     }
 }

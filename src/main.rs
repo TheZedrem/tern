@@ -19,6 +19,7 @@ mod secrets;
 mod session;
 mod settings;
 mod sftp;
+mod sidebar;
 mod ssh;
 mod terminal;
 mod theme;
@@ -171,6 +172,13 @@ fn main() {
     // tab, so it never adds or picks one.
     let open_new_tab = config.open_new_tab && !bench;
     let boot = restored.and_then(|mut session| {
+        // A sidebar saved open has its width from the first frame on, so
+        // the panes start at the size they keep (spec 0018).
+        let sidebar = session.sidebar.as_ref().filter(|sidebar| sidebar.open);
+        let taken = sidebar.map_or(0.0, |sidebar| {
+            sidebar::fitted(sidebar.usable_width().unwrap_or(sidebar::WIDTH), area.0)
+        });
+        let area = (area.0 - taken, area.1);
         if open_new_tab && !session.focus_plain_shell(&default_profile) {
             layout::Boot::restore_behind(&session, || {
                 start_pane(&default_profile, default_cwd.clone(), area, None)

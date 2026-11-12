@@ -53,7 +53,7 @@ pub const FIELDS: &[&str] = &[
     "keybindings",
     "theme.default",
     "tab_bar",
-    "sftp_sidebar",
+    "app_sidebar",
     "sftp_click",
     "sftp_upload",
     "files_executable",
@@ -734,8 +734,8 @@ mod tests {
         "copy_on_select",
         "open_links",
         "tab_bar",
-        // Spec 0008's, documented with spec 0005's.
-        "sftp_sidebar",
+        // Spec 0018's and 0008's, documented with spec 0005's.
+        "app_sidebar",
         "sftp_click",
         "sftp_upload",
         // Spec 0013's, documented with spec 0005's.

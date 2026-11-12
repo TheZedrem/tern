@@ -112,8 +112,9 @@ pub fn init(cx: &mut App) {
 
 /// What the browser asks of whoever draws it.
 pub enum BrowserEvent {
-    /// The sidebar's close button: hide the sidebar, keep the session.
-    Close,
+    /// Esc in the sidebar with nothing to dismiss: the keyboard goes back
+    /// to the pane, and the sidebar stays open (spec 0018, Model).
+    Leave,
     /// Something to say as a toast.
     Notice(String),
     /// An edit's upload ended and none is running, so a close waiting on

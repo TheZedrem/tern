@@ -31,7 +31,7 @@ manager), and the sidebar asks for passwords the way the terminal does.
 
 **In scope:**
 
-- "Toggle SFTP sidebar" (`sftp.toggle`, `Ctrl+Shift+S`): opens or closes the focused SSH pane's sidebar, on the window's right (default) or left (`sftp_sidebar`), showing that pane's host; each pane remembers whether its sidebar is open
+- The Files panel of the window's sidebar ([spec 0018](0018-app-sidebar.md)): `Ctrl+Shift+S` (`sidebar.toggle`) shows the sidebar on the window's right (default) or left (`app_sidebar`), and its Files panel shows the active SSH pane's host. The sidebar is the window's since spec 0018; before, each SSH pane had its own
 - A listing of one folder (name, size, modified, kind) as a tree whose folders expand in place (spec 0013, the same file browser as the files pane), entering folders, going up, and a path field that is always shown and always editable
 - Starting in the folder the pane's remote shell is in, if it reported one, else the home folder
 - Editing a remote file in the OS's default app for its type: what a click on a file does by default
@@ -59,20 +59,19 @@ manager), and the sidebar asks for passwords the way the terminal does.
 
 ### Model
 
-- **Sidebar [load-bearing]:** open or closed is a flag of each SSH pane,
-  not of the window. The window shows a sidebar only while its *active
-  pane* (the focused pane of the shown tab) has the flag set, and then it
-  draws that pane's **SFTP session**; focus moving into the sidebar
-  doesn't change which pane is active. Switching to a pane without the
-  flag hides the sidebar; switching back shows it again. A local pane
-  has none yet; T-049 gives it one over the Local target (spec 0013). The sidebar sits on the `sftp_sidebar` side, inside the
-  tab list when the tabs are on the same side (`tab_bar: left | right`):
-  tabs, then sidebar, then panes. Dragging its inner edge resizes it
-  (200 px up to half the window); the width is one per window and lasts
-  until Tern quits.
+- **Sidebar [load-bearing]:** the window's, pinned by
+  [spec 0018](0018-app-sidebar.md): open or closed, its side
+  (`app_sidebar`) and its width belong to the window and are saved. Its
+  Files panel draws the **SFTP session** of the window's *active pane*
+  (the focused pane of the shown tab), never another pane's; focus moving
+  into the sidebar doesn't change which pane is active. Switching panes
+  keeps the sidebar open and shows the new pane's session, or the "Show
+  files" button if it has none yet (spec 0018, flow 8). A local pane
+  gets the Local target there (spec 0018, spec 0013).
 - **SFTP session [load-bearing]:** belongs to an SSH pane. It is created
-  the first time that pane's sidebar opens, and ends when the pane
-  closes. Closing the sidebar or switching panes keeps it, its folder, its
+  the first time the user asks for that pane's files (opening the
+  sidebar on Files, switching to Files, or "Show files"; spec 0018),
+  never by a pane switch, and ends when the pane closes. Closing the sidebar or switching panes keeps it, its folder, its
   transfers and its edits; reopening shows them where they were. The
   header always names its target (`user@host`).
 - **Connection [load-bearing]:** `ssh <the profile's args> -s <host> sftp`,
@@ -116,23 +115,20 @@ manager), and the sidebar asks for passwords the way the terminal does.
   every `changed` edit when Tern's window gains focus. Each edit starts
   with `sftp_upload` and can be switched on its own; the override lives as
   long as the edit and is never written to config.
-- **Not saved:** a restored window comes back with the sidebar closed and
-  no sessions (spec 0003): reconnecting is a network connection the user
-  starts.
+- **Not saved:** a restored window comes back with no sessions (spec
+  0003): reconnecting is a network connection the user starts. The
+  sidebar itself may come back open (spec 0018); its Files panel then
+  offers "Show files".
 
 ### Flows
 
-1. **Open:** `sftp.toggle` opens the active pane's sidebar on its files,
-   or closes it if it shows them already (its session stays). A switch
-   at the top of the sidebar shows Files or Port forwards (spec 0017,
-   flow 1); the sidebar keeps the last one it showed, and showing Port
-   forwards connects nothing. If the pane has no session yet, it connects and
-   lists its start folder (Model). Its prompts open the pane's dialog,
-   named "<profile> (SFTP)", filled from the keychain as in spec 0006,
-   flow 4; they take turns with the terminal's prompts. On a local pane the
-   command does nothing but show a notice that SFTP needs an SSH pane.
-   Moving a pane to another tab or split (spec 0007) keeps its flag and
-   session.
+1. **Open:** `sidebar.toggle` opens the sidebar, or closes it (spec 0018,
+   flow 1; the sessions stay). If the sidebar opens on Files and the active pane has no session yet, it
+   connects and lists its start folder (Model). Its prompts open the
+   pane's dialog, named "<profile> (SFTP)", filled from the keychain as
+   in spec 0006, flow 4; they take turns with the terminal's prompts. On
+   a local pane the panel shows the Local target (spec 0018). Moving a
+   pane to another tab or split (spec 0007) keeps its session.
 2. **Browse:** the listing is a tree (spec 0013, flow 3): one folder,
    folders first, then files, by name, each folder expanding in place.
    Enter or a double click enters a folder (a symlink to one
@@ -191,19 +187,20 @@ manager), and the sidebar asks for passwords the way the terminal does.
 
 ### Startup impact
 
-None. Nothing about SFTP starts before the user opens the sidebar; the
-sweep of a crashed run's edit copies runs after the first frame. The
-sidebar is never open at boot.
+None. Nothing about SFTP starts before the user asks for a pane's files;
+the sweep of a crashed run's edit copies runs after the first frame. A
+sidebar restored open connects nothing (spec 0018, Startup impact).
 
 ### Settings
 
-- `sftp_sidebar: left | right` (default `right`)
+- `app_sidebar: left | right` (default `right`; spec 0018). Its name
+  before spec 0018, `sftp_sidebar`, is still read
 - `sftp_click: edit | download` (default `edit`)
 - `sftp_upload: manual | save | focus` (default `manual`): when an edit
   uploads; an edit's own mode overrides it (Model)
 
 All on the settings screen and in `src/default-config.yaml` (spec 0009).
-Changing `sftp_sidebar` moves an open sidebar on reload.
+Changing `app_sidebar` moves an open sidebar on reload.
 
 ### Platform notes
 
@@ -276,15 +273,15 @@ Trust boundaries:
 ## Acceptance criteria
 
 1. On a key-auth host, opening the sidebar on its SSH pane lists the folder the pane's shell reported with OSC 7 within 2 s, or the home folder if it reported none or that folder can't be listed, as the same user and port the pane uses; typing a path into the always-visible path field and pressing Enter lists it; on a password host its prompt fills from the keychain, and the password appears in no process's arguments or environment.
-2. With `tab_bar: right` and the default `sftp_sidebar`, the sidebar sits between the tab list and the panes; with `sftp_sidebar: left` it sits on the left, and a reload moves an open sidebar.
-3. With the sidebar open on SSH pane A, focusing SSH pane B (or a local pane) hides it; focusing A again shows it with its folder and running transfers where they were, without reconnecting; opening B's sidebar shows B's host in the header; `sftp.toggle` on a local pane opens nothing and says why.
+2. With `tab_bar: right` and the default `app_sidebar`, the sidebar sits between the tab list and the panes; with `app_sidebar: left` it sits on the left, and a reload moves an open sidebar.
+3. With the sidebar open on SSH pane A's files, focusing SSH pane B (or a local pane) keeps the sidebar open and never shows A's listing; focusing A again shows its folder and running transfers where they were, without reconnecting; "Show files" on B shows B's host in the header; on a local pane the panel shows Local (spec 0018, AC2).
 4. Downloading a 1 GB file shows progress while the pane beside it still takes typing, the copy matches the original's checksum, and cancel deletes the partial file.
 5. A remote file named `../../.bashrc`, `a/b`, with control characters or (on Windows) `CON` or `x.txt:evil` shows as plain text, and its download or edit copy lands directly inside its folder under the escaped name (`..%2F..%2F.bashrc`, `a%2Fb`, `%43ON`, `x.txt%3Aevil`).
 6. Double-clicking a remote `.txt` opens it in the OS's default app; by default a save leaves the host's file unchanged and marks the edit changed, its Upload button puts the new content on the host within 3 s, and an upload after the host's copy changed asks before overwriting.
 7. With `sftp_upload: save` a save reaches the host within 3 s without a click; with `focus` only after Tern's window regains focus; an edit switched to another mode follows that mode while other edits keep the setting's.
 8. With `sftp_click: download`, the same double click downloads it to the Downloads folder and opens nothing; a remote `run.exe`, `x.desktop` or `a.LNK` is never opened in either mode.
 9. Dropping two files from the file manager onto a folder row uploads both into that folder; one that exists there asks first, and declining leaves the remote file as it was; a dropped folder uploads nothing and says why. Rename, delete after its confirmation, and new folder work, and the listing shows the result.
-10. A host without the sftp subsystem shows ssh's reason within 5 s; closing an SSH pane whose session has a changed, not-uploaded edit asks first and can upload it, then ends its ssh and deletes its edit copies; a relaunch comes back with the sidebar closed and makes no connection. On Windows 11 the same works through `ssh.exe`, Explorer drops and Notepad saves included.
+10. A host without the sftp subsystem shows ssh's reason within 5 s; closing an SSH pane whose session has a changed, not-uploaded edit asks first and can upload it, then ends its ssh and deletes its edit copies; a relaunch makes no connection, whether or not the sidebar comes back open. On Windows 11 the same works through `ssh.exe`, Explorer drops and Notepad saves included.
 
 ## Open questions
 

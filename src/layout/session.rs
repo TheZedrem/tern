@@ -142,6 +142,7 @@ impl Workspace {
             })
             .collect();
         Session::new(self.window_size, tabs, self.tabs.active_index())
+            .with_sidebar(self.saved_sidebar(cx))
     }
 
     fn saved_leaf(&self, leaf: LeafId, cx: &App) -> SavedLeaf {
@@ -303,5 +304,44 @@ mod tests {
         );
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(notices[0].contains("old-host"), "{}", notices[0]);
+    }
+
+    /// Spec 0018, Saved, §Security & privacy and AC7: what the session
+    /// saves of the sidebar is its open flag, its width and the shown
+    /// panel's ID, and nothing else: no host name, though the Files panel
+    /// is showing one. A closed sidebar is saved as closed.
+    #[gpui::test]
+    fn the_session_saves_the_sidebars_flag_width_and_panel_and_no_host_name(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::layout::sidebar::tests::{local_and_two_hosts, rig};
+
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        let snapshot = |rig: &mut crate::layout::sidebar::tests::Rig<'_>| {
+            let session = rig
+                .workspace
+                .read_with(rig.cx, |workspace, cx| workspace.snapshot(cx));
+            serde_json::to_value(&session).expect("the session is JSON")
+        };
+        let before = snapshot(&mut rig);
+        assert_eq!(before["sidebar"]["open"], false);
+
+        rig.keys("ctrl-shift-s");
+        rig.keys("alt-2");
+        let file = snapshot(&mut rig);
+        assert_eq!(
+            file["sidebar"],
+            serde_json::json!({ "open": true, "width": 260.0, "panel": "files" })
+        );
+        let sidebar = file["sidebar"].to_string();
+        for private in ["prod", "example.com", "me@"] {
+            assert!(!sidebar.contains(private), "`{private}` in {sidebar}");
+        }
+        assert_eq!(file["version"], before["version"]);
+
+        rig.keys("ctrl-shift-s");
+        let closed = snapshot(&mut rig);
+        assert_eq!(closed["sidebar"]["open"], false);
+        assert_eq!(closed["sidebar"]["panel"], "files");
     }
 }

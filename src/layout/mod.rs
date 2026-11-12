@@ -14,6 +14,7 @@ mod plugins;
 mod profiles;
 mod reload;
 mod session;
+mod sidebar;
 mod splits;
 pub mod tabs;
 pub mod tree;
@@ -24,8 +25,9 @@ use crate::commands::{
     GoToTab, IncreaseFontSize, NewTab, NextTab, Paste, PreviousTab, RenameTab, ResetFontSize,
     Search, SplitDown, SplitDownWithProfile, SplitRight, SplitRightWithProfile, ZoomPane,
 };
-use crate::config::{self, Config, SftpSide, TabBarSide};
+use crate::config::{self, Config, SidebarSide, TabBarSide};
 use crate::files::browser;
+use crate::session::SavedSidebar;
 use crate::session::{SavedFiles, SavedLeaf, Session, WindowSize};
 use crate::sftp;
 use crate::terminal::{FONT_SIZES, FontSettings, Launch, PaneProfile, Start, TerminalPane};
@@ -33,7 +35,7 @@ use crate::theme::{self, Theme};
 use crate::timing::{Mark, Timing};
 use chrome::{RENAME_CONTEXT, Rename};
 use closing::Closing;
-use files::{FilesLeaf, SFTP_WIDTH, Sidebar};
+use files::{FilesLeaf, PaneViews};
 use gpui::{
     Anchor, App, Context, Decorations, Entity, Focusable, InteractiveElement, IntoElement,
     KeyBinding, ParentElement, Pixels, Render, Size, Styled, Subscription, Task, Window, actions,
@@ -71,6 +73,7 @@ pub fn init(cx: &mut App) {
         Some(RENAME_CONTEXT),
     )]);
     browser::init(cx);
+    crate::sidebar::init(cx);
     answers::init(cx);
     crate::forwards::view::init(cx);
 }
@@ -99,6 +102,8 @@ pub struct Boot {
     /// A session that couldn't be restored, to set aside after the first
     /// frame (spec 0003, flow 7).
     bad_session: Option<PathBuf>,
+    /// The sidebar as the session saved it (spec 0018); closed without.
+    sidebar: Option<SavedSidebar>,
 }
 
 impl Boot {
@@ -111,6 +116,7 @@ impl Boot {
             files: Vec::new(),
             pending: HashMap::new(),
             bad_session: None,
+            sidebar: None,
         }
     }
 
@@ -203,6 +209,7 @@ impl Boot {
             files: Vec::new(),
             pending,
             bad_session: None,
+            sidebar: session.sidebar.clone(),
         })
     }
 }
@@ -268,14 +275,17 @@ pub struct Workspace {
     update_timer: Option<Task<()>>,
     /// This run asked whether to check for updates; it asks once.
     update_asked: bool,
-    /// The SFTP sidebars of SSH panes, by pane (spec 0008). Only the
-    /// active pane's shows, if it's open.
-    sftp: HashMap<LeafId, Sidebar>,
+    /// What the sidebar's Files panel draws for each SSH pane it was
+    /// shown for (spec 0008, spec 0018). Only the active pane's shows.
+    sftp: HashMap<LeafId, PaneViews>,
     /// The files panes, by leaf (spec 0013); every other leaf is a
     /// terminal pane.
     files: HashMap<LeafId, FilesLeaf>,
-    /// The sidebars' width, one for the window, until Tern quits.
-    sftp_width: f32,
+    /// The window's sidebar, from its first use on (spec 0018).
+    sidebar: Option<sidebar::Hosted>,
+    /// The sidebar as the session saved it: what the first frame leaves
+    /// room for, and what the sidebar starts from.
+    sidebar_boot: SavedSidebar,
     /// The app's port forwards, from the first one on (spec 0017).
     forwards: Option<Entity<crate::forwards::registry::Registry>>,
     /// The plugin host, from the first frame on (spec 0016).
@@ -309,6 +319,7 @@ impl Workspace {
             files,
             pending,
             bad_session,
+            sidebar,
         } = boot;
         let themes = panes
             .iter()
@@ -349,7 +360,8 @@ impl Workspace {
             update_asked: false,
             sftp: HashMap::new(),
             files: HashMap::new(),
-            sftp_width: SFTP_WIDTH,
+            sidebar: None,
+            sidebar_boot: sidebar.unwrap_or_else(sidebar::closed),
             forwards: None,
             plugins: None,
             closing: None,
@@ -451,6 +463,7 @@ impl Workspace {
             files.pane.update(cx, |pane, cx| pane.start(window, cx));
         }
         self.start_reloads(window, cx);
+        self.restore_sidebar(window, cx);
         self.follow_update_check(window, cx);
         // Edit copies a crashed run left (spec 0008, Model), off the UI
         // thread and never before the first frame.
@@ -597,6 +610,7 @@ fn measure_size(size: Rc<Cell<Option<Size<Pixels>>>>) -> impl IntoElement {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_sidebar(window, cx);
         let tab = self.tabs.active();
         let content = match tab.zoomed {
             Some(leaf) => self.render_leaf(leaf, cx),
@@ -636,11 +650,11 @@ impl Render for Workspace {
             TabBarSide::Right => (None, list),
             _ => (list, None),
         };
-        // The SFTP sidebar sits inside a tab list on its side (spec 0008).
-        let sftp = self.render_sftp(cx);
-        let (sftp_left, sftp_right) = match self.config.sftp_sidebar {
-            SftpSide::Left => (sftp, None),
-            SftpSide::Right => (None, sftp),
+        // The sidebar sits inside a tab list on its side (spec 0018).
+        let sidebar = self.render_sidebar(window, cx);
+        let (sidebar_left, sidebar_right) = match self.config.app_sidebar {
+            SidebarSide::Left => (sidebar, None),
+            SidebarSide::Right => (None, sidebar),
         };
         let workspace = div()
             .size_full()
@@ -715,7 +729,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::select_theme))
             .on_action(cx.listener(Self::connect_to_host))
             .on_action(cx.listener(Self::forget_password))
-            .on_action(cx.listener(Self::toggle_sftp))
+            .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::focus_sidebar))
             .on_action(cx.listener(Self::show_port_forwards))
             .on_action(cx.listener(Self::stop_forward))
             .on_action(cx.listener(Self::open_files))
@@ -746,7 +761,7 @@ impl Render for Workspace {
                     .min_h_0()
                     .flex()
                     .children(left)
-                    .children(sftp_left)
+                    .children(sidebar_left)
                     .child(
                         div()
                             .flex_1()
@@ -758,7 +773,7 @@ impl Render for Workspace {
                             .children(self.render_settings())
                             .children(self.render_palette(cx)),
                     )
-                    .children(sftp_right)
+                    .children(sidebar_right)
                     .children(right),
             )
             .children(bottom)
@@ -783,17 +798,72 @@ mod tests {
 
     /// A pane for `saved` that starts no program: it waits for Enter.
     fn idle_pane(saved: &SavedLeaf) -> BootPane {
+        idle_pane_of(&Profile::shell(), saved)
+    }
+
+    /// A pane of `profile` for `saved` that starts no program: it waits
+    /// for Enter, which a test never presses in it. An SSH profile's pane
+    /// names its host as a real one does, and connects to nothing.
+    pub(super) fn idle_pane_of(profile: &Profile, saved: &SavedLeaf) -> BootPane {
+        let command = match profile.kind {
+            config::ProfileKind::Ssh(_) => Command::of_profile(profile),
+            config::ProfileKind::Local(_) => Command::bench(),
+        };
         BootPane {
             start: Start::OnEnter(String::new()),
             launch: Launch {
-                command: Command::bench(),
+                command,
                 cwd: saved.cwd.clone(),
                 timing: Arc::new(Timing::new(Instant::now())),
             },
-            profile: (&Profile::shell()).into(),
+            profile: profile.into(),
             theme: theme::DARK,
             title: saved.title.clone(),
         }
+    }
+
+    /// A workspace showing `boot` in a test window, with the app's keymap
+    /// for `config` and its first frame drawn. It saves no session. What
+    /// runs after the first frame starts real threads, which GPUI's test
+    /// scheduler rejects, so a test calls the step it needs itself.
+    pub(super) fn open_workspace(
+        boot: Boot,
+        config: Config,
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<Workspace>, &mut gpui::VisualTestContext) {
+        cx.update(|cx| {
+            init(cx);
+            gpui_component::init(cx);
+            commands::keymap::keep_library(cx);
+            commands::keymap::bind(&config.keybindings, config.new_tab, cx);
+        });
+        let opened = Rc::new(std::cell::RefCell::new(None));
+        let (_, cx) = cx.add_window_view({
+            let opened = opened.clone();
+            move |window, cx| {
+                let font = FontSettings::from_config(&config.font);
+                let workspace = cx.new(|cx| {
+                    Workspace::new(
+                        boot,
+                        config,
+                        font,
+                        theme::DARK,
+                        Vec::new(),
+                        None,
+                        Arc::new(Timing::new(Instant::now())),
+                        false,
+                        window,
+                        cx,
+                    )
+                });
+                *opened.borrow_mut() = Some(workspace.clone());
+                gpui_component::Root::new(workspace, window, cx)
+            }
+        });
+        let workspace = opened.take().expect("the window built the workspace");
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        (workspace, cx)
     }
 
     /// Three tabs, the middle one shown: a shell in `~/notes`; one pane a
@@ -1121,10 +1191,6 @@ mod tests {
     /// step is checked in the running app instead.
     #[gpui::test]
     fn a_restored_tab_focused_on_its_files_pane_keeps_that_focus(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            init(cx);
-            gpui_component::init(cx);
-        });
         let shown = tab(
             split(
                 Axis::Row,
@@ -1137,31 +1203,7 @@ mod tests {
         let session = Session::new(None, vec![shown], 0);
         let boot = Boot::restore(&session, (1200.0, 800.0), |saved, _| idle_pane(saved))
             .expect("a session with tabs");
-        let opened = Rc::new(std::cell::RefCell::new(None));
-        let (_, cx) = cx.add_window_view({
-            let opened = opened.clone();
-            move |window, cx| {
-                let workspace = cx.new(|cx| {
-                    Workspace::new(
-                        boot,
-                        Config::default(),
-                        FontSettings::from_config(&Config::default().font),
-                        theme::DARK,
-                        Vec::new(),
-                        None,
-                        Arc::new(Timing::new(Instant::now())),
-                        false,
-                        window,
-                        cx,
-                    )
-                });
-                *opened.borrow_mut() = Some(workspace.clone());
-                gpui_component::Root::new(workspace, window, cx)
-            }
-        });
-        let workspace = opened.take().expect("the window built the workspace");
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        cx.run_until_parked();
+        let (workspace, cx) = open_workspace(boot, Config::default(), cx);
         cx.update(|window, cx| {
             let workspace = workspace.read(cx);
             assert_eq!(workspace.tabs.active().focused, 2, "the border's pane");

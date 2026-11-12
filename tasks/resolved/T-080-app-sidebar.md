@@ -1,6 +1,6 @@
 ---
-status: later
-blocked-by: [T-064]
+status: resolved
+blocked-by: []
 ---
 # T-080: Build the sidebar with the Files and SSH hosts panels
 
@@ -23,7 +23,7 @@ migration (old key still read, rewritten by the settings screen), the README's S
 specs 0008, 0017 and 0004, threat model 0003 and the architecture that
 spec 0018 names under Affected areas, and the `--bench-startup 10`
 comparison with the sidebar saved open against closed. Checked on
-Windows 11 too (ConPTY redraw on toggle). Needs spec 0018 approved first.
+Windows 11 too (ConPTY redraw on toggle).
 Area: src.
 
 Spec: ../spec/0018-app-sidebar.md

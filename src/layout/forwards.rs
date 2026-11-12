@@ -1,12 +1,11 @@
 //! The workspace's side of port forwards (spec 0017): the app's registry,
 //! made with the first forward; the sidebar's Port forwards view; and the
-//! commands `pane.portForwards` and `forwards.stop`.
+//! command `forwards.stop` (`pane.portForwards` is `super::sidebar`'s).
 
-use super::files::{Shown, SidebarView};
-use super::tree::LeafId;
+use super::files::SidebarView;
 use super::{Workspace, show_notice};
+use crate::commands::StopForward;
 use crate::commands::palette::{Entry, Palette, Quick};
-use crate::commands::{ShowPortForwards, StopForward};
 use crate::forwards::registry::Registry;
 use crate::forwards::view::{ForwardsEvent, ForwardsView, start};
 use crate::forwards::{self, CLASH, Forward};
@@ -23,10 +22,9 @@ impl Workspace {
             .clone()
     }
 
-    /// The Port forwards view of `leaf`'s sidebar, on `pane`'s host.
+    /// The Port forwards view the sidebar draws for `pane`, on its host.
     pub(super) fn sidebar_forwards(
         &mut self,
-        leaf: LeafId,
         pane: &Entity<TerminalPane>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -39,33 +37,13 @@ impl Workspace {
             &view,
             window,
             move |this, _, event, window, cx| match event {
-                ForwardsEvent::Close => this.close_sidebar(leaf, window, cx),
+                ForwardsEvent::Leave => this.focus_active(window, cx),
             },
         );
         Some(SidebarView {
             view,
             _events: events,
         })
-    }
-
-    /// Opens the active pane's sidebar on Port forwards, with the keyboard
-    /// in the add row (spec 0017, flow 1). A local pane has no host.
-    pub(super) fn show_port_forwards(
-        &mut self,
-        _: &ShowPortForwards,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let leaf = self.tabs.active().focused;
-        if !self.show_sidebar(leaf, Shown::Forwards, window, cx) {
-            show_notice("Port forwards need an SSH pane".into(), window, cx);
-            return;
-        }
-        if let Some(forwards) = self.sftp.get(&leaf).and_then(|s| s.forwards.as_ref()) {
-            forwards
-                .view
-                .update(cx, |view, cx| view.focus_add(window, cx));
-        }
     }
 
     /// Lists every running forward as `<label>: <summary>`; picking one

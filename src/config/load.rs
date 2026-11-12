@@ -245,6 +245,8 @@ impl<'de> MapReader<'de> for Attempt<'_> {
 
     fn read<A: MapAccess<'de>>(self, mut map: A) -> Result<Config, A::Error> {
         let mut config = Config::default();
+        // `app_sidebar` wins over its old name wherever the two stand.
+        let mut app_sidebar = false;
         while let Some(key) = self.key(&mut map, None)? {
             if !self.enter(Part::Key(key.name.clone())) {
                 map.next_value::<IgnoredAny>()?;
@@ -322,9 +324,19 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.tab_bar = side;
                     }
                 }
-                "sftp_sidebar" => {
+                "app_sidebar" => {
                     if let Some(side) = map.next_value()? {
-                        config.sftp_sidebar = side;
+                        config.app_sidebar = side;
+                        app_sidebar = true;
+                    }
+                }
+                // The setting's name before spec 0018: read without a
+                // notice, so existing configs keep their side.
+                "sftp_sidebar" => {
+                    if let Some(side) = map.next_value()?
+                        && !app_sidebar
+                    {
+                        config.app_sidebar = side;
                     }
                 }
                 "sftp_click" => {
@@ -697,7 +709,7 @@ mod tests {
     use super::*;
     use crate::config::tests::{TempDir, profile_ids, ssh_to};
     use crate::config::{
-        CloseOnExit, CursorStyle, FilesExecutable, NewTab, OpenLinks, SftpClick, SftpSide,
+        CloseOnExit, CursorStyle, FilesExecutable, NewTab, OpenLinks, SftpClick, SidebarSide,
         TEMPLATE, UpdateCheck, UploadMode,
     };
     use crate::terminal::FontSettings;
@@ -1034,17 +1046,17 @@ mod tests {
         assert!(notices[0].contains("new_tab"), "{}", notices[0]);
     }
 
-    /// Spec 0008 §Settings: the SFTP sidebar sits on the right unless
-    /// `sftp_sidebar: left` moves it.
+    /// Spec 0018, Migration: under its old name, `sftp_sidebar`, the
+    /// sidebar still sits on the right unless `left` moves it.
     #[test]
     fn sftp_sidebar_is_right_unless_set_to_left() {
-        assert_eq!(parse("").config.sftp_sidebar, SftpSide::Right);
+        assert_eq!(parse("").config.app_sidebar, SidebarSide::Right);
         for (text, side) in [
-            ("sftp_sidebar: left\n", SftpSide::Left),
-            ("sftp_sidebar: right\n", SftpSide::Right),
+            ("sftp_sidebar: left\n", SidebarSide::Left),
+            ("sftp_sidebar: right\n", SidebarSide::Right),
         ] {
             let Loaded { config, notices } = parse(text);
-            assert_eq!(config.sftp_sidebar, side, "{text}");
+            assert_eq!(config.app_sidebar, side, "{text}");
             assert!(notices.is_empty(), "{text}: {notices:?}");
         }
     }
@@ -1059,11 +1071,103 @@ mod tests {
             "sftp_sidebar: split\n",
             "copy_on_select: true\n",
         ));
-        assert_eq!(config.sftp_sidebar, SftpSide::Right);
+        assert_eq!(config.app_sidebar, SidebarSide::Right);
         assert_eq!(config.scrollback, 500);
         assert!(config.copy_on_select);
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(notices[0].contains("sftp_sidebar"), "{}", notices[0]);
+    }
+
+    /// Spec 0018, Module surface: the sidebar sits on the right unless
+    /// `app_sidebar: left` moves it.
+    #[test]
+    fn app_sidebar_is_right_unless_set_to_left() {
+        for (text, side) in [
+            ("app_sidebar: left\n", SidebarSide::Left),
+            ("app_sidebar: right\n", SidebarSide::Right),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.app_sidebar, side, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0018, Migration [load-bearing] and AC4: a config that still
+    /// says `sftp_sidebar: left` keeps its sidebar on the left, among its
+    /// other settings, and reading the old name gives no notice.
+    #[test]
+    fn a_config_with_only_sftp_sidebar_keeps_its_side_without_a_notice() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "sftp_sidebar: left   # where the SFTP sidebar opens\n",
+            "tab_bar: left\n",
+        ));
+        assert_eq!(config.app_sidebar, SidebarSide::Left);
+        assert_eq!(config.scrollback, 500);
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Spec 0018, Migration [load-bearing]: in a file that has both names,
+    /// `app_sidebar` wins whichever comes first, and neither line gives a
+    /// notice.
+    #[test]
+    fn app_sidebar_wins_over_sftp_sidebar_in_either_order() {
+        let cases = [
+            (
+                "app_sidebar: left\nsftp_sidebar: right\n",
+                SidebarSide::Left,
+            ),
+            (
+                "sftp_sidebar: right\napp_sidebar: left\n",
+                SidebarSide::Left,
+            ),
+            (
+                "app_sidebar: right\nsftp_sidebar: left\n",
+                SidebarSide::Right,
+            ),
+            (
+                "sftp_sidebar: left\napp_sidebar: right\n",
+                SidebarSide::Right,
+            ),
+        ];
+        for (text, side) in cases {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.app_sidebar, side, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a value `app_sidebar` doesn't take falls back to `right`
+    /// with a notice naming the key; the rest of the file still applies.
+    #[test]
+    fn a_bad_app_sidebar_falls_back_to_right_with_a_notice_and_the_rest_applies() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "app_sidebar: top\n",
+            "copy_on_select: true\n",
+        ));
+        assert_eq!(config.app_sidebar, SidebarSide::Right);
+        assert_eq!(config.scrollback, 500);
+        assert!(config.copy_on_select);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("app_sidebar"), "{}", notices[0]);
+    }
+
+    /// Spec 0018, AC4 and Module surface: the template "Open config file"
+    /// writes has the `app_sidebar` line, set to the default, in place of
+    /// the old `sftp_sidebar` one, and loads without a notice.
+    #[test]
+    fn the_template_has_app_sidebar_and_no_sftp_sidebar() {
+        let lines: Vec<&str> = TEMPLATE
+            .lines()
+            .filter(|line| line.starts_with("app_sidebar:"))
+            .collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("app_sidebar: right"), "{}", lines[0]);
+        assert!(!TEMPLATE.contains("sftp_sidebar"), "the old name is left");
+        let Loaded { config, notices } = parse(TEMPLATE);
+        assert_eq!(config.app_sidebar, SidebarSide::Right);
+        assert!(notices.is_empty(), "{notices:?}");
     }
 
     /// Spec 0008 §Settings: a click in the SFTP sidebar edits a file

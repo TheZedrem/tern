@@ -32,7 +32,7 @@ restore_session: true # reopen the last run's tabs and splits
 open_new_tab: true    # every launch opens a fresh tab after the restored ones, or focuses a restored plain local shell
 open_links: ctrl_click # ctrl_click (Cmd+click on macOS) | click
 tab_bar: top          # top | bottom | left | right (left and right: vertical tabs)
-sftp_sidebar: right   # left | right: where an SSH pane's file sidebar opens (Ctrl+Shift+S)
+app_sidebar: right    # left | right: where the sidebar opens (Ctrl+Shift+S)
 sftp_click: edit      # what double-clicking a remote file does: edit (in your app) | download
 sftp_upload: manual   # when an edit's saves go back: manual (Upload button) | save | focus
 files_executable: ask # what double-clicking a local program in the files pane (Ctrl+Shift+B) does: ask | run | edit

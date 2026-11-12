@@ -23,6 +23,29 @@ pub struct Session {
     pub tabs: Vec<SavedTab>,
     /// The tab shown, an index into `tabs`.
     pub active: usize,
+    /// The sidebar (spec 0018). A file without it means closed, so the
+    /// format's version stays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar: Option<SavedSidebar>,
+}
+
+/// What a relaunch brings back of the sidebar (spec 0018, Saved): never a
+/// host name, a panel's content or a log.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedSidebar {
+    pub open: bool,
+    /// In logical pixels.
+    pub width: f32,
+    /// The shown panel's ID, like `files` or `hosts`.
+    pub panel: String,
+}
+
+impl SavedSidebar {
+    /// The width, if it's one a sidebar can have: a file is edited by hand
+    /// too.
+    pub fn usable_width(&self) -> Option<f32> {
+        (self.width.is_finite() && self.width >= 1.0).then_some(self.width)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -98,6 +121,15 @@ impl Session {
             window,
             tabs,
             active,
+            sidebar: None,
+        }
+    }
+
+    /// This session, with the sidebar as `sidebar` says.
+    pub fn with_sidebar(self, sidebar: SavedSidebar) -> Self {
+        Self {
+            sidebar: Some(sidebar),
+            ..self
         }
     }
 
@@ -498,6 +530,85 @@ pub(crate) mod tests {
         assert_eq!(leaves.len(), 1);
         assert_eq!(leaves[0].profile, "shell");
         assert_eq!(leaves[0].files, None);
+    }
+
+    /// Spec 0018, Saved: a `session.json` written before the sidebar
+    /// existed has no `sidebar` key. It still loads, as the same format
+    /// version, and says nothing of a sidebar, which means closed.
+    #[test]
+    fn a_session_saved_before_the_sidebar_loads_without_one() {
+        let text = r#"{"version":1,"window":null,"tabs":[{"name":null,"root":{"leaf":{"id":1,"profile":"shell","cwd":"/tmp","title":"vim"}},"focused":1,"zoomed":null}],"active":0}"#;
+        let session = parse(text).expect("an older session loads");
+        assert_eq!(session.sidebar, None);
+        assert_eq!(session.tabs.len(), 1);
+    }
+
+    /// Spec 0018, Saved, and AC7: the sidebar's flag, width and panel ID
+    /// save and load back as they were, in a file of the same version,
+    /// and they are all the file holds of it.
+    #[test]
+    fn the_sidebar_saves_and_loads_back_with_its_flag_width_and_panel() {
+        let root = TempDir::new("session-sidebar");
+        let path = root.path().join("session.json");
+        let sidebar = SavedSidebar {
+            open: true,
+            width: 320.0,
+            panel: "hosts".into(),
+        };
+        let session = two_tabs().with_sidebar(sidebar.clone());
+        save(&path, &session).expect("save");
+        let loaded = load(&path).expect("it loads").expect("a saved session");
+        assert_eq!(loaded.version, two_tabs().version);
+        assert_eq!(loaded.sidebar, Some(sidebar));
+        assert_eq!(loaded.tabs, two_tabs().tabs);
+
+        let text = fs::read_to_string(&path).expect("read session.json");
+        let file: serde_json::Value = serde_json::from_str(&text).expect("session.json is JSON");
+        assert_eq!(
+            keys(&file["sidebar"]),
+            BTreeSet::from(["open".into(), "width".into(), "panel".into()])
+        );
+        assert_eq!(file["sidebar"]["open"], true);
+        assert_eq!(file["sidebar"]["width"], 320.0);
+        assert_eq!(file["sidebar"]["panel"], "hosts");
+    }
+
+    /// Spec 0018, Saved: a session without a sidebar writes no `sidebar`
+    /// key, so the file stays what a build before the sidebar reads.
+    #[test]
+    fn a_session_without_a_sidebar_writes_no_sidebar_key() {
+        let file: serde_json::Value =
+            serde_json::from_str(&json(&two_tabs())).expect("session.json is JSON");
+        assert!(file.get("sidebar").is_none(), "{file}");
+    }
+
+    /// Spec 0018, Saved and Width: the file is edited by hand too, so a
+    /// width no sidebar can have (zero, negative, not a number) loads
+    /// without making the session unrestorable and is not used; a real
+    /// one is.
+    #[test]
+    fn a_saved_width_no_sidebar_can_have_is_not_used() {
+        let saved = |width| SavedSidebar {
+            open: true,
+            width,
+            panel: "files".into(),
+        };
+        for width in [0.0, -320.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(saved(width).usable_width(), None, "{width}");
+        }
+        assert_eq!(saved(320.0).usable_width(), Some(320.0));
+
+        for width in ["0", "-320", "1e99"] {
+            let text = json(&two_tabs()).replacen(
+                '{',
+                &format!(r#"{{"sidebar":{{"open":true,"width":{width},"panel":"files"}},"#),
+                1,
+            );
+            let session = parse(&text).unwrap_or_else(|why| panic!("width {width}: {why}"));
+            let sidebar = session.sidebar.expect("the sidebar loads");
+            assert!(sidebar.open, "width {width}");
+            assert_eq!(sidebar.usable_width(), None, "width {width}");
+        }
     }
 
     /// Spec 0003, flow 7, and spec 0001, flow 3: before the first save there

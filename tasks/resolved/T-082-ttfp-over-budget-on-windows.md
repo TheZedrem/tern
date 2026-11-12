@@ -1,5 +1,5 @@
 ---
-status: now
+status: resolved
 type: bug
 blocked-by: []
 ---
@@ -13,5 +13,9 @@ that morning and for the T-066 build alike, run back to back.
 rendered frame (`first_byte` at 33 ms, `rendered` at 735 ms). Find out
 whether it is the machine that day or a regression since v0.7.0, by
 running v0.5.0's and v0.7.0's binaries in the same session. Area: src.
+
+Resolved 2026-11-12: it was the machine that day. Later the same day,
+on a quiet machine, the installed build of that morning measured
+290 ms and the T-080 build 282 ms, by the same command.
 
 Spec: ../spec/0001-startup-performance.md

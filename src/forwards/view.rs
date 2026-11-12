@@ -5,7 +5,7 @@
 //! so its prompts open over that pane.
 //!
 //! Keys (keyboard first): Tab and Shift+Tab walk the controls, Enter in a
-//! field adds, Esc closes the sidebar. In the list, Up and Down select,
+//! field adds, Esc gives the keyboard back to the pane. In the list, Up and Down select,
 //! Enter retries a failed forward, Delete removes one.
 
 use super::registry::{Entry, Host, Registry, State};
@@ -142,8 +142,9 @@ pub fn start(
 }
 
 pub enum ForwardsEvent {
-    /// The user closed the sidebar from here.
-    Close,
+    /// Esc: the keyboard goes back to the pane; the sidebar stays open
+    /// (spec 0018, Model).
+    Leave,
 }
 
 pub struct ForwardsView {
@@ -481,14 +482,6 @@ impl Render for ForwardsView {
                     .truncate()
                     .text_sm()
                     .child(self.host.label.clone()),
-            )
-            .child(
-                Button::new("forwards-close")
-                    .icon(IconName::Close)
-                    .ghost()
-                    .xsmall()
-                    .tooltip("Close sidebar (Esc)")
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ForwardsEvent::Close))),
             );
         let list = div()
             .id("forwards-list")
@@ -533,7 +526,7 @@ impl Render for ForwardsView {
             .on_action(cx.listener(|_, _: &FocusPreviousControl, window, cx| {
                 window.focus_prev(cx);
             }))
-            .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.emit(ForwardsEvent::Close)))
+            .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.emit(ForwardsEvent::Leave)))
             .child(header)
             .child(self.render_add(cx))
             .child(list)

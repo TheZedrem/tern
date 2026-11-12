@@ -58,9 +58,9 @@ pub struct Config {
     pub open_links: OpenLinks,
     /// Which side of the window the tabs are on (spec 0003).
     pub tab_bar: TabBarSide,
-    /// Which side of the window an SSH pane's SFTP sidebar is on (spec
-    /// 0008).
-    pub sftp_sidebar: SftpSide,
+    /// Which side of the window the sidebar is on (spec 0018). Its old
+    /// name, `sftp_sidebar`, is still read.
+    pub app_sidebar: SidebarSide,
     /// What Enter or a double click does to a file in the SFTP sidebar.
     pub sftp_click: SftpClick,
     /// When an SFTP edit uploads, until the edit says otherwise.
@@ -113,11 +113,11 @@ impl TabBarSide {
     }
 }
 
-/// Which side of the window the SFTP sidebar is on (spec 0008). Inside the
-/// tab list when the tabs are on the same side.
+/// Which side of the window the sidebar is on (spec 0018). Inside the tab
+/// list when the tabs are on the same side.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SftpSide {
+pub enum SidebarSide {
     Left,
     Right,
 }
@@ -329,7 +329,7 @@ impl Default for Config {
             active_pane: ActivePane::default(),
             open_links: OpenLinks::CtrlClick,
             tab_bar: TabBarSide::Top,
-            sftp_sidebar: SftpSide::Right,
+            app_sidebar: SidebarSide::Right,
             sftp_click: SftpClick::Edit,
             sftp_upload: UploadMode::Manual,
             files_executable: FilesExecutable::Ask,
