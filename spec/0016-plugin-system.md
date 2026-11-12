@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 5
 tasks: [T-064, T-065, T-066, T-067, T-068, T-069, T-070, T-071]
-related: [spec 0001, spec 0004, spec 0005, spec 0009, spec 0013, OQ-031 ✅, OQ-032 ✅]
+related: [spec 0001, spec 0004, spec 0005, spec 0009, spec 0013, threat model 0005, OQ-031 ✅, OQ-032 ✅, OQ-035]
 ---
 
 # Spec: Plugin system
@@ -74,6 +74,12 @@ nothing touching a terminal before the user confirmed it.
   settings: [{ key: socket, label: Docker socket, type: text }]
   ```
 
+  A manifest over 64 KiB is unusable without being parsed. Its `name` must
+  differ, ignoring case, from every other plugin's and from `Tern`, or both
+  plugins are listed as unusable. Its strings render by spec 0003's title
+  rules, capped at 64 characters, and `icon` names one of Tern's built-in
+  icons, any other value getting the default (TM-plug-01, -13).
+
 - **Never through a shell [load-bearing].** `run` is spawned as an argv
   with the plugin's folder as its working directory. No `sh -c`, no
   `cmd /c`, and nothing from an event or action is ever put on a command
@@ -86,6 +92,7 @@ nothing touching a terminal before the user confirmed it.
   plugins:
     docker:
       enabled: true
+      run: [./tern-docker]          # the command line the user confirmed
       rights: [pane_info, terminal_write]
       events: [pane_opened, pane_closed]
       settings: { socket: /var/run/docker.sock }
@@ -93,7 +100,10 @@ nothing touching a terminal before the user confirmed it.
 
   The rights and events in force are the granted ones that the manifest
   still declares. One a new version adds stays off until the user ticks
-  it, and an event that isn't ticked is never sent.
+  it, and an event that isn't ticked is never sent. `run` is the command
+  line the enable confirmation showed. A manifest whose `run` differs from
+  it is not started, and the Plugins tab asks for the confirmation again
+  (TM-plug-12).
 - **Tern gates the protocol, not the process [load-bearing].** A plugin is
   a program running as the user: Tern can't stop it from using the network
   or the disk, so rights cover only what goes through Tern (OQ-031).
@@ -115,7 +125,9 @@ nothing touching a terminal before the user confirmed it.
   any other way before it kills it. An on-demand plugin gets EOF right
   after its one event: it finishes its actions and exits. A background
   plugin gets EOF when it is disabled or Tern quits: it ends its own
-  children and exits within 2 s, or Tern kills the PID it spawned.
+  children and exits within 2 s, or Tern kills the PID it spawned, only
+  while it still holds that process's unreaped handle. Whether Tern kills
+  the whole process tree instead is OQ-035 (TM-plug-11).
 - **Events** (Tern → plugin), each `{"api":1,"event":…,"settings":{…},…}`:
   `start`, `command`, `panel_opened`, `panel_closed`, `panel_action` (a
   button or row was clicked), `panel_input` (the panel's input field was
@@ -140,18 +152,34 @@ nothing touching a terminal before the user confirmed it.
   | `open_tab` | Opens a tab running an argv, e.g. `docker exec -it web sh` | `open_tab` | yes |
 
 - **Confirmation [load-bearing].** A confirmed action shows a bar on its
-  target pane (the action's `pane`, else the focused terminal pane) naming
-  the plugin and showing exactly what will be typed, run or sent, with
-  Allow and Deny. The bar never takes keyboard focus: typing, Enter
+  target pane (the action's `pane`, else the terminal pane focused when it
+  arrived; the target never follows focus later). The bar names the
+  plugin, the pane by its title (plus `user@host` for an SSH pane), and
+  shows exactly what will be typed, run or sent, with Allow and Deny.
+  Names come from the Host's record of which process asked, never from the
+  action. The bar never takes keyboard focus: typing, Enter
   included, keeps going to the shell, so a keystroke already under way
-  can't confirm. Allow and Deny are clicks, or the palette commands
-  `plugin.allowRequest` / `plugin.denyRequest` (no default keys). One
+  can't confirm. Allow ignores clicks for 0.5 s after its bar appears or
+  moves. Allow and Deny are clicks, or the palette commands
+  `plugin.allowRequest` / `plugin.denyRequest` (no default keys), which act
+  on the focused pane's request. One
   request per plugin is pending at a time; more are refused. Each request
-  is confirmed on its own, every time.
+  is confirmed on its own, every time. After a Deny, the plugin's
+  confirmed actions are refused until the user next runs one of its
+  commands or acts in one of its panels. Each confirmed action adds a line
+  to the plugin's log with its kind, target pane, outcome and time, never
+  its text (TM-plug-03, -07, -09, -20).
 - **Untrusted text [load-bearing].** Everything a plugin sends is shown as
   plain text with control characters removed. `fill_command` and
-  `run_command` text containing a control character (newline, ESC, …) is
-  refused, so the bar shows all of what would run.
+  `run_command` text containing a control character (newline, ESC, …) or
+  a format character (Unicode `Cf`: direction overrides, zero-width and
+  tag characters) is refused, and so is text over 4 KiB. The bar wraps
+  and shows all of the text, never truncated, so it shows all of what would run.
+  `open_tab` shows each argv element separately under the same rules. On
+  Windows, an `open_tab` whose program contains `"` or ends in `.bat` or
+  `.cmd` is refused, since `cmd.exe` would re-parse its arguments.
+  `read_output`'s bar states the line and character count above a
+  scrollable preview (TM-plug-04, -05, -16).
 - **Commands.** A manifest command has the ID `plugin.<plugin>.<command>`
   and is one generic GPUI action carrying both names. It is in the palette
   and bindable like any command (spec 0004). The keymap accepts any
@@ -161,21 +189,25 @@ nothing touching a terminal before the user confirmed it.
   10,000 lines, in memory only. Each plugin's reader hands lines over a
   bounded channel, so a flood blocks the plugin, not the UI. An on-demand
   run is killed after 30 s; on-demand events of one plugin run one after
-  another.
+  another. Lines are parsed on the reader thread. The plugin's stderr log
+  keeps its last 10,000 lines, in memory only. Events wait in a queue of
+  256 per plugin; one that doesn't fit, because the plugin isn't reading
+  its stdin or its on-demand runs fall behind, is dropped with a line in
+  the plugin's log (TM-plug-10).
 
 ### Module surface
 
 - `plugins::Host`: owns the found plugins and their processes; `dispatch(plugin, Event)`; hands parsed `Action`s to the workspace on the foreground thread. `Event` and `Action` are enums (serde-tagged), not strings
-- Threads: per running plugin one stdout reader and one stderr reader; spawning and stdin writes on the background executor
+- Threads: per running plugin one stdout reader, one stderr reader and one stdin writer, so a plugin that doesn't read never blocks the background executor; spawning on the background executor. A plugin inherits only its three pipes, never a PTY's descriptor or handle (TM-plug-14)
 - `plugins::PanelModel`: a panel's items, drawn by the app sidebar (T-064)
 - `Workspace` hosts confirmations through `plugins/confirm.rs`; it doesn't own them (AGENTS.md, hazard 9)
 
 ### Flows
 
 1. **Discovery**, after the first frame, off the UI thread: read each
-   folder's manifest. A broken manifest, an `id` that differs from its
-   folder, or an unknown `api` lists the plugin as unusable with the
-   reason; it is never started.
+   folder's manifest. A broken or oversized manifest, an `id` that differs
+   from its folder, a `name` taken by another plugin, or an unknown `api`
+   lists the plugin as unusable with the reason; it is never started.
 2. **Enable:** the Plugins tab shows the plugin's command line, rights and
    events; the user enables it, confirms the trusted-source warning, and
    ticks rights and events; a `background` plugin
@@ -201,7 +233,8 @@ nothing touching a terminal before the user confirmed it.
 8. **Settings:** manifest fields (`text`, `bool`, `number`, `choice`) and
    `set_settings` fields are drawn on the plugin's page and written under
    `plugins.<id>.settings` through spec 0009's in-place edits; a change
-   sends `settings_changed`.
+   sends `settings_changed`. The page says these fields are saved in
+   `config.yaml` as plain text and are no place for secrets (TM-plug-18).
 
 ### Startup impact
 
@@ -219,13 +252,14 @@ after the first frame on a background thread. T-066 reports
 - Linux: the program needs its execute bit; a missing one is the spawn
   failure of flow 3.
 - Both: killing the spawned PID leaves a plugin's own children running. A
-  plugin must end them when its stdin closes (Open questions).
+  plugin must end them when its stdin closes. Whether Tern kills the tree
+  is OQ-035; until it is answered, leave `// TODO(OQ-035)` at the kill.
 - macOS: compiles; same code path as Linux.
 
 ### Security & privacy
 
-- **Stored:** `plugins.<id>` in `config.yaml` (enabled, rights, settings;
-  no secrets). Panel contents, logs and stderr live in memory only. Tern
+- **Stored:** `plugins.<id>` in `config.yaml` (enabled, confirmed `run`,
+  rights, settings; no secrets). Panel contents, logs and stderr live in memory only. Tern
   logs no event or action payload, and text sent by `read_output` is never
   kept after delivery.
 - **Trust boundaries:** a new one, Tern ↔ plugin process. Plugin output is
@@ -236,7 +270,9 @@ after the first frame on a background thread. T-066 reports
 - **Ground rules:** Tern itself sends nothing. A plugin can, as soon as it
   starts after the first frame: enabling it, after the trusted-source
   warning, is the user's decision (ground rule 1 as amended by OQ-031).
-- The STRIDE model is T-065 and comes before any code.
+- STRIDE model: [threat model 0005](threat-model/0005-plugins.md). Its
+  mitigations are in this spec; residual risks and the process-tree
+  question await the owner in OQ-035.
 
 ## Acceptance criteria
 
@@ -246,11 +282,11 @@ after the first frame on a background thread. T-066 reports
 4. `run_command` shows a bar on the target pane with the exact text. Typing `ls` and Enter while it shows runs `ls` in the shell and confirms nothing. Deny writes nothing to the PTY; Allow types the text and Enter; the plugin gets `action_result` either way (Linux and Windows).
 5. With `terminal_write` not ticked, `run_command` shows no bar, the plugin gets `refused`, and its log names the missing right. With `pane_opened` declared but not ticked, opening a pane sends the plugin nothing.
 6. After `read_output`, the plugin receives nothing until Allow; the `output` text equals the bar's preview byte for byte; with Deny it gets `denied` and no text.
-7. `fill_command` with a newline or ESC in its text is refused, and panel text containing escape sequences renders as plain text.
+7. `fill_command` with a newline, ESC or a right-to-left override (U+202E) in its text is refused, and panel text containing escape sequences renders as plain text.
 8. A plugin writing 100,000 `append_log` lines a second leaves typing in a pane responsive, its panel shows the last 10,000 lines, and Tern's memory stays flat.
 9. Killing a background plugin's process shows one notice and "stopped" with Restart on its panels; other plugins and panes carry on. A manifest with `api: 2` is listed as unusable and never started.
 10. Quitting Tern leaves no plugin process behind on Linux and Windows, and enabling a plugin on Windows flashes no console window.
 
 ## Open questions
 
-- A plugin's own child processes outlive a kill of its PID. Is the EOF rule enough for a plugin that ignores it, or does Tern kill the whole tree (a process group on Linux, a Job Object on Windows)? T-065 decides with the threat model.
+- A plugin's own child processes outlive a kill of its PID. Is the EOF rule enough for a plugin that ignores it, or does Tern kill the whole tree (a process group on Linux, a Job Object on Windows)? Threat model 0005 (TM-plug-11) proposes the tree kill; the owner decides in OQ-035.

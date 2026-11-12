@@ -1,5 +1,5 @@
 ---
-status: next
+status: resolved
 blocked-by: []
 ---
 # T-065: STRIDE threat model for plugins

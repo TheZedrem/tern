@@ -10,7 +10,9 @@ confirmation that repeats the warning, disable it, tick its
 rights and events, see its command line and the note that it runs as the user, change
 its settings (manifest fields and the ones it sends with `set_settings`),
 restart it, and read its log. Unusable plugins show their reason
-(spec 0016, flows 2 and 8). Area: src.
+(spec 0016, flows 2 and 8). Includes the re-confirmation when a
+manifest's `run` differs from the confirmed one (TM-plug-12) and the
+plain-text note on plugin settings (TM-plug-18). Area: src.
 
 Spec: ../spec/0016-plugin-system.md
 Spec: ../spec/0009-settings-screen.md

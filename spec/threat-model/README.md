@@ -14,8 +14,7 @@ stable so tasks and bugs can cite them.
    titles, OSC 8 links and OSC 52 clipboard writes, before T-002 honors
    any of them. Done: 0002.
 3. **Plugins** (spec 0016): a program the user enabled sends actions that
-   reach terminals and the UI. Planned: 0005 (T-065), before any plugin
-   code.
+   reach terminals and the UI. Done: 0005.
 4. **Port forwarding** (spec 0017): listening sockets on this machine and
    the server that carry the user's SSH access. Done: 0004.
 
@@ -27,3 +26,4 @@ stable so tasks and bugs can cite them.
 | [0002](0002-escape-sequences.md) | Escape sequences from programs and remote hosts | 2026-11-05 | draft; residual risks await sign-off in OQ-017 |
 | [0003](0003-sftp.md) | SFTP sidebar: remote names, edit copies, opening, uploads | 2026-11-06 | accepted; residual risks signed off in OQ-023 |
 | [0004](0004-port-forwarding.md) | Port forwarding: listening sockets, forward processes | 2026-11-11 | draft; residual risks await sign-off in OQ-034 |
+| [0005](0005-plugins.md) | Plugins: the Tern ↔ plugin process boundary, confirmed terminal actions | 2026-11-12 | draft; residual risks and the process-tree kill await the owner in OQ-035 |
