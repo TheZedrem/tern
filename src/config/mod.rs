@@ -17,10 +17,12 @@ use std::path::{Path, PathBuf};
 
 mod edit;
 mod load;
+mod plugins;
 mod watch;
 
 pub use edit::{save_edit, save_theme_default};
 pub use load::{load, parse};
+pub use plugins::{PluginSettings, Setting};
 pub use watch::Watcher;
 
 /// What "Open config file" writes when there is no config yet: every key at
@@ -72,6 +74,8 @@ pub struct Config {
     /// Whether to look for a new release on GitHub (spec 0011). `None`:
     /// not chosen yet, so Tern asks; nothing ever writes that as a value.
     pub update_check: Option<UpdateCheck>,
+    /// What the user granted each plugin, by its ID (spec 0016).
+    pub plugins: BTreeMap<String, PluginSettings>,
 }
 
 /// The two answers to "check GitHub for new releases?" (spec 0011).
@@ -331,6 +335,7 @@ impl Default for Config {
             files_executable: FilesExecutable::Ask,
             new_tab: NewTab::Ask,
             update_check: None,
+            plugins: BTreeMap::new(),
         }
     }
 }

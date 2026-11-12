@@ -14,6 +14,7 @@ mod files;
 mod forwards;
 mod import;
 mod layout;
+mod plugins;
 mod secrets;
 mod session;
 mod settings;

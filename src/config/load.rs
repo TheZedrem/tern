@@ -1,8 +1,8 @@
 //! The lenient reader: [`parse`] and [`load`] (spec 0005).
 
 use super::{
-    ActivePane, Config, Cursor, Font, Keybinding, Loaded, LocalProfile, Profile, ProfileKind,
-    SshProfile, ThemeSettings, expand_home,
+    ActivePane, Config, Cursor, Font, Keybinding, Loaded, LocalProfile, PluginSettings, Profile,
+    ProfileKind, SshProfile, ThemeSettings, expand_home,
 };
 use crate::theme::ThemeSource;
 use serde::Deserialize;
@@ -122,6 +122,7 @@ enum Part {
     Profile(String),
     Theme(String),
     Keybinding(String),
+    Plugin(String),
 }
 
 impl Part {
@@ -132,6 +133,7 @@ impl Part {
             Part::Profile(id) => format!("profile `{id}` was skipped"),
             Part::Theme(name) => format!("theme `{name}` was skipped"),
             Part::Keybinding(keys) => format!("keybinding `{keys}` was skipped"),
+            Part::Plugin(id) => format!("plugin `{id}` stays disabled"),
         }
     }
 }
@@ -346,6 +348,17 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                     }
                 }
                 "update_check" => config.update_check = map.next_value()?,
+                "plugins" => {
+                    let entries = map.next_value_seed(Optional(Entries::<PluginSettings>::new(
+                        self,
+                        Part::Key(key.name),
+                        Part::Plugin,
+                    )))?;
+                    config.plugins = entries
+                        .into_iter()
+                        .map(|entry| (entry.name, entry.value))
+                        .collect();
+                }
                 unknown => {
                     map.next_value::<IgnoredAny>()?;
                     self.unknown_key(unknown, key.line);
@@ -1907,5 +1920,218 @@ theme:
         assert_eq!(loaded.config.scrollback, 500);
         assert_eq!(loaded.config.font.size, 16.0);
         assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+    }
+
+    /// The `plugins:` block of spec 0016 §Model, as written there.
+    const SPEC_PLUGINS: &str = r#"
+plugins:
+  docker:
+    enabled: true
+    run: [./tern-docker]          # the command line the user confirmed
+    rights: [pane_info, terminal_write]
+    events: [pane_opened, pane_closed]
+    settings: { socket: /var/run/docker.sock }
+"#;
+
+    /// The entry [`SPEC_PLUGINS`] grants `docker`.
+    fn spec_docker() -> PluginSettings {
+        use crate::config::Setting;
+        use crate::plugins::{Right, Subscription};
+        PluginSettings {
+            enabled: true,
+            run: vec!["./tern-docker".into()],
+            rights: vec![Right::PaneInfo, Right::TerminalWrite],
+            events: vec![Subscription::PaneOpened, Subscription::PaneClosed],
+            settings: BTreeMap::from([(
+                "socket".into(),
+                Setting::Text("/var/run/docker.sock".into()),
+            )]),
+        }
+    }
+
+    /// Whether plugin `id` is enabled by `config`. A plugin that isn't
+    /// named is found and never started.
+    fn plugin_enabled(config: &Config, id: &str) -> bool {
+        config.plugins.get(id).is_some_and(|plugin| plugin.enabled)
+    }
+
+    /// Spec 0016 §Model: enabling, the confirmed `run`, each right, each
+    /// event and the plugin's settings are stored under `plugins.<id>`.
+    #[test]
+    fn the_spec_plugins_block_grants_what_it_says() {
+        let Loaded { config, notices } = parse(SPEC_PLUGINS);
+        assert!(notices.is_empty(), "{notices:?}");
+        assert_eq!(
+            config.plugins,
+            BTreeMap::from([("docker".into(), spec_docker())])
+        );
+        assert_eq!(parse("").config.plugins, BTreeMap::new());
+    }
+
+    /// Spec 0016 §Model: every right and every listed event can be
+    /// ticked, and a setting is text, a bool or a number (flow 8).
+    #[test]
+    fn every_right_event_and_kind_of_setting_loads() {
+        use crate::config::Setting;
+        use crate::plugins::{Right, Subscription};
+        let Loaded { config, notices } = parse(concat!(
+            "plugins:\n",
+            "  all:\n",
+            "    enabled: true\n",
+            "    run: [python, main.py, --flag]\n",
+            "    rights: [pane_info, terminal_write, terminal_read, open_tab]\n",
+            "    events: [start, pane_opened, pane_closed]\n",
+            "    settings: { name: web, tls: true, retries: 3, ratio: 0.5 }\n",
+        ));
+        assert!(notices.is_empty(), "{notices:?}");
+        let all = &config.plugins["all"];
+        assert!(all.enabled);
+        assert_eq!(all.run, ["python", "main.py", "--flag"]);
+        assert_eq!(
+            all.rights,
+            [
+                Right::PaneInfo,
+                Right::TerminalWrite,
+                Right::TerminalRead,
+                Right::OpenTab
+            ]
+        );
+        assert_eq!(
+            all.events,
+            [
+                Subscription::Start,
+                Subscription::PaneOpened,
+                Subscription::PaneClosed
+            ]
+        );
+        let expected = BTreeMap::from([
+            ("name".to_owned(), Setting::Text("web".into())),
+            ("tls".to_owned(), Setting::Bool(true)),
+            ("retries".to_owned(), Setting::Number(3.0)),
+            ("ratio".to_owned(), Setting::Number(0.5)),
+        ]);
+        assert_eq!(all.settings, expected);
+    }
+
+    /// Spec 0016 §Model, "Disabled until enabled": only `enabled: true`
+    /// enables, and nothing is granted that isn't written.
+    #[test]
+    fn a_plugin_is_disabled_and_holds_nothing_unless_its_entry_says_so() {
+        let Loaded { config, notices } = parse(concat!(
+            "plugins:\n",
+            "  silent:\n",
+            "    run: [./silent]\n",
+            "  off:\n",
+            "    enabled: false\n",
+            "    run: [./off]\n",
+            "    rights: [terminal_write]\n",
+            "  bare:\n",
+            "    enabled: true\n",
+        ));
+        assert!(notices.is_empty(), "{notices:?}");
+        assert!(!plugin_enabled(&config, "silent"));
+        assert!(!plugin_enabled(&config, "off"));
+        assert!(!plugin_enabled(&config, "unnamed"));
+        let bare = &config.plugins["bare"];
+        assert!(bare.enabled);
+        assert!(bare.run.is_empty(), "no command line was confirmed");
+        assert!(bare.rights.is_empty() && bare.events.is_empty());
+        assert!(bare.settings.is_empty());
+    }
+
+    /// Spec 0005 and spec 0016 §Model: an entry Tern can't read as written
+    /// (a right, an event or a key it doesn't know, a value of the wrong
+    /// type) leaves that plugin disabled, never running with something
+    /// other than what was written. The notice names it, and the other
+    /// plugins and the rest of the file still apply.
+    #[test]
+    fn a_plugin_entry_that_doesnt_fit_stays_disabled_alone_with_a_notice() {
+        let bad = [
+            "rights: [pane_info, root]",
+            "rights: [Terminal_Write]",
+            "events: [pane_opened, keystroke]",
+            "events: [command]",
+            "enable: true",
+            "sandbox: off",
+            "run: ./tern-broken --flag",
+            "enabled: yes please",
+            "rights: terminal_write",
+            "settings: [socket]",
+        ];
+        for line in bad {
+            // Enabled and confirmed, but for the line that doesn't fit.
+            let key = line.split(':').next();
+            let rest: String = ["enabled: true", "run: [./tern-broken]"]
+                .into_iter()
+                .filter(|kept| kept.split(':').next() != key)
+                .map(|kept| format!("    {kept}\n"))
+                .collect();
+            let text = format!(
+                "scrollback: 500\n\
+                 plugins:\n  \
+                   broken:\n\
+                     {rest}    \
+                     {line}\n  \
+                   docker:\n    \
+                     enabled: true\n    \
+                     run: [./tern-docker]\n    \
+                     rights: [pane_info, terminal_write]\n    \
+                     events: [pane_opened, pane_closed]\n    \
+                     settings: {{ socket: /var/run/docker.sock }}\n\
+                 copy_on_select: true\n"
+            );
+            let Loaded { config, notices } = parse(&text);
+            assert!(!plugin_enabled(&config, "broken"), "{line}: enabled");
+            assert_eq!(config.plugins.get("docker"), Some(&spec_docker()), "{line}");
+            assert_eq!(config.scrollback, 500, "{line}");
+            assert!(config.copy_on_select, "{line}");
+            assert_eq!(notices.len(), 1, "{line}: {notices:?}");
+            assert!(notices[0].contains("broken"), "{line}: {}", notices[0]);
+            assert!(!notices[0].contains("docker"), "{line}: {}", notices[0]);
+        }
+    }
+
+    /// Spec 0005: a `plugins` that isn't a map of entries falls back as a
+    /// whole, with a notice naming it; the rest still applies.
+    #[test]
+    fn a_plugins_key_that_isnt_a_map_enables_nothing_and_the_rest_applies() {
+        for value in ["[docker]", "docker", "true"] {
+            let text = format!("scrollback: 500\nplugins: {value}\ncopy_on_select: true\n");
+            let Loaded { config, notices } = parse(&text);
+            assert_eq!(config.plugins, BTreeMap::new(), "{value}");
+            assert_eq!(config.scrollback, 500, "{value}");
+            assert!(config.copy_on_select, "{value}");
+            assert_eq!(notices.len(), 1, "{value}: {notices:?}");
+            assert!(notices[0].contains("plugins"), "{}", notices[0]);
+        }
+        let Loaded { config, notices } = parse("plugins:\nscrollback: 500\n");
+        assert_eq!(config.plugins, BTreeMap::new());
+        assert_eq!(config.scrollback, 500);
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Definition of Done: `plugins:` has its template lines, commented
+    /// out, since a written entry would enable a plugin nobody confirmed.
+    /// Uncommented, the example is an entry Tern reads as written.
+    #[test]
+    fn the_template_documents_plugins_as_a_comment_that_loads_when_uncommented() {
+        assert_eq!(parse(TEMPLATE).config.plugins, BTreeMap::new());
+        let start = TEMPLATE
+            .lines()
+            .position(|line| line == "# plugins:")
+            .expect("`plugins:` isn't documented");
+        let block: Vec<&str> = TEMPLATE
+            .lines()
+            .skip(start)
+            .take_while(|line| line.starts_with('#'))
+            .map(|line| line.strip_prefix("# ").unwrap_or("").trim_end())
+            .collect();
+        let Loaded { config, notices } = parse(&block.join("\n"));
+        assert!(notices.is_empty(), "{notices:?}");
+        assert_eq!(config.plugins.len(), 1, "{block:?}");
+        let example = config.plugins.values().next().expect("one example");
+        assert!(example.enabled);
+        assert!(!example.run.is_empty(), "the example confirms no `run`");
+        assert!(!example.rights.is_empty() && !example.events.is_empty());
     }
 }

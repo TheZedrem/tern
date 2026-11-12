@@ -41,8 +41,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 pub use answers::{PromptHost, PromptNotice, answer_prompts};
-use exit::is_invisible_format;
-pub use exit::{clean_prompt, clean_title};
+pub use exit::{clean_prompt, clean_title, is_invisible_format};
 pub use font::{DEFAULT_FONT_FAMILY, FONT_SIZES, FontSettings};
 pub use launch::{Launch, Start, connect_prompt};
 use search::SearchBar;

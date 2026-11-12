@@ -1,0 +1,615 @@
+//! Version 1 of the protocol (spec 0016, Model): events go to a plugin as
+//! one JSON object per line, actions come back the same way. Everything a
+//! plugin sends is untrusted input (threat model 0005, TB1).
+
+use super::manifest::{API, Right};
+use crate::config::Setting;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// The most of a log line that is kept, so 10,000 of them stay small.
+const MAX_LOG_CHARS: usize = 1024;
+
+/// What Tern tells a plugin.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(tag = "event", rename_all = "snake_case")]
+#[allow(
+    dead_code,
+    reason = "commands, panels and results are sent from T-067 to T-069"
+)]
+pub enum Event {
+    Start,
+    Command { command: String },
+    PanelOpened { panel: String },
+    PanelClosed { panel: String },
+    PanelAction { panel: String, id: String },
+    PanelInput { panel: String, text: String },
+    PaneOpened { pane: Pane },
+    PaneClosed { pane: Pane },
+    SettingsChanged,
+    ActionResult { id: Option<Id>, result: Outcome },
+    Output { id: Option<Id>, text: String },
+}
+
+/// A pane as a plugin sees it: an opaque ID, and its details only with
+/// the `pane_info` right (TM-plug-16).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Pane {
+    pub id: u64,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub info: Option<PaneInfo>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct PaneInfo {
+    pub title: String,
+    pub cwd: Option<String>,
+    pub profile: String,
+    /// `user@host` of an SSH pane.
+    pub host: Option<String>,
+}
+
+/// What became of an action that asked for something.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code, reason = "confirmations answer with the others (T-068)")]
+pub enum Outcome {
+    Allowed,
+    Denied,
+    Refused,
+    NoPane,
+}
+
+/// An action's `id`, sent back with its result as it came.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum Id {
+    Number(u64),
+    Text(String),
+}
+
+#[derive(Serialize)]
+struct Envelope<'a> {
+    api: u32,
+    #[serde(flatten)]
+    event: &'a Event,
+    settings: &'a BTreeMap<String, Setting>,
+}
+
+impl Event {
+    /// The event's line, without the line break, carrying the plugin's
+    /// current `settings`.
+    pub fn line(&self, settings: &BTreeMap<String, Setting>) -> String {
+        let envelope = Envelope {
+            api: API,
+            event: self,
+            settings,
+        };
+        // Strings, numbers and maps with string keys always serialize.
+        serde_json::to_string(&envelope).unwrap_or_default()
+    }
+}
+
+/// What a plugin asks Tern to do.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum Action {
+    Ready,
+    SetPanel {
+        panel: String,
+        // TODO(T-069): the panel items get their types with the sidebar.
+        #[serde(default)]
+        items: serde_json::Value,
+    },
+    AppendLog {
+        panel: String,
+        text: String,
+    },
+    OpenPanel {
+        panel: String,
+    },
+    Notify {
+        text: String,
+    },
+    SetSettings {
+        // TODO(T-067): typed with the Plugins tab that draws them.
+        #[serde(default)]
+        fields: serde_json::Value,
+    },
+    FillCommand {
+        #[serde(default)]
+        id: Option<Id>,
+        #[serde(default)]
+        pane: Option<u64>,
+        text: String,
+    },
+    RunCommand {
+        #[serde(default)]
+        id: Option<Id>,
+        #[serde(default)]
+        pane: Option<u64>,
+        text: String,
+    },
+    ReadOutput {
+        #[serde(default)]
+        id: Option<Id>,
+        #[serde(default)]
+        pane: Option<u64>,
+        #[serde(default)]
+        lines: Option<u32>,
+    },
+    OpenTab {
+        #[serde(default)]
+        id: Option<Id>,
+        argv: Vec<String>,
+    },
+}
+
+impl Action {
+    /// The action in `line`, or why the line is dropped. The reason never
+    /// quotes the line (TM-plug-17).
+    pub fn parse(line: &str) -> Result<Self, String> {
+        serde_json::from_str(line).map_err(|error| {
+            use serde_json::error::Category;
+            match error.classify() {
+                Category::Data => "an unknown action, or one with a field missing",
+                _ => "not a JSON object",
+            }
+            .to_owned()
+        })
+    }
+
+    /// Its name on the wire, for the plugin's log.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Action::Ready => "ready",
+            Action::SetPanel { .. } => "set_panel",
+            Action::AppendLog { .. } => "append_log",
+            Action::OpenPanel { .. } => "open_panel",
+            Action::Notify { .. } => "notify",
+            Action::SetSettings { .. } => "set_settings",
+            Action::FillCommand { .. } => "fill_command",
+            Action::RunCommand { .. } => "run_command",
+            Action::ReadOutput { .. } => "read_output",
+            Action::OpenTab { .. } => "open_tab",
+        }
+    }
+
+    /// The right it needs.
+    pub fn right(&self) -> Option<Right> {
+        match self {
+            Action::FillCommand { .. } | Action::RunCommand { .. } => Some(Right::TerminalWrite),
+            Action::ReadOutput { .. } => Some(Right::TerminalRead),
+            Action::OpenTab { .. } => Some(Right::OpenTab),
+            _ => None,
+        }
+    }
+
+    /// The panel it fills or shows, which the manifest must declare.
+    pub fn panel(&self) -> Option<&str> {
+        match self {
+            Action::SetPanel { panel, .. }
+            | Action::AppendLog { panel, .. }
+            | Action::OpenPanel { panel } => Some(panel),
+            _ => None,
+        }
+    }
+
+    /// The `id` its result is sent back with; only the actions that get a
+    /// result have one.
+    pub fn id(&self) -> Option<&Id> {
+        match self {
+            Action::FillCommand { id, .. }
+            | Action::RunCommand { id, .. }
+            | Action::ReadOutput { id, .. }
+            | Action::OpenTab { id, .. } => id.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+/// A line of a plugin's log as it's kept: plain text without control or
+/// invisible characters, cut at 1,024 characters.
+pub fn log_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if c == '\t' { ' ' } else { c })
+        .filter(|c| !c.is_control() && !crate::terminal::is_invisible_format(*c))
+        .take(MAX_LOG_CHARS)
+        .collect()
+}
+
+/// Spec 0016 §Model (Events, Actions, Untrusted text) and flow 4: the
+/// lines Tern writes, and what it makes of the lines a plugin writes.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn settings() -> BTreeMap<String, Setting> {
+        BTreeMap::from([
+            (
+                "socket".into(),
+                Setting::Text("/var/run/docker.sock".into()),
+            ),
+            ("tls".into(), Setting::Bool(true)),
+            ("retries".into(), Setting::Number(3.0)),
+        ])
+    }
+
+    fn pane(info: Option<PaneInfo>) -> Pane {
+        Pane { id: 7, info }
+    }
+
+    fn details() -> PaneInfo {
+        PaneInfo {
+            title: "vim secret.txt".into(),
+            cwd: Some("/home/me/projects".into()),
+            profile: "work".into(),
+            host: Some("me@bastion".into()),
+        }
+    }
+
+    /// One of each event, with its name on the wire.
+    fn every_event() -> Vec<(Event, &'static str)> {
+        let panel = || "containers".to_owned();
+        vec![
+            (Event::Start, "start"),
+            (
+                Event::Command {
+                    command: "containers".into(),
+                },
+                "command",
+            ),
+            (Event::PanelOpened { panel: panel() }, "panel_opened"),
+            (Event::PanelClosed { panel: panel() }, "panel_closed"),
+            (
+                Event::PanelAction {
+                    panel: panel(),
+                    id: "restart".into(),
+                },
+                "panel_action",
+            ),
+            (
+                Event::PanelInput {
+                    panel: panel(),
+                    text: "two\nlines \"quoted\"".into(),
+                },
+                "panel_input",
+            ),
+            (
+                Event::PaneOpened {
+                    pane: pane(Some(details())),
+                },
+                "pane_opened",
+            ),
+            (Event::PaneClosed { pane: pane(None) }, "pane_closed"),
+            (Event::SettingsChanged, "settings_changed"),
+            (
+                Event::ActionResult {
+                    id: Some(Id::Number(4)),
+                    result: Outcome::Allowed,
+                },
+                "action_result",
+            ),
+            (
+                Event::Output {
+                    id: Some(Id::Number(5)),
+                    text: "line one\r\nline two\n".into(),
+                },
+                "output",
+            ),
+        ]
+    }
+
+    fn object(line: &str) -> Value {
+        let value: Value = serde_json::from_str(line).expect("an event is JSON");
+        assert!(value.is_object(), "{line} isn't an object");
+        value
+    }
+
+    /// §Model: each event is `{"api":1,"event":…,"settings":{…},…}`, "one
+    /// JSON object per line", whatever text it carries.
+    #[test]
+    fn every_event_is_one_json_object_on_one_line_with_api_event_and_settings() {
+        for (event, name) in every_event() {
+            let line = event.line(&settings());
+            assert!(!line.contains(['\n', '\r']), "{name} spans lines: {line:?}");
+            let value = object(&line);
+            assert_eq!(value["api"], 1, "{name}");
+            assert_eq!(value["event"], name);
+            assert_eq!(
+                value["settings"],
+                json!({ "socket": "/var/run/docker.sock", "tls": true, "retries": 3.0 }),
+                "{name}"
+            );
+        }
+    }
+
+    /// A plugin without settings still gets the `settings` object.
+    #[test]
+    fn an_event_without_settings_carries_an_empty_settings_object() {
+        let value = object(&Event::Start.line(&BTreeMap::new()));
+        assert_eq!(value["settings"], json!({}));
+    }
+
+    /// Text reaches the plugin as it was, escaped by JSON.
+    #[test]
+    fn an_events_text_survives_the_line() {
+        let text = "two\nlines \"quoted\" \\ \u{1b}[31m é";
+        let input = Event::PanelInput {
+            panel: "p".into(),
+            text: text.into(),
+        };
+        assert_eq!(object(&input.line(&settings()))["text"], text);
+        let output = Event::Output {
+            id: None,
+            text: text.into(),
+        };
+        assert_eq!(object(&output.line(&settings()))["text"], text);
+    }
+
+    /// Flow 5: the plugin gets `action_result` (`allowed`, `denied`,
+    /// `refused`, `no_pane`) with the action's `id`.
+    #[test]
+    fn an_action_result_names_its_outcome_and_the_actions_id() {
+        let outcomes = [
+            (Outcome::Allowed, "allowed"),
+            (Outcome::Denied, "denied"),
+            (Outcome::Refused, "refused"),
+            (Outcome::NoPane, "no_pane"),
+        ];
+        for (result, name) in outcomes {
+            let event = Event::ActionResult {
+                id: Some(Id::Number(42)),
+                result,
+            };
+            let value = object(&event.line(&settings()));
+            assert_eq!(value["event"], "action_result");
+            assert_eq!(value["result"], name);
+            assert_eq!(value["id"], 42);
+        }
+    }
+
+    /// The `id` a plugin gave, a number or text, comes back as it came.
+    #[test]
+    fn an_actions_id_comes_back_as_it_came() {
+        for id in [json!(7), json!("req-7"), json!("7")] {
+            let line = json!({ "action": "run_command", "id": id, "text": "ls" }).to_string();
+            let action = Action::parse(&line).expect("a run_command");
+            let result = Event::ActionResult {
+                id: action.id().cloned(),
+                result: Outcome::Refused,
+            };
+            assert_eq!(object(&result.line(&settings()))["id"], id);
+        }
+    }
+
+    /// §Model, TM-plug-16: "Panes are opaque IDs unless `pane_info` is
+    /// granted, which adds title, cwd, profile and host."
+    #[test]
+    fn a_pane_carries_its_details_only_when_they_are_given() {
+        let opaque = Event::PaneOpened { pane: pane(None) }.line(&settings());
+        let value = object(&opaque);
+        assert_eq!(value["pane"], json!({ "id": 7 }), "only the ID");
+
+        let detailed = Event::PaneOpened {
+            pane: pane(Some(details())),
+        };
+        let value = object(&detailed.line(&settings()));
+        assert_eq!(
+            value["pane"],
+            json!({
+                "id": 7,
+                "title": "vim secret.txt",
+                "cwd": "/home/me/projects",
+                "profile": "work",
+                "host": "me@bastion",
+            })
+        );
+    }
+
+    /// The actions table of §Model: each action by its name, and the right
+    /// it needs.
+    #[test]
+    fn every_action_of_the_spec_parses_and_needs_the_right_the_spec_says() {
+        let actions = [
+            (json!({ "action": "ready" }), None),
+            (
+                json!({ "action": "set_panel", "panel": "containers", "items": [{ "text": "web" }] }),
+                None,
+            ),
+            (
+                json!({ "action": "append_log", "panel": "containers", "text": "started" }),
+                None,
+            ),
+            (
+                json!({ "action": "open_panel", "panel": "containers" }),
+                None,
+            ),
+            (json!({ "action": "notify", "text": "done" }), None),
+            (json!({ "action": "set_settings", "fields": [] }), None),
+            (
+                json!({ "action": "fill_command", "id": 1, "pane": 7, "text": "docker ps" }),
+                Some(Right::TerminalWrite),
+            ),
+            (
+                json!({ "action": "run_command", "id": 2, "text": "docker ps" }),
+                Some(Right::TerminalWrite),
+            ),
+            (
+                json!({ "action": "read_output", "id": 3, "lines": 100 }),
+                Some(Right::TerminalRead),
+            ),
+            (
+                json!({ "action": "open_tab", "id": 4, "argv": ["docker", "exec", "-it", "web", "sh"] }),
+                Some(Right::OpenTab),
+            ),
+        ];
+        for (line, right) in actions {
+            let action = Action::parse(&line.to_string())
+                .unwrap_or_else(|reason| panic!("{line} was dropped: {reason}"));
+            assert_eq!(action.name(), line["action"], "{line}");
+            assert_eq!(action.right(), right, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_parsed_action_holds_what_the_plugin_sent() {
+        assert_eq!(Action::parse(r#"{"action":"ready"}"#), Ok(Action::Ready));
+        assert_eq!(
+            Action::parse(r#"{"action":"run_command","id":"a","pane":7,"text":"ls -la"}"#),
+            Ok(Action::RunCommand {
+                id: Some(Id::Text("a".into())),
+                pane: Some(7),
+                text: "ls -la".into(),
+            })
+        );
+        assert_eq!(
+            Action::parse(r#"{"action":"fill_command","text":"ls"}"#),
+            Ok(Action::FillCommand {
+                id: None,
+                pane: None,
+                text: "ls".into(),
+            })
+        );
+        assert_eq!(
+            Action::parse(r#"{"action":"open_tab","id":4,"argv":["docker","ps"]}"#),
+            Ok(Action::OpenTab {
+                id: Some(Id::Number(4)),
+                argv: vec!["docker".into(), "ps".into()],
+            })
+        );
+        assert_eq!(
+            Action::parse(r#"{"action":"append_log","panel":"logs","text":"a\nb"}"#),
+            Ok(Action::AppendLog {
+                panel: "logs".into(),
+                text: "a\nb".into(),
+            })
+        );
+        assert_eq!(
+            Action::parse(r#"{"action":"read_output","id":3,"pane":7,"lines":100}"#),
+            Ok(Action::ReadOutput {
+                id: Some(Id::Number(3)),
+                pane: Some(7),
+                lines: Some(100),
+            })
+        );
+    }
+
+    /// §Model: actions are "each `{"action":…,"id":…}`", so an `id` is
+    /// fine on every one of them, `ready` included.
+    #[test]
+    fn any_action_may_carry_an_id() {
+        let lines = [
+            r#"{"action":"ready","id":1}"#,
+            r#"{"id":"x","action":"ready"}"#,
+            r#"{"action":"notify","id":2,"text":"done"}"#,
+            r#"{"action":"open_panel","id":3,"panel":"containers"}"#,
+            r#"{"action":"set_panel","id":4,"panel":"containers","items":[]}"#,
+            r#"{"action":"append_log","id":5,"panel":"containers","text":"x"}"#,
+            r#"{"action":"set_settings","id":6,"fields":[]}"#,
+        ];
+        for line in lines {
+            assert!(Action::parse(line).is_ok(), "{line} was dropped");
+        }
+    }
+
+    /// The panel an action fills or shows is known, so flow 4 can check it
+    /// against the manifest.
+    #[test]
+    fn panel_actions_name_their_panel() {
+        for name in ["set_panel", "append_log", "open_panel"] {
+            let line = json!({ "action": name, "panel": "containers", "text": "x" }).to_string();
+            let action = Action::parse(&line).expect(name);
+            assert_eq!(action.panel(), Some("containers"), "{name}");
+        }
+        let notify = Action::parse(r#"{"action":"notify","text":"x"}"#).expect("notify");
+        assert_eq!(notify.panel(), None);
+    }
+
+    /// Flow 4: an "unknown action" and a "malformed line" are dropped.
+    #[test]
+    fn an_unknown_action_or_a_malformed_line_is_dropped_with_a_reason() {
+        let lines = [
+            "",
+            "   ",
+            "hello",
+            "ready",
+            r#""ready""#,
+            "42",
+            "null",
+            r#"[{"action":"ready"}]"#,
+            r#"{"action":"ready""#,
+            r#"{"action":"fly"}"#,
+            r#"{"action":"Ready"}"#,
+            r#"{"action":7}"#,
+            r#"{"id":1}"#,
+            r#"{"event":"start"}"#,
+            // A field the action can't do without, or of the wrong type.
+            r#"{"action":"run_command","id":1}"#,
+            r#"{"action":"run_command","text":["ls"]}"#,
+            r#"{"action":"fill_command","text":"ls","pane":"left"}"#,
+            r#"{"action":"open_tab","argv":"docker ps"}"#,
+            r#"{"action":"open_panel"}"#,
+            r#"{"action":"append_log","panel":"logs"}"#,
+            r#"{"action":"read_output","lines":-1}"#,
+            "\u{feff}\u{0}\u{1b}[2J",
+        ];
+        for line in lines {
+            let reason = Action::parse(line).expect_err(line);
+            assert!(!reason.is_empty(), "no reason for {line:?}");
+        }
+    }
+
+    /// TM-plug-17: "Tern logs no event or action payload", so the reason
+    /// a line is dropped for never quotes the line.
+    #[test]
+    fn the_reason_a_line_is_dropped_for_never_quotes_it() {
+        let lines = [
+            "hunter2-secret-token",
+            r#"{"action":"run_command","text":["hunter2-secret-token"]}"#,
+            r#"{"action":"hunter2-secret-token"}"#,
+            r#"{"action":"notify","hunter2-secret-token":1}"#,
+        ];
+        for line in lines {
+            let reason = Action::parse(line).expect_err(line);
+            assert!(!reason.contains("hunter2"), "{reason}");
+        }
+    }
+
+    /// §Untrusted text: a plugin's stderr is kept "as plain text with
+    /// control characters removed", and no invisible format character
+    /// either.
+    #[test]
+    fn a_log_line_is_plain_text() {
+        assert_eq!(log_line("container web started"), "container web started");
+        assert_eq!(log_line("größe: 3 MiB ✓"), "größe: 3 MiB ✓");
+        let hostile =
+            "ok\u{1b}[2J\u{7}\u{0} \u{202E}evil\u{202C}\u{200B}\u{2066}x\u{2069}\u{FEFF}\r";
+        let shown = log_line(hostile);
+        let hidden = |c: char| {
+            c.is_control()
+                || matches!(
+                    c,
+                    '\u{061C}'
+                        | '\u{200B}'..='\u{200F}'
+                        | '\u{202A}'..='\u{202E}'
+                        | '\u{2060}'..='\u{2069}'
+                        | '\u{FEFF}'
+                )
+        };
+        assert!(!shown.chars().any(hidden), "{shown:?}");
+        assert!(
+            shown.starts_with("ok") && shown.contains("evil"),
+            "{shown:?}"
+        );
+    }
+
+    /// Bounds: the log keeps 10,000 lines in memory, so one endless line
+    /// can't be kept whole.
+    #[test]
+    fn an_endless_log_line_is_cut() {
+        let line = "é".repeat(1024 * 1024);
+        assert!(log_line(&line).len() <= 64 * 1024);
+    }
+}

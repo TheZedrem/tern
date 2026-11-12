@@ -21,7 +21,7 @@ local, single-user app: no accounts, no backend, no telemetry.
 | 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, host import from MobaXterm, Tabby, PuTTY and WinSCP, connect via system `ssh` in a PTY, one file browser over the local disk or any host, drawn as a sidebar next to any pane or as a files pane (with file permissions: view and change mode, owner and group), secrets in the OS keychain; opt-in update check | 0006, 0008, 0010, 0011, 0013, 0014, 0015 |
 | 3 — Command history | Detect the commands the user runs and suggest past ones inline as they type, like Windows Terminal and Warp | — |
 | 4 — Theming | Edit themes in the app with a live preview, saved as `themes/*.yaml` files (spec 0005) | — |
-| 5 — Plugins | A plugin system: runtime, API and per-plugin permissions; an extensible app sidebar with the SSH hosts as its first built-in panel and plugins adding their own; themes installable as plugins | 0016 |
+| 5 — Plugins | A plugin system: runtime, API and per-plugin permissions; an extensible app sidebar with the SSH hosts as its first built-in panel and plugins adding their own; themes installable as plugins | 0016, 0018 |
 | 6 — Plugin store | Plugin registries the user configures; browse, install and update plugins in the app, with an opt-in update check like spec 0011's | — |
 | 7 — Port forwarding | Local, remote and dynamic SSH forwards created in an SSH pane's sidebar, each its own system `ssh -N` with `-L`/`-R`/`-D`, kept until deleted or Tern quits (deferred in spec 0006) | 0017 |
 | 8 — Command profiles | Custom profiles that run a command (e.g. a coding agent like `claude` or `codex`) instead of the shell, launched in the focused pane's cwd; from an SSH pane there's no local cwd, so a folder picker asks for one. Any profile can also be set to ask for its working directory on launch | — |
@@ -140,6 +140,7 @@ frame needs. Everything else is a module under `src/`:
 - `ssh/` — hosts, the ssh command, askpass (spec 0006)
 - `files/` — the one file browser: its view, tree and every feature on it, the Local target, and the two places it is drawn, the sidebar and the files pane (spec 0013). `browser.rs` holds `Browser`; its features live in `browser/`: `navigate.rs`, `transfers.rs`, `changes.rs` (rename, delete, new folder), `edits.rs`, `menu.rs`, `render.rs`
 - `sftp/` — the SFTP target: connections, transfers and edit copies (spec 0008)
+- `plugins/` — the plugin host (spec 0016): `mod.rs` holds `Host`, which finds plugins and hands each its events one at a time; `manifest.rs` reads `plugin.yaml`, `protocol.rs` the events and actions, `process.rs` one plugin's process, its pipes and the kill of its tree
 - `settings/` — the settings screen (spec 0009): `mod.rs` the view and shared rows, one file per tab in `pages/`
 - `config/` (`mod.rs` the types, `load.rs` the lenient reader, `edit.rs` in-place edits, `watch.rs` the watcher), `theme.rs`, `session.rs` — files on disk
 - `secrets.rs` — the OS keychain

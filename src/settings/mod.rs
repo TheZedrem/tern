@@ -62,9 +62,11 @@ pub const FIELDS: &[&str] = &[
 ];
 
 /// Template keys the screen leaves to the file, and why: custom themes are
-/// files of their own (spec 0009, out of scope).
+/// files of their own (spec 0009, out of scope), and `plugins` waits for
+/// its tab.
+// TODO(T-067): `plugins` moves to FIELDS with the Plugins tab.
 #[cfg(test)]
-pub const LEFT_TO_THE_FILE: &[&str] = &["theme.custom"];
+pub const LEFT_TO_THE_FILE: &[&str] = &["theme.custom", "plugins"];
 
 actions!(tern, [CloseSettings]);
 
@@ -747,6 +749,8 @@ mod tests {
         "keybindings",
         "theme.default",
         "theme.custom",
+        // Spec 0016's, documented with spec 0005's.
+        "plugins",
     ];
 
     /// A plain YAML key: lowercase words joined with `_`.

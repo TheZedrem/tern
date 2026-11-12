@@ -38,6 +38,10 @@ tokio = { version = "1", features = ["rt", "process", "io-util", "sync", "time",
 # polling's types; pinned to the version alacritty_terminal builds (OQ-018).
 polling = "=3.11.0"
 
+[target.'cfg(unix)'.dependencies]
+# killpg, to end a plugin's whole process group (spec 0016, OQ-035).
+libc = "0.2"
+
 [dev-dependencies]
 # GPUI's test window, to drive keys through a real dispatch tree. Test
 # builds only; it turns on GPUI's x11 feature there, never in tern itself.
@@ -58,12 +62,17 @@ runtime-shaders = ["gpui_platform/runtime_shaders"]
 widestring = "1"
 # AttachConsole, so CLI output reaches the terminal of a GUI-subsystem tern.exe;
 # PeekNamedPipe, to wait on askpass helpers without a read; the registry,
-# for PuTTY's and WinSCP's sessions (spec 0015, OQ-029).
+# for PuTTY's and WinSCP's sessions (spec 0015, OQ-029); Job objects, to
+# end a plugin's whole process tree (spec 0016, OQ-035), whose types need
+# the Security and Threading features.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_Console",
+    "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Registry",
+    "Win32_System_Threading",
 ] }
 
 [target.'cfg(windows)'.build-dependencies]

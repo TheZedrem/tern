@@ -54,7 +54,7 @@ pub fn clean_prompt(prompt: &str) -> String {
 /// byte-order mark, tag characters. They are treated like controls. The
 /// zero-width joiner and non-joiner stay: emoji sequences and several
 /// scripts need them.
-pub(super) fn is_invisible_format(c: char) -> bool {
+pub fn is_invisible_format(c: char) -> bool {
     matches!(
         c,
         '\u{061C}'

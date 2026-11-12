@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 5
 tasks: [T-064, T-065, T-066, T-067, T-068, T-069, T-070, T-071]
-related: [spec 0001, spec 0004, spec 0005, spec 0009, spec 0013, threat model 0005, OQ-031 ✅, OQ-032 ✅, OQ-035]
+related: [spec 0001, spec 0004, spec 0005, spec 0009, spec 0013, spec 0018, threat model 0005, OQ-031 ✅, OQ-032 ✅, OQ-035, OQ-037]
 ---
 
 # Spec: Plugin system
@@ -37,7 +37,7 @@ nothing touching a terminal before the user saw and approved it.
 
 **Out of scope:**
 
-- Where panels are drawn, and the SSH hosts as the first built-in panel: the app sidebar's own spec (T-064); panels wait for it
+- Where panels are drawn, and the SSH hosts as the first built-in panel: the app sidebar's own spec ([spec 0018](0018-app-sidebar.md)); panels wait for it
 - File-browser targets from plugins (S3, SMB; the idea's `display_browser`): its own Phase 5 spec (T-070), because a target is a set of operations, not one action
 - Theme plugins: data read by the boot path, not programs (architecture §Roadmap); their own Phase 5 spec
 - `request_portforward`: with port forwarding, Phase 7
@@ -73,7 +73,10 @@ nothing touching a terminal before the user saw and approved it.
   settings: [{ key: socket, label: Docker socket, type: text }]
   ```
 
-  A manifest over 64 KiB is unusable without being parsed. Its `name` must
+  A manifest over 64 KiB is unusable without being parsed. The IDs of a
+  plugin, its commands, panels and settings are 1 to 64 of `a-z`, `0-9`,
+  `-` and `_`. `run` starts with a program's name (looked up on `PATH`),
+  an absolute path, or `./` and a path that stays inside the folder. Its `name` must
   differ, ignoring case, from every other plugin's and from `Tern`, or both
   plugins are listed as unusable. Its strings render by spec 0003's title
   rules, capped at 64 characters, and `icon` names one of Tern's built-in
@@ -125,17 +128,18 @@ nothing touching a terminal before the user saw and approved it.
   Windows' 32 k command-line limit and argv quoting (OQ-032).
 - **One event at a time [load-bearing].** After writing an event, Tern
   writes the plugin's next one only once the plugin sent `ready` or
-  exited. No event then sits unread in the pipe of a process that exits,
-  so none is lost. A plugin that stays running sends `ready` whenever it
-  can take another event, also before it waits for an `action_result`; a
-  plugin that exits after each event never sends it. `ready` is a flag,
-  not a count: more of them before the next event change nothing.
+  exited. Tern never writes an event the plugin didn't ask for, so none
+  sits unread in the pipe of a process that exits, and none is lost. A
+  plugin that stays running sends `ready` whenever it can take another
+  event, also before it waits for an `action_result`; a plugin that exits
+  after each event never sends it. Each `ready` asks for one more event:
+  a plugin that sends two gets two, and has to read both before it exits.
 - **EOF on stdin means stop [load-bearing].** Tern never signals a plugin
   any other way before it kills it. A plugin gets EOF when it is disabled
   or Tern quits: it ends its own
-  children and exits within 2 s, or Tern kills the PID it spawned, only
-  while it still holds that process's unreaped handle. Whether Tern kills
-  the whole process tree instead is OQ-035 (TM-plug-11).
+  children and exits within 2 s, or Tern kills the process it spawned
+  and everything that process started, only while it still holds that
+  process's unreaped handle (OQ-035, TM-plug-11; Platform notes).
 - **Events** (Tern → plugin), each `{"api":1,"event":…,"settings":{…},…}`:
   `start`, `command`, `panel_opened`, `panel_closed`, `panel_action` (a
   button or row was clicked), `panel_input` (the panel's input field was
@@ -216,7 +220,7 @@ nothing touching a terminal before the user saw and approved it.
   10,000 lines, in memory only. Each plugin's reader hands lines over a
   bounded channel, so a flood blocks the plugin, not the UI. Lines are
   parsed on the reader thread. The plugin's stderr log
-  keeps its last 10,000 lines, in memory only. Events wait in a queue of
+  keeps its last 10,000 lines, each cut at 1,024 characters, in memory only. Events wait in a queue of
   256 per plugin; one that doesn't fit, because the plugin isn't reading
   its stdin or never sends `ready`, is dropped with a line in
   the plugin's log. Tern doesn't kill a plugin for being slow: one that
@@ -226,7 +230,7 @@ nothing touching a terminal before the user saw and approved it.
 ### Module surface
 
 - `plugins::Host`: owns the found plugins and their processes; `dispatch(plugin, Event)`; hands parsed `Action`s to the workspace on the foreground thread. `Event` and `Action` are enums (serde-tagged), not strings
-- `plugins::Host` also holds each plugin's event queue and its `ready` flag, so one-at-a-time delivery lives in one place
+- `plugins::Host` also holds each plugin's event queue and its count of `ready`s, so one-at-a-time delivery lives in one place
 - Threads: per running plugin one stdout reader, one stderr reader and one stdin writer, so a plugin that doesn't read never blocks the background executor; spawning on the background executor. A plugin inherits only its three pipes, never a PTY's descriptor or handle (TM-plug-14)
 - `plugins::PanelModel`: a panel's items, drawn by the app sidebar (T-064)
 - `Workspace` hosts confirmations through `plugins/confirm.rs`; it doesn't own them (AGENTS.md, hazard 9)
@@ -268,7 +272,8 @@ nothing touching a terminal before the user saw and approved it.
 8. **Settings:** manifest fields (`text`, `bool`, `number`, `choice`) and
    `set_settings` fields are drawn on the plugin's page and written under
    `plugins.<id>.settings` through spec 0009's in-place edits; a change
-   sends `settings_changed`. The page says these fields are saved in
+   sends `settings_changed` to a plugin that is running. One that isn't
+   gets the new settings with its next event, as every event carries them. The page says these fields are saved in
    `config.yaml` as plain text and are no place for secrets (TM-plug-18).
 
 ### Startup impact
@@ -286,9 +291,13 @@ after the first frame on a background thread. T-066 reports
   are native (`C:\…`).
 - Linux: the program needs its execute bit; a missing one is the spawn
   failure of flow 3.
-- Both: killing the spawned PID leaves a plugin's own children running. A
-  plugin must end them when its stdin closes. Whether Tern kills the tree
-  is OQ-035; until it is answered, leave `// TODO(OQ-035)` at the kill.
+- A kill ends the plugin's process tree (OQ-035). Linux: each plugin
+  leads its own process group, killed with `killpg` while the leader is
+  unreaped; a plugin that exited by itself leaves its children running.
+  Windows: each plugin process has its own Job object with
+  `KILL_ON_JOB_CLOSE`, so what it started also ends when it exits by
+  itself and when Tern crashes. A child that leaves its group or job is
+  beyond Tern (OQ-031).
 - macOS: compiles; same code path as Linux.
 
 ### Security & privacy
@@ -306,8 +315,8 @@ after the first frame on a background thread. T-066 reports
   starts after the first frame: enabling it, after the trusted-source
   warning, is the user's decision (ground rule 1 as amended by OQ-031).
 - STRIDE model: [threat model 0005](threat-model/0005-plugins.md). Its
-  mitigations are in this spec; residual risks and the process-tree
-  question await the owner in OQ-035.
+  mitigations are in this spec; its residual risks await the owner in
+  OQ-035.
 
 ## Acceptance criteria
 
@@ -324,4 +333,5 @@ after the first frame on a background thread. T-066 reports
 
 ## Open questions
 
-- A plugin's own child processes outlive a kill of its PID. Is the EOF rule enough for a plugin that ignores it, or does Tern kill the whole tree (a process group on Linux, a Job Object on Windows)? Threat model 0005 (TM-plug-11) proposes the tree kill; the owner decides in OQ-035.
+- Does a plugin that hears `pane_opened` learn about the panes already open when it was found or enabled? Until answered, no (OQ-037).
+- The residual risks of threat model 0005 await the owner's sign-off in OQ-035; its process-tree question is answered.

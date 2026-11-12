@@ -33,6 +33,7 @@ impl Workspace {
         });
         self.panes.insert(leaf, pane);
         self.pane_subscriptions.insert(leaf, subscription);
+        self.plugins_pane_opened(leaf, cx);
     }
 
     /// What a pane with `theme` takes from the current config.

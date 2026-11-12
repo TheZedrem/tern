@@ -220,6 +220,7 @@ impl Workspace {
         self.pane_subscriptions.remove(&leaf);
         if let Some(pane) = self.panes.remove(&leaf) {
             pane.update(cx, |pane, _| pane.shutdown());
+            self.plugins_pane_closed(leaf, cx);
         }
     }
 

@@ -1,5 +1,5 @@
 ---
-status: later
+status: resolved
 blocked-by: []
 ---
 # T-066: Plugin host: manifests, processes and the protocol
@@ -15,7 +15,8 @@ Includes the `plugins:` config block with its template in
 plugins enabled that get `start`. Builds threat model 0005's TM-plug-01
 (discovery check), -10, -12, -13, -15, -16 (event contents), -17 and
 -19, and checks -14 (only three pipes inherited) on Linux and Windows.
-The kill of a plugin's process tree (TM-plug-11) follows OQ-035; until
-then, `// TODO(OQ-035)` at the kill. Area: src.
+A kill ends the plugin's process tree (TM-plug-11; OQ-035, answered
+2026-11-12): a process group on Linux, a Job object on Windows.
+Area: src.
 
 Spec: ../spec/0016-plugin-system.md

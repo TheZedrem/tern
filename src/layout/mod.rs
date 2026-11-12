@@ -10,6 +10,7 @@ mod closing;
 mod files;
 mod forwards;
 mod panes;
+mod plugins;
 mod profiles;
 mod reload;
 mod session;
@@ -277,6 +278,8 @@ pub struct Workspace {
     sftp_width: f32,
     /// The app's port forwards, from the first one on (spec 0017).
     forwards: Option<Entity<crate::forwards::registry::Registry>>,
+    /// The plugin host, from the first frame on (spec 0016).
+    plugins: Option<Entity<crate::plugins::Host>>,
     /// A close the user chose "Upload and close" for, waiting on the
     /// uploads (spec 0008, flow 3).
     closing: Option<Closing>,
@@ -348,6 +351,7 @@ impl Workspace {
             files: HashMap::new(),
             sftp_width: SFTP_WIDTH,
             forwards: None,
+            plugins: None,
             closing: None,
             window_may_close: false,
         };
@@ -454,6 +458,7 @@ impl Workspace {
             cx.background_executor()
                 .spawn(async { sftp::copies::sweep() })
                 .detach();
+            self.start_plugins(window, cx);
         }
         cx.notify();
     }

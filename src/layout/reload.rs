@@ -209,6 +209,7 @@ impl Workspace {
             None => self.theme = theme,
         }
         self.apply_settings(cx);
+        self.plugins_reloaded(cx);
         if let Some(screen) = &self.settings {
             let config = self.config.clone();
             screen

@@ -75,3 +75,16 @@ theme:
   #     # Also: selection, accent, and the 16 terminal colors black, red,
   #     # green, yellow, blue, magenta, cyan, white, bright_black, ...,
   #     # bright_white.
+
+# Plugins: programs in the plugins folder (~/.local/share/tern/plugins/<id>/,
+# on Windows %LOCALAPPDATA%\tern\plugins\<id>\) that add commands and panels.
+# A plugin runs as you and can do what you can: enable only one from a
+# source you trust. One whose plugin.yaml names another command line than
+# `run` here isn't started.
+# plugins:
+#   docker:
+#     enabled: true
+#     run: [./tern-docker]                # the command line you agreed to
+#     rights: [pane_info, terminal_write] # of pane_info, terminal_write, terminal_read, open_tab
+#     events: [pane_opened, pane_closed]  # of start, pane_opened, pane_closed
+#     settings: { socket: /var/run/docker.sock } # plain text: no place for secrets
