@@ -1,8 +1,8 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 5
-tasks: [T-064, T-080, T-049, T-084, T-069]
-related: [spec 0003, spec 0004, spec 0006, spec 0008, spec 0009, spec 0013, spec 0016, spec 0017, threat model 0003, threat model 0005, OQ-036, OQ-038]
+tasks: [T-064, T-080, T-049, T-084, T-085, T-069]
+related: [spec 0003, spec 0004, spec 0006, spec 0008, spec 0009, spec 0013, spec 0016, spec 0017, threat model 0003, threat model 0005, OQ-036, OQ-038, OQ-039]
 ---
 
 # Spec: App sidebar
@@ -38,7 +38,7 @@ meant for the shell.
 - The panel extension point, used by built-in and plugin panels alike
 - The Files panel: the file browser of the active pane, an SSH pane's host or a local pane's disk
 - The Port forwards panel: the active SSH pane's forwards, listed only while an SSH pane is active
-- The SSH hosts panel: list, filter, open in a new tab
+- The SSH hosts panel: list, filter, open in a new tab; a host's menu to edit or delete its profile (T-085)
 - How plugin panels are hosted: order, header, icon, the stopped state, the log, when `open_panel` is carried out
 - Commands `sidebar.toggle` (which takes over `Ctrl+Shift+S` from `sftp.toggle`) and `sidebar.focus`, and the setting `app_sidebar`, which `sftp_sidebar` becomes
 
@@ -46,7 +46,7 @@ meant for the shell.
 
 - Panel items and their behavior (`set_panel`, command buttons, bounds): [spec 0016](0016-plugin-system.md)
 - What the file browser and the port forwards show and do: specs 0008, 0013 and 0017. Only where they are drawn and what opens them changes
-- Adding, editing or grouping hosts in the panel; a context menu (split with host, forget password): *Later*. The picker and the settings screen do these today
+- Adding a host or a group in the panel, more menu entries (split with host, forget password), and editing a `~/.ssh/config` host: *Later*. The picker and the settings screen do these today
 - Local profiles in the hosts panel: never; `Ctrl+Shift+T` lists them
 - A palette picker for panels, reordering or hiding panels, collapsing host groups, dragging a host into a split: *Later*
 - More icons than the embedded set: *Later* (each one adds to the binary)
@@ -159,13 +159,38 @@ meant for the shell.
   host and group with the picker's matcher. The list is read off the UI
   thread when the panel is shown, on F5 and on a config reload; nothing
   watches `~/.ssh/config`. Listing never runs `ssh -G` (TM-askpass-20).
+- **A host's menu (T-085).** A right click on a host row selects it and
+  opens a menu; with the keyboard in the panel, the Menu key or
+  Shift+F10 opens it for the selected host. It holds Connect (as Enter),
+  Edit… and Delete…. Its entries never run on a right click alone.
+  - *Edit…* opens the settings screen's profile form (spec 0009) for
+    that profile, in place over the panes as the settings screen is
+    drawn; Save writes `config.yaml` through the same checked edit as the
+    settings screen, Cancel or Esc closes it and gives the keyboard back.
+    The list reloads after the save, as on any config reload.
+  - *Delete… [load-bearing]* asks first, in the window's question
+    dialog (as closing with unsent edits does, spec 0008, flow 3), never
+    in the sidebar (Model, Never a prompt): "Delete the SSH profile
+    `<label>` from config.yaml?" with Delete and Cancel, Cancel the
+    default and the answer to Esc. Only Delete removes the profile, by
+    the settings screen's delete. Its keychain entries stay, as a delete
+    on the settings screen leaves them; "Forget saved password" forgets
+    them (spec 0006, flow 7). Delete or Backspace on the selected host
+    asks the same.
+  - *A `~/.ssh/config` host:* Tern never writes that file (spec 0006,
+    Security). Its menu shows Edit… and Delete… disabled, with "Defined
+    in ~/.ssh/config" as the reason, and Delete or Backspace does
+    nothing.
+  - Tabs already connected to a deleted or edited profile keep running
+    as they were; a restored tab whose profile is gone follows spec
+    0003, flow 6.
 
 ### Module surface
 
 - `sidebar::Sidebar` (a GPUI entity): `register(Panel)`, `remove(&PanelId)`, `show(&PanelId)`, `toggle()`, `focus()`, and its `open`, `width` and shown panel for the session. Emits `Shown(PanelId)` and `Hidden(PanelId)`; T-069 turns them into `panel_opened` and `panel_closed`
 - `sidebar::Panel { id, title, icon, plugin, view }`, `sidebar::PanelId` (`Files | Hosts | Forwards | Plugin { plugin, panel }`)
 - `sidebar::pane::PanePanel`: draws a view of the active pane. Files is one, over the pane's browser (`src/files/`); Port forwards is another, over `forwards::view::ForwardsView`
-- `sidebar::hosts::HostsPanel`: emits `Open(host id)`; the workspace opens it with the picker's own `open_profile_tab`
+- `sidebar::hosts::HostsPanel`: emits `Open(host id)`, `Edit(host id)` and `Delete(host id)`; the workspace opens a host with the picker's own `open_profile_tab`, edits with the settings screen's profile form and deletes with its `Change::Profile` after the question
 - `Workspace` hosts the sidebar through `layout/sidebar.rs`; it doesn't own panels (AGENTS.md, hazard 9)
 - Commands, in the palette and bindable (spec 0004): `sidebar.toggle` ("Toggle sidebar", `Ctrl+Shift+S`, `Cmd+S` on macOS) and `sidebar.focus` ("Focus sidebar", no default key). `sftp.toggle` leaves the palette but stays an accepted name for `sidebar.toggle` in `keybindings:`, so existing configs keep working (T-049); the settings screen's Record and Reset treat such an entry as the command's own. `pane.portForwards` (spec 0017) opens the sidebar on the Port forwards panel, the keyboard in its add row
 - Setting `app_sidebar: left | right` (default `right`), on the settings screen's Appearance page where `sftp_sidebar` was, with its template line in `src/default-config.yaml` in place of the old one (spec 0009)
@@ -280,7 +305,7 @@ Tern ↔ plugin boundary, and keeps
 3. Showing SSH hosts, hiding the sidebar and showing it again shows SSH hosts; so does quitting and relaunching. With no `session.json` it opens on Files.
 4. With `tab_bar: left` and `app_sidebar: left`, the order from the left is tab list, sidebar, panes; with `tab_bar: top` the tab bar spans above the sidebar. A config with only `sftp_sidebar: left` gives the same; changing the side on the settings screen moves an open sidebar without a restart and leaves `app_sidebar` and no `sftp_sidebar` in the file. The template in `src/default-config.yaml` has `app_sidebar` only. `sftp.toggle` is not in the palette, and a `keybindings:` entry binding it toggles the sidebar. With an SSH pane active the strip reads Files, SSH hosts, Port forwards, and `pane.portForwards` opens the sidebar on Port forwards; with a local pane active the strip has no Port forwards button, and switching to one while Port forwards is shown shows Files (T-084).
 5. The hosts panel lists the same hosts under the same groups as `Ctrl+Shift+H`; typing part of a group name in the filter narrows it to that group; a host added to `~/.ssh/config` shows after F5. A double click, or Enter, on a host opens a connected tab named after it with the keyboard in it (Linux and Windows); single clicks start no `ssh` process.
-6. `sidebar.focus` on SSH hosts puts typing into the filter field and none of it reaches the shell; Esc returns typing to the shell with the sidebar still open, in the Files and Port forwards panels too.
+6. With a profile host selected, a right click opens a menu with Connect, Edit… and Delete…; Edit… changes its label in `config.yaml` with every other line and comment kept, and the list shows the new label; Delete… asks in a dialog over the window, Esc or Cancel keeps the profile, Delete removes it and leaves its saved password in the keychain. A `~/.ssh/config` host's Edit… and Delete… are disabled and the file is never written (T-085). `sidebar.focus` on SSH hosts puts typing into the filter field and none of it reaches the shell; Esc returns typing to the shell with the sidebar still open, in the Files and Port forwards panels too.
 7. Quitting with the sidebar open at 320 px on an SSH pane's files and relaunching shows it at 320 px on the first frame and makes no connection; `~/.ssh/config` is not read before the first-frame mark, and `--bench-startup 10` is within noise of a run with it closed. `session.json` holds the flag, the width and a panel ID and no host name. With `restore_session: false` it starts closed.
 8. A panel registered in a test through the same call the built-in panels use appears in the strip after them and shows its view; removing it while shown shows Files. `src/sidebar/mod.rs` has no code path for a particular panel: beyond declaring its submodules, it names no panel ID or panel type. Spec 0008's and spec 0017's acceptance criteria still pass, apart from the lines this spec overrides.
 9. With plugins `alpha` and `Zeta` enabled (T-069), the strip reads Files, SSH hosts, alpha's panels, Zeta's in manifest order; a plugin panel's header reads `Plugin <name>`, one named `SSH Hosts` reads `Plugin SSH Hosts`, and `icon: no-such-icon` shows the default icon. A killed plugin's panel keeps its place and header and shows "stopped" with Restart.
@@ -288,4 +313,6 @@ Tern ↔ plugin boundary, and keeps
 
 ## Open questions
 
-None. OQ-036 and OQ-038 were answered as written here when the owner approved the spec (2026-11-12).
+OQ-036 and OQ-038 were answered as written here when the owner approved the spec (2026-11-12).
+
+- OQ-039: the host menu's choices (T-085): Edit as the settings screen's form, keychain entries kept on delete, `~/.ssh/config` hosts not editable.
