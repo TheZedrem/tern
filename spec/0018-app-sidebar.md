@@ -166,7 +166,8 @@ meant for the shell.
   - *Edit…* opens the settings screen's profile form (spec 0009) for
     that profile, in place over the panes as the settings screen is
     drawn; Save writes `config.yaml` through the same checked edit as the
-    settings screen, Cancel or Esc closes it and gives the keyboard back.
+    settings screen, Cancel or Esc closes it and gives the keyboard back
+    to the active pane. The keyboard starts in its Name field.
     The list reloads after the save, as on any config reload.
   - *Delete… [load-bearing]* asks first, in the window's question
     dialog (as closing with unsent edits does, spec 0008, flow 3), never
@@ -176,7 +177,9 @@ meant for the shell.
     the settings screen's delete. Its keychain entries stay, as a delete
     on the settings screen leaves them; "Forget saved password" forgets
     them (spec 0006, flow 7). Delete or Backspace on the selected host
-    asks the same.
+    asks the same, with the keyboard in the list (after a click on a
+    host, or Tab from the filter field); in the filter field they edit
+    its text.
   - *A `~/.ssh/config` host:* Tern never writes that file (spec 0006,
     Security). Its menu shows Edit… and Delete… disabled, with "Defined
     in ~/.ssh/config" as the reason, and Delete or Backspace does
@@ -190,7 +193,7 @@ meant for the shell.
 - `sidebar::Sidebar` (a GPUI entity): `register(Panel)`, `remove(&PanelId)`, `show(&PanelId)`, `toggle()`, `focus()`, and its `open`, `width` and shown panel for the session. Emits `Shown(PanelId)` and `Hidden(PanelId)`; T-069 turns them into `panel_opened` and `panel_closed`
 - `sidebar::Panel { id, title, icon, plugin, view }`, `sidebar::PanelId` (`Files | Hosts | Forwards | Plugin { plugin, panel }`)
 - `sidebar::pane::PanePanel`: draws a view of the active pane. Files is one, over the pane's browser (`src/files/`); Port forwards is another, over `forwards::view::ForwardsView`
-- `sidebar::hosts::HostsPanel`: emits `Open(host id)`, `Edit(host id)` and `Delete(host id)`; the workspace opens a host with the picker's own `open_profile_tab`, edits with the settings screen's profile form and deletes with its `Change::Profile` after the question
+- `sidebar::hosts::HostsPanel`: emits `Open(host id)`, `Edit(host id)` and `Delete { id, label }`; the workspace opens a host with the picker's own `open_profile_tab`, edits with the settings screen's profile form and deletes with its `Change::Profile` after the question
 - `Workspace` hosts the sidebar through `layout/sidebar.rs`; it doesn't own panels (AGENTS.md, hazard 9)
 - Commands, in the palette and bindable (spec 0004): `sidebar.toggle` ("Toggle sidebar", `Ctrl+Shift+S`, `Cmd+S` on macOS) and `sidebar.focus` ("Focus sidebar", no default key). `sftp.toggle` leaves the palette but stays an accepted name for `sidebar.toggle` in `keybindings:`, so existing configs keep working (T-049); the settings screen's Record and Reset treat such an entry as the command's own. `pane.portForwards` (spec 0017) opens the sidebar on the Port forwards panel, the keyboard in its add row
 - Setting `app_sidebar: left | right` (default `right`), on the settings screen's Appearance page where `sftp_sidebar` was, with its template line in `src/default-config.yaml` in place of the old one (spec 0009)

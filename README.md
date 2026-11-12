@@ -50,7 +50,7 @@ earlier Tauri version took 1.07 s to start and was dropped.
   `.ppk` keys need converting with `puttygen` first, and Pageant users must
   turn on Pageant's OpenSSH pipe for `ssh` to use it
 - A sidebar that stays open across tabs (`Ctrl+Shift+S`), showing the active pane's files: an SSH pane's over SFTP, a local shell's from its folder. Browse, download, upload (drag and drop too), rename and delete
-- Your SSH hosts in the same sidebar, filtered as you type and opened with a double click
+- Your SSH hosts in the same sidebar, filtered as you type, opened with a double click, and edited or deleted from a right click
 - Edit remote files in your own editor; saves are uploaded on a click, on save or on focus
 - A files pane that shows the local disk or any saved host as a tree next to your terminals
 - Port forwards (local, remote and SOCKS) from the sidebar, listening on 127.0.0.1 unless you allow the network; never saved

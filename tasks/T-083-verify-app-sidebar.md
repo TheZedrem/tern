@@ -17,7 +17,10 @@ coming back without reconnecting (AC2); the SSH hosts panel against
 `Ctrl+Shift+H`, F5, and a double click opening a connected tab (AC5);
 Files on a local pane listing the shell's folder, and a program
 run from it opening beside the pane (T-049); Port forwards appearing
-in the strip only on an SSH pane (T-084); Tab, Shift+Tab, Left and Right walking the strip, the header and the
+in the strip only on an SSH pane (T-084); the SSH hosts menu (T-085): Edit… saving `config.yaml` and the list
+showing the change, Delete… with Enter on the dialog meaning Cancel,
+and Delete removing the profile (tests can't answer the dialog or save,
+since `write_change` writes the real `config.yaml`); Tab, Shift+Tab, Left and Right walking the strip, the header and the
 panel (flow 2); a zoomed pane keeping the sidebar and the settings
 screen drawing over it; the first frame of a relaunch with the sidebar
 saved open at 320 px (AC7). File what fails as bugs. To make the hosts

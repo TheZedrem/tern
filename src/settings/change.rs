@@ -625,6 +625,53 @@ font:
         assert_eq!(delete.edited(&added).unwrap(), TWO_PROFILES);
     }
 
+    /// Spec 0018, A host's menu, and AC6: Delete… in the hosts panel
+    /// removes that SSH profile's block, its comments with it, and keeps
+    /// every other line and comment of the file, the other profiles too.
+    #[test]
+    fn deleting_an_ssh_profile_keeps_every_other_line_and_comment() {
+        let text = "\
+# my hosts
+profiles:
+  prod:
+    name: Prod   # the live one
+    type: ssh
+    host: prod.example.com
+    user: me
+  stage:   # for testing
+    type: ssh
+    host: stage.example.com
+font:
+  size: 13 # pt
+";
+        let delete = Change::Profile {
+            id: "prod".into(),
+            profile: None,
+        };
+        let edited = delete.edited(text).unwrap();
+        let (gone, added) = changed(text, &edited);
+        assert_eq!(
+            gone,
+            [
+                "  prod:",
+                "    name: Prod   # the live one",
+                "    type: ssh",
+                "    host: prod.example.com",
+                "    user: me",
+            ]
+        );
+        assert!(added.is_empty(), "{added:?}");
+        let loaded = parse(&edited);
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        let ids: Vec<&str> = loaded
+            .config
+            .profiles
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(ids, ["stage"]);
+    }
+
     /// Spec 0009, flow 4: editing a profile rewrites its block only.
     #[test]
     fn editing_a_profile_changes_only_its_lines() {

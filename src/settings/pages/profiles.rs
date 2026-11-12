@@ -3,7 +3,7 @@
 use crate::config::{Profile, ProfileKind};
 use crate::layout::show_notice;
 use crate::settings::change::{self, Change, ProfileForm};
-use crate::settings::{Page, Row, SettingsView};
+use crate::settings::{Page, Row, SettingsEvent, SettingsView};
 use gpui::{
     AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, PathPromptOptions,
     SharedString, Styled, Window, div, px,
@@ -30,6 +30,32 @@ pub(in crate::settings) struct Form {
 }
 
 impl SettingsView {
+    /// Opens the form of profile `id` on its own: its Save or Cancel closes
+    /// the screen too (spec 0018, A host's menu). Nothing if there's no
+    /// such profile.
+    pub fn edit_profile(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(profile) = self.config.profiles.iter().find(|p| p.id == id).cloned() else {
+            return;
+        };
+        self.page = Page::Profiles;
+        self.open_form(true, Some(&profile), window, cx);
+        self.quick = true;
+        if let Some(form) = &self.form
+            && let Some((_, input)) = form.inputs.first()
+        {
+            input.update(cx, |input, cx| input.focus(window, cx));
+        }
+    }
+
+    /// Closes the profile form, and the screen with it if the form was
+    /// opened on its own.
+    fn close_form(&mut self, cx: &mut Context<Self>) {
+        self.form = None;
+        if std::mem::take(&mut self.quick) {
+            cx.emit(SettingsEvent::Close);
+        }
+    }
+
     /// Opens the profile form, empty or filled from `profile`.
     fn open_form(
         &mut self,
@@ -179,7 +205,6 @@ impl SettingsView {
             };
             change::new_id(name, &taken)
         });
-        self.form = None;
         self.set(
             Change::Profile {
                 id,
@@ -187,6 +212,7 @@ impl SettingsView {
             },
             cx,
         );
+        self.close_form(cx);
         cx.notify();
     }
 
@@ -251,6 +277,8 @@ impl SettingsView {
                         .child(
                             Button::new("profile-save")
                                 .label("Save")
+                                // Where a test clicks; a no-op outside test builds.
+                                .debug_selector(|| "profile-save".into())
                                 .small()
                                 .primary()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -268,7 +296,7 @@ impl SettingsView {
                                 // Where a test clicks; a no-op outside test builds.
                                 .debug_selector(|| "profile-cancel".into())
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    this.form = None;
+                                    this.close_form(cx);
                                     this.keep_keyboard(window, cx);
                                     cx.notify();
                                 })),
@@ -369,7 +397,8 @@ impl SettingsView {
 #[cfg(test)]
 mod tests {
     use crate::settings::Page;
-    use crate::settings::tests::{Screen, open_screen};
+    use crate::settings::change::Change;
+    use crate::settings::tests::{Screen, open_screen, open_screen_with};
     use gpui::TestAppContext;
 
     /// Spec 0009, flow 4 and criterion 8: with a profile form field holding
@@ -490,5 +519,233 @@ mod tests {
         });
         screen.cx.run_until_parked();
         assert_eq!(field(&mut screen, "Directory"), "~");
+    }
+
+    /// Two SSH profiles with comments and keys around them, as the
+    /// sidebar's hosts panel lists them.
+    const TWO_HOSTS: &str = "\
+# my hosts
+profiles:
+  prod:
+    name: Prod   # the live one
+    type: ssh
+    host: prod.example.com
+    user: me
+    port: 2222
+    group: Production
+  stage:
+    type: ssh
+    host: stage.example.com
+font:
+  size: 13 # pt
+";
+
+    /// The screen on [`TWO_HOSTS`] with profile `id`'s form opened on its
+    /// own, as Edit… in the hosts panel's menu does (spec 0018, A host's
+    /// menu), and drawn.
+    fn quick_edit<'a>(id: &str, cx: &'a mut TestAppContext) -> Screen<'a> {
+        let loaded = crate::config::parse(TWO_HOSTS);
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        let screen = open_screen_with(loaded.config, cx);
+        let view = screen.view.clone();
+        screen
+            .cx
+            .update(|window, cx| view.update(cx, |view, cx| view.edit_profile(id, window, cx)));
+        screen.cx.run_until_parked();
+        screen.cx.update(|window, cx| window.draw(cx).clear(cx));
+        screen
+    }
+
+    fn form_id(screen: &mut Screen<'_>) -> Option<Option<String>> {
+        let view = screen.view.clone();
+        screen
+            .cx
+            .update(|_, cx| view.read(cx).form.as_ref().map(|form| form.id.clone()))
+    }
+
+    /// Spec 0018, A host's menu: Edit… shows the settings screen's
+    /// profile form for that profile, filled in from it, on the Profiles
+    /// page.
+    #[gpui::test]
+    fn editing_a_profile_on_its_own_shows_its_form_filled_in(cx: &mut TestAppContext) {
+        let mut screen = quick_edit("prod", cx);
+        assert_eq!(form_id(&mut screen), Some(Some("prod".into())));
+        let page = screen.cx.update(|_, cx| screen.view.read(cx).page);
+        assert_eq!(page, Page::Profiles);
+        for (label, value) in [
+            ("Name", "Prod"),
+            ("Host", "prod.example.com"),
+            ("User", "me"),
+            ("Port", "2222"),
+            ("Group", "Production"),
+        ] {
+            assert_eq!(field(&mut screen, label), value, "{label}");
+        }
+        assert_eq!(screen.closed.get(), 0);
+        assert!(screen.changes.borrow().is_empty());
+    }
+
+    /// Spec 0018, A host's menu: Cancel on a form opened on its own
+    /// closes the whole screen and writes nothing.
+    #[gpui::test]
+    fn cancel_on_a_form_opened_on_its_own_closes_the_screen_and_writes_nothing(
+        cx: &mut TestAppContext,
+    ) {
+        let mut screen = quick_edit("prod", cx);
+        screen.click("profile-cancel");
+        assert_eq!(screen.closed.get(), 1);
+        assert!(screen.changes.borrow().is_empty(), "Cancel wrote something");
+    }
+
+    /// Spec 0018, A host's menu: Esc with the keyboard in a field of a
+    /// form opened on its own closes the screen and writes nothing.
+    #[gpui::test]
+    fn esc_in_a_form_opened_on_its_own_closes_the_screen_and_writes_nothing(
+        cx: &mut TestAppContext,
+    ) {
+        let mut screen = quick_edit("prod", cx);
+        let name = screen.cx.update(|_, cx| {
+            let form = screen
+                .view
+                .read(cx)
+                .form
+                .as_ref()
+                .expect("the form is open");
+            form.inputs[0].1.clone()
+        });
+        assert!(
+            screen.is_focused(&name),
+            "the keyboard isn't in the form's first field"
+        );
+        screen.cx.simulate_keystrokes("escape");
+        screen.cx.run_until_parked();
+        assert_eq!(screen.closed.get(), 1);
+        assert!(screen.changes.borrow().is_empty(), "Esc wrote something");
+    }
+
+    /// Spec 0018, A host's menu, and AC6: Save on a form opened on its
+    /// own writes the profile by the settings screen's checked edit,
+    /// which changes its label in `config.yaml` and keeps every other
+    /// line and comment, and then closes the screen.
+    #[gpui::test]
+    fn save_on_a_form_opened_on_its_own_writes_the_profile_and_closes_the_screen(
+        cx: &mut TestAppContext,
+    ) {
+        let screen = quick_edit("prod", cx);
+        let (view, name) = screen.cx.update(|_, cx| {
+            let form = screen
+                .view
+                .read(cx)
+                .form
+                .as_ref()
+                .expect("the form is open");
+            (screen.view.clone(), form.inputs[0].1.clone())
+        });
+        screen.cx.update(|window, cx| {
+            name.update(cx, |name, cx| name.set_value("Production web", window, cx));
+            // The Save button has no test selector; this is its click.
+            view.update(cx, |view, cx| view.save_form(cx));
+        });
+        screen.cx.run_until_parked();
+
+        assert_eq!(screen.closed.get(), 1);
+        let changes = screen.changes.borrow().clone();
+        let [
+            change @ Change::Profile {
+                id,
+                profile: Some(_),
+            },
+        ] = &changes[..]
+        else {
+            panic!("not one profile write: {changes:?}");
+        };
+        assert_eq!(id, "prod");
+        let edited = change.edited(TWO_HOSTS).expect("a checked edit");
+        let gone: Vec<&str> = TWO_HOSTS
+            .lines()
+            .filter(|line| !edited.lines().any(|kept| kept == *line))
+            .collect();
+        assert_eq!(gone, ["    name: Prod   # the live one"], "{edited}");
+        let loaded = crate::config::parse(&edited);
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        let prod = loaded.config.profile("prod").expect("prod is kept");
+        assert_eq!(prod.name.as_deref(), Some("Production web"));
+        assert!(loaded.config.profile("stage").is_some());
+    }
+
+    /// Spec 0009, flow 4, as the hosts panel's Edit… uses it: a form that
+    /// isn't complete isn't saved, and stays open with the screen.
+    #[gpui::test]
+    fn an_incomplete_form_opened_on_its_own_is_not_saved_and_stays_open(cx: &mut TestAppContext) {
+        let mut screen = quick_edit("prod", cx);
+        let (view, host) = screen.cx.update(|_, cx| {
+            let form = screen
+                .view
+                .read(cx)
+                .form
+                .as_ref()
+                .expect("the form is open");
+            (screen.view.clone(), form.inputs[1].1.clone())
+        });
+        screen.cx.update(|window, cx| {
+            host.update(cx, |host, cx| host.set_value("", window, cx));
+            view.update(cx, |view, cx| view.save_form(cx));
+        });
+        screen.cx.run_until_parked();
+        assert_eq!(screen.closed.get(), 0, "the screen closed");
+        assert!(screen.changes.borrow().is_empty());
+        assert_eq!(form_id(&mut screen), Some(Some("prod".into())));
+    }
+
+    /// Spec 0018, A host's menu, with spec 0009, flow 4: a profile's form
+    /// opened from the Profiles page, the normal way, closes on Cancel
+    /// and leaves the screen open.
+    #[gpui::test]
+    fn cancel_on_a_form_opened_from_the_profiles_page_keeps_the_screen(cx: &mut TestAppContext) {
+        let loaded = crate::config::parse(TWO_HOSTS);
+        let mut screen = open_screen_with(loaded.config, cx);
+        screen.click("settings-tab-Profiles");
+        let view = screen.view.clone();
+        screen.cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                let prod = view.config.profile("prod").expect("prod");
+                view.open_form(true, Some(&prod), window, cx);
+            })
+        });
+        screen.cx.run_until_parked();
+        screen.click("profile-cancel");
+        assert_eq!(form_id(&mut screen), None, "Cancel closed the form");
+        assert_eq!(screen.closed.get(), 0, "Cancel closed the screen");
+    }
+
+    /// Spec 0018, A host's menu: after a form opened on its own was left
+    /// for another tab, a form opened the normal way no longer closes the
+    /// screen.
+    #[gpui::test]
+    fn a_form_left_for_another_tab_no_longer_closes_the_screen(cx: &mut TestAppContext) {
+        let mut screen = quick_edit("prod", cx);
+        screen.click("settings-tab-General");
+        assert_eq!(form_id(&mut screen), None);
+        screen.click("settings-tab-Profiles");
+        let view = screen.view.clone();
+        screen.cx.update(|window, cx| {
+            view.update(cx, |view, cx| view.open_form(true, None, window, cx))
+        });
+        screen.cx.run_until_parked();
+        screen.click("profile-cancel");
+        assert_eq!(screen.closed.get(), 0, "Cancel closed the screen");
+    }
+
+    /// Spec 0018, A host's menu: an ID that is no profile, like a
+    /// `~/.ssh/config` host's, opens no form and changes nothing.
+    #[gpui::test]
+    fn editing_an_unknown_profile_does_nothing(cx: &mut TestAppContext) {
+        let mut screen = quick_edit("ssh:cache", cx);
+        assert_eq!(form_id(&mut screen), None);
+        let page = screen.cx.update(|_, cx| screen.view.read(cx).page);
+        assert_eq!(page, Page::General);
+        screen.cx.simulate_keystrokes("escape");
+        assert_eq!(screen.closed.get(), 1, "Esc closes the screen as before");
+        assert!(screen.changes.borrow().is_empty());
     }
 }

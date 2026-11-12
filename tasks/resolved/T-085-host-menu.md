@@ -1,5 +1,5 @@
 ---
-status: next
+status: resolved
 blocked-by: []
 ---
 # T-085: Edit and delete a host from the sidebar's SSH hosts panel

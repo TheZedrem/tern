@@ -195,6 +195,9 @@ pub struct SettingsView {
     recording: Option<&'static str>,
     _recorder: Option<Subscription>,
     form: Option<Form>,
+    /// The form was opened on its own, from the sidebar (spec 0018, A
+    /// host's menu): closing it closes the screen.
+    quick: bool,
     /// The profile whose Delete was pressed once and asks again.
     deleting: Option<String>,
     page: Page,
@@ -276,6 +279,7 @@ impl SettingsView {
             recording: None,
             _recorder: None,
             form: None,
+            quick: false,
             deleting: None,
             imports: Vec::new(),
             _subscriptions: subscriptions,
@@ -621,6 +625,7 @@ impl Render for SettingsView {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.page = page;
                         this.form = None;
+                        this.quick = false;
                         if page == Page::Import {
                             this.look_for_imports(window, cx);
                         }
@@ -953,6 +958,8 @@ mod tests {
     pub(in crate::settings) struct Screen<'a> {
         pub view: Entity<SettingsView>,
         pub closed: Rc<Cell<usize>>,
+        /// What it asked to write to `config.yaml`, in order.
+        pub changes: Rc<RefCell<Vec<Change>>>,
         pub cx: &'a mut VisualTestContext,
     }
 
@@ -975,6 +982,14 @@ mod tests {
     /// Opens the screen with the default config, focused like the
     /// workspace's `open_settings` does.
     pub(in crate::settings) fn open_screen(cx: &mut TestAppContext) -> Screen<'_> {
+        open_screen_with(Config::default(), cx)
+    }
+
+    /// [`open_screen`] on `config`.
+    pub(in crate::settings) fn open_screen_with(
+        config: Config,
+        cx: &mut TestAppContext,
+    ) -> Screen<'_> {
         cx.update(|cx| {
             crate::layout::init(cx);
             crate::settings::init(cx);
@@ -983,16 +998,17 @@ mod tests {
             crate::commands::keymap::bind(&[], Config::default().new_tab, cx);
         });
         let closed = Rc::new(Cell::new(0));
+        let changes = Rc::new(RefCell::new(Vec::new()));
         let opened = Rc::new(RefCell::new(None));
         let (_, cx) = cx.add_window_view({
-            let (closed, opened) = (closed.clone(), opened.clone());
+            let (closed, changes, opened) = (closed.clone(), changes.clone(), opened.clone());
             move |window, cx| {
                 let host = cx.new(|cx| {
-                    let view = cx.new(|cx| SettingsView::new(Config::default(), window, cx));
-                    let events = cx.subscribe(&view, move |_, _, event, _| {
-                        if let SettingsEvent::Close = event {
-                            closed.set(closed.get() + 1);
-                        }
+                    let view = cx.new(|cx| SettingsView::new(config, window, cx));
+                    let events = cx.subscribe(&view, move |_, _, event, _| match event {
+                        SettingsEvent::Close => closed.set(closed.get() + 1),
+                        SettingsEvent::Change(change) => changes.borrow_mut().push(change.clone()),
+                        _ => {}
                     });
                     Host {
                         view,
@@ -1009,7 +1025,12 @@ mod tests {
             window.focus(&handle, cx);
         });
         cx.run_until_parked();
-        Screen { view, closed, cx }
+        Screen {
+            view,
+            closed,
+            changes,
+            cx,
+        }
     }
 
     impl Screen<'_> {

@@ -4,14 +4,19 @@
 //! the active pane. The sidebar and the panels themselves are
 //! `crate::sidebar`'s.
 
-use super::{Workspace, show_notice};
+use super::{Workspace, answers, show_notice};
 use crate::commands::{FocusSidebar, ShowPortForwards, ToggleSidebar};
 use crate::session::SavedSidebar;
+use crate::settings::change::Change;
 use crate::sidebar::hosts::{HostsEvent, HostsPanel};
 use crate::sidebar::pane::{Body, PanePanel, PanePanelEvent};
 use crate::sidebar::{self, Panel, PanelId, Sidebar, SidebarEvent};
 use crate::terminal::TerminalPane;
-use gpui::{AnyElement, App, AppContext, Context, Entity, Focusable, IntoElement, Window};
+use gpui::{
+    AnyElement, App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Styled,
+    Window, div,
+};
+use gpui_component::WindowExt;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{IconName, Sizable};
 use std::rc::Rc;
@@ -93,6 +98,8 @@ impl Workspace {
                 this.open_profile_tab(id, window, cx);
                 this.show_active(window, cx);
             }
+            HostsEvent::Edit(id) => this.edit_profile(id, window, cx),
+            HostsEvent::Delete { id, label } => this.ask_delete_profile(id, label, window, cx),
             HostsEvent::Notice(notice) => show_notice(notice.clone(), window, cx),
         })
         .detach();
@@ -361,6 +368,59 @@ impl Workspace {
             },
             None => Body::Nothing("Port forwards need an SSH pane.".into()),
         }
+    }
+
+    /// Opens the settings screen on profile `id`'s form alone; its Save or
+    /// Cancel closes the screen again (spec 0018, A host's menu).
+    fn edit_profile(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(&crate::commands::OpenSettings, window, cx);
+        if let Some(screen) = &self.settings {
+            screen
+                .view
+                .update(cx, |view, cx| view.edit_profile(id, window, cx));
+        }
+    }
+
+    /// Asks before deleting profile `id` from `config.yaml`, in the
+    /// window's dialog, never in the sidebar [load-bearing]: Cancel is
+    /// what Enter and Esc mean, and only Delete removes it, by the
+    /// settings screen's checked edit. Its keychain entries stay.
+    fn ask_delete_profile(
+        &mut self,
+        id: &str,
+        label: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = cx.entity().downgrade();
+        let id = id.to_owned();
+        let delete = answers::Answer {
+            label: "Delete".into(),
+            style: |button| button.danger(),
+            act: Rc::new(move |window, cx| {
+                let change = Change::Profile {
+                    id: id.clone(),
+                    profile: None,
+                };
+                let _ = workspace.update(cx, |workspace, cx| {
+                    workspace.write_change(change, window, cx);
+                });
+            }),
+        };
+        let cancel = answers::Answer {
+            label: "Cancel".into(),
+            style: |button| button,
+            act: Rc::new(|_, _| {}),
+        };
+        let choices = answers::Answers::new(vec![cancel, delete], 0, cx);
+        choices.focus_safe(window);
+        let question = format!("Delete the SSH profile “{label}” from config.yaml?");
+        window.open_dialog(cx, move |dialog, _, _| {
+            choices
+                .apply(dialog)
+                .title("Delete SSH profile?")
+                .child(div().text_sm().child(question.clone()))
+        });
     }
 
     /// Hands a reloaded config to the sidebar: its side, and the hosts.
@@ -1426,5 +1486,102 @@ pub(super) mod tests {
         assert_eq!(rig.active(), 1);
         assert_eq!(rig.files_panel(), local);
         assert_eq!(rig.sessions(), Vec::<LeafId>::new());
+    }
+
+    impl Rig<'_> {
+        /// Has the hosts panel ask `event` of the workspace, as its menu or
+        /// its keys do. The sidebar stays closed, so nothing lists the
+        /// hosts or reads `~/.ssh/config`.
+        fn hosts_ask(&mut self, event: HostsEvent) {
+            let hosts = self.workspace.update_in(self.cx, |workspace, window, cx| {
+                workspace.hosted(window, cx).hosts
+            });
+            hosts.update(self.cx, |_, cx| cx.emit(event));
+            self.draw();
+        }
+
+        fn settings_open(&mut self) -> bool {
+            self.workspace
+                .read_with(self.cx, |workspace, _| workspace.settings.is_some())
+        }
+
+        fn dialog_open(&mut self) -> bool {
+            self.cx.update(|window, cx| window.has_active_dialog(cx))
+        }
+
+        fn profile_ids(&mut self) -> Vec<String> {
+            self.workspace.read_with(self.cx, |workspace, _| {
+                let profiles = workspace.config.profiles.iter();
+                profiles.map(|profile| profile.id.clone()).collect()
+            })
+        }
+    }
+
+    /// Spec 0018, A host's menu: Edit… on a profile host opens the
+    /// settings screen with that profile's form; its Cancel closes the
+    /// whole screen, writing nothing, and gives the keyboard back.
+    #[gpui::test]
+    fn edit_from_the_hosts_panel_opens_the_profile_form_and_cancel_closes_the_screen(
+        cx: &mut TestAppContext,
+    ) {
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        rig.hosts_ask(HostsEvent::Edit("prod".into()));
+        assert!(rig.settings_open(), "no settings screen");
+        assert!(
+            rig.cx.debug_bounds("profile-cancel").is_some(),
+            "no profile form is drawn"
+        );
+
+        let cancel = rig.cx.debug_bounds("profile-cancel").expect("drawn");
+        rig.cx
+            .simulate_click(cancel.center(), gpui::Modifiers::none());
+        rig.draw();
+        assert!(!rig.settings_open(), "Cancel left the screen open");
+        assert!(
+            rig.pane_has_the_keyboard(1),
+            "the keyboard wasn't given back"
+        );
+        assert_eq!(rig.profile_ids(), ["prod", "stage"]);
+    }
+
+    /// Spec 0018, A host's menu: Esc in the form Edit… opened closes the
+    /// settings screen and gives the keyboard back.
+    #[gpui::test]
+    fn esc_in_the_form_edit_opened_closes_the_screen(cx: &mut TestAppContext) {
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        rig.hosts_ask(HostsEvent::Edit("prod".into()));
+        // The settings screen's keys, which the app binds at launch.
+        rig.cx.update(|_, cx| crate::settings::init(cx));
+        assert!(rig.settings_open());
+        rig.keys("escape");
+        assert!(!rig.settings_open(), "Esc left the screen open");
+        assert!(
+            rig.pane_has_the_keyboard(1),
+            "the keyboard wasn't given back"
+        );
+    }
+
+    /// Spec 0018, A host's menu [load-bearing]: Delete… asks first, in
+    /// the window's dialog, and removes nothing until it is answered; Esc
+    /// is Cancel and keeps the profile. (Answering Delete would write the
+    /// real `config.yaml`, so no test does; the write itself is
+    /// `settings::change`'s test.)
+    #[gpui::test]
+    fn delete_from_the_hosts_panel_asks_in_a_dialog_and_esc_keeps_the_profile(
+        cx: &mut TestAppContext,
+    ) {
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        assert!(!rig.dialog_open());
+        rig.hosts_ask(HostsEvent::Delete {
+            id: "prod".into(),
+            label: "prod".into(),
+        });
+        assert!(rig.dialog_open(), "Delete… didn't ask");
+        assert!(!rig.settings_open());
+        assert_eq!(rig.profile_ids(), ["prod", "stage"]);
+
+        rig.keys("escape");
+        assert!(!rig.dialog_open(), "Esc left the question open");
+        assert_eq!(rig.profile_ids(), ["prod", "stage"]);
     }
 }

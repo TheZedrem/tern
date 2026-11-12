@@ -1,26 +1,46 @@
 //! The sidebar's SSH hosts panel (spec 0018, Model): the host picker's
 //! list (spec 0006) under its groups, with a filter. A single click only
 //! selects; Enter or a double click asks the workspace to open the host
-//! in a new tab. Listing reads `config.yaml`'s profiles and
-//! `~/.ssh/config` off the UI thread, connects nothing and never runs
-//! `ssh -G` (TM-askpass-20).
+//! in a new tab. A host's menu (a right click, the Menu key or Shift+F10)
+//! asks it to edit or delete a profile; a `~/.ssh/config` host is never
+//! written. Listing reads `config.yaml`'s profiles and `~/.ssh/config`
+//! off the UI thread, connects nothing and never runs `ssh -G`
+//! (TM-askpass-20).
 
 use crate::commands::fuzzy;
 use crate::config::Profile;
 use crate::ssh;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, ClickEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    KeyBinding, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task,
-    Window, actions, div, px,
+    App, AppContext, ClickEvent, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, actions, anchored, deferred,
+    div, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::menu::{ContextMenuExt, PopupMenu};
 
 const CONTEXT: &str = "SidebarHosts";
+/// The list's own context, where Enter and Delete mean the selected host
+/// rather than the filter field's text.
+const LIST_CONTEXT: &str = "SidebarHostsList";
+/// What a `~/.ssh/config` host's menu says instead of editing it.
+const READ_ONLY: &str = "Defined in ~/.ssh/config";
 
-actions!(sidebar_hosts, [SelectPrevious, SelectNext, Reload]);
+actions!(
+    sidebar_hosts,
+    [
+        SelectPrevious,
+        SelectNext,
+        Reload,
+        ShowMenu,
+        ConnectSelected,
+        EditSelected,
+        DeleteSelected
+    ]
+);
 
 /// Binds the panel's keys; they exist only while the keyboard is in it.
 pub fn init(cx: &mut App) {
@@ -28,6 +48,11 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("up", SelectPrevious, Some(CONTEXT)),
         KeyBinding::new("down", SelectNext, Some(CONTEXT)),
         KeyBinding::new("f5", Reload, Some(CONTEXT)),
+        KeyBinding::new("shift-f10", ShowMenu, Some(CONTEXT)),
+        KeyBinding::new("menu", ShowMenu, Some(CONTEXT)),
+        KeyBinding::new("enter", ConnectSelected, Some(LIST_CONTEXT)),
+        KeyBinding::new("delete", DeleteSelected, Some(LIST_CONTEXT)),
+        KeyBinding::new("backspace", DeleteSelected, Some(LIST_CONTEXT)),
     ]);
 }
 
@@ -54,11 +79,24 @@ pub fn sections<'a>(hosts: &'a [ssh::Host], query: &str) -> Vec<(&'a str, Vec<us
 pub enum HostsEvent {
     /// Open the host with this profile ID in a new tab.
     Open(String),
+    /// Edit the profile with this ID.
+    Edit(String),
+    /// Ask whether to delete the profile with this ID, named `label`.
+    Delete { id: String, label: String },
     /// An ssh config file couldn't be read: said once per read.
     Notice(String),
 }
 
+/// The menu the keyboard opened, drawn at the selected host's row.
+struct KeyMenu {
+    id: String,
+    menu: Entity<PopupMenu>,
+    _dismissed: Subscription,
+}
+
 pub struct HostsPanel {
+    /// The list's, which has the keyboard after a click on a host.
+    focus: FocusHandle,
     filter: Entity<InputState>,
     profiles: Vec<Profile>,
     hosts: Vec<ssh::Host>,
@@ -67,7 +105,14 @@ pub struct HostsPanel {
     /// Whether the list was read at least once.
     read: bool,
     reading: Option<Task<()>>,
+    key_menu: Option<KeyMenu>,
     _filter_events: Subscription,
+}
+
+impl Focusable for HostsPanel {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
 }
 
 impl EventEmitter<HostsEvent> for HostsPanel {}
@@ -85,12 +130,15 @@ impl HostsPanel {
             },
         );
         Self {
+            // A tab stop, so Tab from the filter field reaches the list.
+            focus: cx.focus_handle().tab_stop(true),
             filter,
             profiles,
             hosts: Vec::new(),
             selected: None,
             read: false,
             reading: None,
+            key_menu: None,
             _filter_events: filter_events,
         }
     }
@@ -170,17 +218,105 @@ impl HostsPanel {
         }
     }
 
+    /// Whether host `id` is a profile of `config.yaml`, which the panel
+    /// may edit; else it comes from `~/.ssh/config`, which Tern never
+    /// writes (spec 0006, Security).
+    fn editable(&self, id: &str) -> bool {
+        self.profiles.iter().any(|profile| profile.id == id)
+    }
+
+    fn edit_selected(&mut self, cx: &mut Context<Self>) {
+        if let Some(ix) = self.current(cx)
+            && self.editable(&self.hosts[ix].id)
+        {
+            cx.emit(HostsEvent::Edit(self.hosts[ix].id.clone()));
+        }
+    }
+
+    /// Asks the workspace to ask: nothing is deleted here (spec 0018,
+    /// A host's menu).
+    fn delete_selected(&mut self, cx: &mut Context<Self>) {
+        if let Some(ix) = self.current(cx)
+            && self.editable(&self.hosts[ix].id)
+        {
+            let host = &self.hosts[ix];
+            cx.emit(HostsEvent::Delete {
+                id: host.id.clone(),
+                label: host.label.clone(),
+            });
+        }
+    }
+
+    /// A host's menu: each entry is the action its key runs, sent to the
+    /// list, so it acts on the selected host.
+    fn host_menu(menu: PopupMenu, focus: FocusHandle, editable: bool) -> PopupMenu {
+        let menu = menu
+            .action_context(focus)
+            .menu("Connect", Box::new(ConnectSelected))
+            .menu_with_disabled("Edit…", Box::new(EditSelected), !editable)
+            .menu_with_disabled("Delete…", Box::new(DeleteSelected), !editable);
+        if editable {
+            menu
+        } else {
+            menu.separator().label(READ_ONLY)
+        }
+    }
+
+    /// The Menu key or Shift+F10: the selected host's menu at its row,
+    /// with the keyboard in it.
+    fn show_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.current(cx) else {
+            return;
+        };
+        let id = self.hosts[ix].id.clone();
+        self.selected = Some(id.clone());
+        let (focus, editable) = (self.focus.clone(), self.editable(&id));
+        let menu = PopupMenu::build(window, cx, move |menu, _, _| {
+            Self::host_menu(menu, focus, editable)
+        });
+        let dismissed =
+            cx.subscribe_in(&menu, window, |this, menu, _: &DismissEvent, window, cx| {
+                if menu.focus_handle(cx).is_focused(window) || window.focused(cx).is_none() {
+                    window.focus(&this.focus, cx);
+                }
+                this.key_menu = None;
+                cx.notify();
+            });
+        menu.focus_handle(cx).focus(window, cx);
+        self.key_menu = Some(KeyMenu {
+            id,
+            menu,
+            _dismissed: dismissed,
+        });
+        cx.notify();
+    }
+
     fn render_host(&self, ix: usize, selected: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (muted, active, hover) = (theme.muted_foreground, theme.list_active, theme.list_hover);
         let host = &self.hosts[ix];
         let id = host.id.clone();
+        let (focus, editable) = (self.focus.clone(), self.editable(&id));
+        let key_menu = self
+            .key_menu
+            .as_ref()
+            .filter(|open| open.id == id)
+            .map(|open| {
+                deferred(
+                    anchored()
+                        .snap_to_window_with_margin(px(8.))
+                        .child(open.menu.clone()),
+                )
+                .with_priority(1)
+            });
+        let pressed = id.clone();
         div()
             .id(("sidebar-host", ix))
             .px(px(8.))
             .py(px(3.))
             .when(selected, |row| row.bg(active))
             .hover(|row| row.bg(hover))
+            .children(key_menu)
             .child(div().text_sm().child(host.label.clone()))
             .when(!host.destination.is_empty(), |row| {
                 row.child(
@@ -192,13 +328,25 @@ impl HostsPanel {
             })
             // A single click only selects: nothing connects by a stray
             // click (spec 0018, flow 4).
-            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                window.focus(&this.focus, cx);
                 this.selected = Some(id.clone());
                 if event.click_count() >= 2 {
                     cx.emit(HostsEvent::Open(id.clone()));
                 }
                 cx.notify();
             }))
+            // A right click selects the host its menu acts on; the menu's
+            // entries run only when picked.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, window, cx| {
+                    window.focus(&this.focus, cx);
+                    this.selected = Some(pressed.clone());
+                    cx.notify();
+                }),
+            )
+            .context_menu(move |menu, _, _| Self::host_menu(menu, focus.clone(), editable))
     }
 }
 
@@ -217,6 +365,8 @@ impl Render for HostsPanel {
         };
         let mut list = div()
             .id("sidebar-hosts")
+            .key_context(LIST_CONTEXT)
+            .track_focus(&self.focus)
             .flex_1()
             .min_h_0()
             .overflow_y_scroll();
@@ -253,6 +403,10 @@ impl Render for HostsPanel {
             .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.select(-1, cx)))
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select(1, cx)))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
+            .on_action(cx.listener(|this, _: &ShowMenu, window, cx| this.show_menu(window, cx)))
+            .on_action(cx.listener(|this, _: &ConnectSelected, _, cx| this.open_selected(cx)))
+            .on_action(cx.listener(|this, _: &EditSelected, _, cx| this.edit_selected(cx)))
+            .on_action(cx.listener(|this, _: &DeleteSelected, _, cx| this.delete_selected(cx)))
             .child(
                 div()
                     .px(px(8.))
@@ -267,8 +421,8 @@ impl Render for HostsPanel {
 mod tests {
     use super::*;
     use gpui::{
-        Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext, VisualTestContext,
-        point,
+        Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, TestAppContext,
+        VisualTestContext, point,
     };
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -321,10 +475,19 @@ mod tests {
     struct Rig<'a> {
         panel: Entity<HostsPanel>,
         opened: Rc<RefCell<Vec<String>>>,
+        /// Every event but a notice, as `open <id>`, `edit <id>` or
+        /// `delete <id> <label>`.
+        events: Rc<RefCell<Vec<String>>>,
         cx: &'a mut VisualTestContext,
     }
 
     fn rig(hosts: Vec<ssh::Host>, cx: &mut TestAppContext) -> Rig<'_> {
+        rig_with(Vec::new(), hosts, cx)
+    }
+
+    /// [`rig`] with `profiles` as `config.yaml`'s: the hosts whose IDs
+    /// are among them are profiles, the others `~/.ssh/config` hosts.
+    fn rig_with(profiles: Vec<Profile>, hosts: Vec<ssh::Host>, cx: &mut TestAppContext) -> Rig<'_> {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::sidebar::init(cx);
@@ -334,7 +497,7 @@ mod tests {
             let made = made.clone();
             move |window, cx| {
                 let panel = cx.new(|cx| {
-                    let mut panel = HostsPanel::new(Vec::new(), window, cx);
+                    let mut panel = HostsPanel::new(profiles, window, cx);
                     panel.hosts = hosts;
                     panel.read = true;
                     panel
@@ -345,17 +508,30 @@ mod tests {
         });
         let panel = made.take().expect("the window built the panel");
         let opened = Rc::new(RefCell::new(Vec::new()));
+        let events = Rc::new(RefCell::new(Vec::new()));
         cx.update(|window, cx| {
-            let opened = opened.clone();
+            let (opened, events) = (opened.clone(), events.clone());
             cx.subscribe(&panel, move |_, event: &HostsEvent, _| {
-                if let HostsEvent::Open(id) = event {
-                    opened.borrow_mut().push(id.clone());
-                }
+                let said = match event {
+                    HostsEvent::Open(id) => {
+                        opened.borrow_mut().push(id.clone());
+                        format!("open {id}")
+                    }
+                    HostsEvent::Edit(id) => format!("edit {id}"),
+                    HostsEvent::Delete { id, label } => format!("delete {id} {label}"),
+                    HostsEvent::Notice(_) => return,
+                };
+                events.borrow_mut().push(said);
             })
             .detach();
             panel.update(cx, |panel, cx| panel.focus(window, cx));
         });
-        let mut rig = Rig { panel, opened, cx };
+        let mut rig = Rig {
+            panel,
+            opened,
+            events,
+            cx,
+        };
         rig.draw();
         rig
     }
@@ -398,6 +574,271 @@ mod tests {
         fn opened(&self) -> Vec<String> {
             self.opened.borrow().clone()
         }
+
+        fn events(&self) -> Vec<String> {
+            self.events.borrow().clone()
+        }
+
+        /// The host a click or right click picked, as opposed to the
+        /// first listed one the panel draws as selected by default.
+        fn picked(&mut self) -> Option<String> {
+            self.panel
+                .read_with(self.cx, |panel, _| panel.selected.clone())
+        }
+
+        fn list_has_the_keyboard(&mut self) -> bool {
+            let panel = self.panel.clone();
+            self.cx
+                .update(|window, cx| panel.read(cx).focus.is_focused(window))
+        }
+
+        /// Where each listed host's row is, found by clicking down the
+        /// panel from the top: the rows carry no test selector. Every
+        /// click is a single click, which only selects. Ends with the
+        /// keyboard in the list and the last host selected.
+        fn rows(&mut self) -> Vec<(String, Point<Pixels>)> {
+            let listed = self.listed();
+            let mut rows: Vec<(String, Point<Pixels>)> = Vec::new();
+            for step in 0..150 {
+                let at = point(px(60.0), px(4.0 + 4.0 * step as f32));
+                self.cx.simulate_click(at, Modifiers::none());
+                self.draw();
+                if let Some(id) = self.picked()
+                    && !rows.iter().any(|(found, _)| *found == id)
+                {
+                    rows.push((id, at));
+                }
+                if rows.len() == listed.len() {
+                    return rows;
+                }
+            }
+            panic!("only found the rows of {rows:?} among {listed:?}");
+        }
+
+        fn right_click(&mut self, at: Point<Pixels>) {
+            self.cx.simulate_event(MouseDownEvent {
+                position: at,
+                modifiers: Modifiers::none(),
+                button: MouseButton::Right,
+                click_count: 1,
+                first_mouse: false,
+            });
+            self.cx.simulate_event(MouseUpEvent {
+                position: at,
+                modifiers: Modifiers::none(),
+                button: MouseButton::Right,
+                click_count: 1,
+            });
+            self.draw();
+        }
+    }
+
+    /// Two `config.yaml` profiles, `web` and `db` under Production, and
+    /// `cache`, a `~/.ssh/config` host under Staging. Listed as web, db,
+    /// cache.
+    fn profiles_and_a_config_host() -> (Vec<Profile>, Vec<ssh::Host>) {
+        let profile = |id: &str| Profile {
+            id: id.into(),
+            name: None,
+            theme: None,
+            kind: crate::config::ProfileKind::Ssh(crate::config::tests::ssh_to(id)),
+        };
+        let listed = |id: &str, label: &str, group: &str| ssh::Host {
+            id: id.into(),
+            label: label.into(),
+            group: group.into(),
+            destination: format!("{label}.example"),
+        };
+        (
+            vec![profile("web"), profile("db")],
+            vec![
+                listed("web", "Web", "Production"),
+                listed("db", "Db", "Production"),
+                listed("ssh:cache", "cache", "Staging"),
+            ],
+        )
+    }
+
+    fn profile_rig(cx: &mut TestAppContext) -> Rig<'_> {
+        let (profiles, hosts) = profiles_and_a_config_host();
+        let mut rig = rig_with(profiles, hosts, cx);
+        assert_eq!(rig.listed(), ["web", "db", "ssh:cache"]);
+        rig
+    }
+
+    const NOTHING: [&str; 0] = [];
+
+    /// Spec 0018, A host's menu: with the keyboard in the list after a
+    /// click on a profile host, Delete or Backspace asks to delete it,
+    /// naming its label; on a `~/.ssh/config` host they do nothing.
+    /// Nothing is typed into the filter field.
+    #[gpui::test]
+    fn delete_or_backspace_in_the_list_asks_to_delete_a_profile_host_only(cx: &mut TestAppContext) {
+        let mut rig = profile_rig(cx);
+        let rows = rig.rows();
+        let (_, web) = rows[0].clone();
+        rig.cx.simulate_click(web, Modifiers::none());
+        rig.draw();
+        assert_eq!(rig.picked().as_deref(), Some("web"));
+        assert!(rig.list_has_the_keyboard(), "a click on a host");
+
+        rig.keys("delete");
+        assert_eq!(rig.events(), ["delete web Web"]);
+        rig.keys("backspace");
+        assert_eq!(rig.events(), ["delete web Web", "delete web Web"]);
+
+        let (_, cache) = rows[2].clone();
+        rig.cx.simulate_click(cache, Modifiers::none());
+        rig.draw();
+        assert_eq!(rig.picked().as_deref(), Some("ssh:cache"));
+        rig.keys("delete backspace");
+        assert_eq!(
+            rig.events(),
+            ["delete web Web", "delete web Web"],
+            "a ~/.ssh/config host asked to be deleted"
+        );
+        assert_eq!(rig.filter(), "");
+    }
+
+    /// Spec 0018, A host's menu: in the filter field, Delete and
+    /// Backspace edit its text and ask nothing.
+    #[gpui::test]
+    fn delete_and_backspace_in_the_filter_field_only_edit_its_text(cx: &mut TestAppContext) {
+        let mut rig = profile_rig(cx);
+        rig.keys("w e b");
+        assert_eq!(rig.filter(), "web");
+        rig.keys("backspace");
+        assert_eq!(rig.filter(), "we");
+        rig.keys("left delete");
+        assert_eq!(rig.filter(), "w");
+        assert_eq!(rig.events(), NOTHING);
+    }
+
+    /// Spec 0018, A host's menu: Tab from the filter field puts the
+    /// keyboard in the list, where Delete asks about the selected host.
+    /// The sidebar around the panel binds Tab to the window's next focus
+    /// stop, which this rig, the panel alone, stands in for.
+    #[gpui::test]
+    fn tab_from_the_filter_field_lets_delete_ask_about_the_selected_host(cx: &mut TestAppContext) {
+        let mut rig = profile_rig(cx);
+        rig.keys("down");
+        rig.cx.update(|window, cx| window.focus_next(cx));
+        rig.draw();
+        assert!(rig.list_has_the_keyboard(), "Tab didn't reach the list");
+        rig.keys("delete");
+        assert_eq!(rig.events(), ["delete db Db"]);
+    }
+
+    /// Spec 0018, flow 4 and A host's menu: Enter with the keyboard in the
+    /// list opens the selected host.
+    #[gpui::test]
+    fn enter_in_the_list_opens_the_selected_host(cx: &mut TestAppContext) {
+        let mut rig = profile_rig(cx);
+        let rows = rig.rows();
+        rig.cx.simulate_click(rows[1].1, Modifiers::none());
+        rig.draw();
+        assert!(rig.list_has_the_keyboard());
+        assert_eq!(rig.events(), NOTHING, "a single click did something");
+        rig.keys("enter");
+        assert_eq!(rig.events(), ["open db"]);
+    }
+
+    /// Spec 0018, A host's menu: Shift+F10 with the keyboard in the filter
+    /// field opens the selected host's menu, Connect, Edit… and Delete…,
+    /// with the keyboard in it; each entry chosen by keyboard does what
+    /// it says to that host, and Esc closes it doing nothing.
+    #[gpui::test]
+    fn shift_f10_in_the_filter_field_opens_the_menu_of_the_selected_host(cx: &mut TestAppContext) {
+        let mut rig = profile_rig(cx);
+        rig.keys("down");
+        assert_eq!(rig.selected().as_deref(), Some("db"));
+
+        rig.keys("shift-f10 escape");
+        assert_eq!(rig.events(), NOTHING, "Esc ran an entry");
+        rig.keys("shift-f10 down enter");
+        assert_eq!(rig.events(), ["open db"]);
+        rig.keys("shift-f10 down down enter");
+        assert_eq!(rig.events(), ["open db", "edit db"]);
+        rig.keys("shift-f10 down down down enter");
+        assert_eq!(rig.events(), ["open db", "edit db", "delete db Db"]);
+        assert_eq!(rig.selected().as_deref(), Some("db"));
+        assert_eq!(rig.filter(), "", "the menu's keys reached the filter");
+    }
+
+    /// Spec 0018, A host's menu: Shift+F10 and the Menu key open the menu
+    /// with the keyboard in the list too, after a click on a host.
+    #[gpui::test]
+    fn shift_f10_and_the_menu_key_open_the_menu_from_the_list(cx: &mut TestAppContext) {
+        let mut rig = profile_rig(cx);
+        let rows = rig.rows();
+        rig.cx.simulate_click(rows[0].1, Modifiers::none());
+        rig.draw();
+        assert!(rig.list_has_the_keyboard());
+
+        rig.keys("shift-f10 down down enter");
+        assert_eq!(rig.events(), ["edit web"]);
+        rig.keys("menu down down down enter");
+        assert_eq!(rig.events(), ["edit web", "delete web Web"]);
+    }
+
+    /// Spec 0018, A host's menu, and AC6: a `~/.ssh/config` host's Edit…
+    /// and Delete… are disabled, so the keyboard can't reach them in its
+    /// menu: every step down lands on Connect.
+    #[gpui::test]
+    fn a_config_hosts_menu_offers_only_connect(cx: &mut TestAppContext) {
+        let mut rig = profile_rig(cx);
+        rig.keys("down down");
+        assert_eq!(rig.selected().as_deref(), Some("ssh:cache"));
+        for downs in ["down", "down down", "down down down", "down down down down"] {
+            rig.keys(&format!("shift-f10 {downs} enter"));
+        }
+        assert_eq!(rig.events(), ["open ssh:cache"; 4]);
+    }
+
+    /// Spec 0018, A host's menu: a right click on a host selects it and
+    /// opens its menu; no entry runs on the right click alone, and the
+    /// entries then act on that host.
+    #[gpui::test]
+    fn a_right_click_selects_the_host_and_opens_its_menu_without_running_an_entry(
+        cx: &mut TestAppContext,
+    ) {
+        let mut rig = profile_rig(cx);
+        let rows = rig.rows();
+        assert_eq!(rig.picked().as_deref(), Some("ssh:cache"));
+        let (web, db) = (rows[0].1, rows[1].1);
+
+        rig.right_click(web);
+        assert_eq!(rig.picked().as_deref(), Some("web"));
+        assert_eq!(rig.events(), NOTHING, "a right click ran an entry");
+        // Were the menu not open, Down would select db and Enter open it.
+        rig.keys("down enter");
+        assert_eq!(rig.events(), ["open web"]);
+
+        rig.right_click(db);
+        assert_eq!(rig.picked().as_deref(), Some("db"));
+        rig.keys("escape");
+        assert_eq!(rig.events(), ["open web"], "Esc ran an entry");
+        rig.right_click(db);
+        rig.keys("down down down enter");
+        assert_eq!(rig.events(), ["open web", "delete db Db"]);
+        rig.right_click(web);
+        rig.keys("down down enter");
+        assert_eq!(rig.events(), ["open web", "delete db Db", "edit web"]);
+    }
+
+    /// Spec 0018, A host's menu: a right click on a `~/.ssh/config` host
+    /// offers Connect only; Edit… and Delete… can't be chosen.
+    #[gpui::test]
+    fn a_right_click_on_a_config_host_offers_only_connect(cx: &mut TestAppContext) {
+        let mut rig = profile_rig(cx);
+        let rows = rig.rows();
+        let cache = rows[2].1;
+        for downs in ["down", "down down", "down down down"] {
+            rig.right_click(cache);
+            assert_eq!(rig.picked().as_deref(), Some("ssh:cache"));
+            rig.keys(&format!("{downs} enter"));
+        }
+        assert_eq!(rig.events(), ["open ssh:cache"; 3]);
     }
 
     /// Spec 0018, flow 4 and AC5: Up and Down select along the list as it
