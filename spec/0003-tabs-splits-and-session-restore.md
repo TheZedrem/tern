@@ -119,7 +119,7 @@ title, else the profile's display name.
    qualify; with none qualifying, boot appends as above.
    With nothing to restore (no file,
    `restore_session: false`) it is the one fresh tab of flow 7, never a
-   second. Whether a fresh tab nobody typed in is saved: OQ-030.
+   second. A fresh tab is saved like any tab, typed in or not (OQ-030).
 7. **Empty, corrupt or unknown-version `session.json`:** boot one fresh tab.
    Quitting by closing the last tab saves an empty session, which is the
    normal case and leaves no `.bad` file. A corrupt or unknown-version file is renamed

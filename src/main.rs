@@ -168,7 +168,6 @@ fn main() {
     // flow 6). A restored plain local shell is that tab instead, so tabs
     // don't pile up launch after launch. The bench measures the restored
     // tab, so it never adds or picks one.
-    // TODO(OQ-030): a fresh tab nobody typed in is saved like any tab.
     let open_new_tab = config.open_new_tab && !bench;
     let boot = restored.and_then(|mut session| {
         if open_new_tab && !session.focus_plain_shell(&default_profile) {
