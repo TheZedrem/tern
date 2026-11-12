@@ -18,23 +18,33 @@ stdout; stderr is the plugin's log. Most actions fill the plugin's own
 panels and notices. The ones that type into a terminal, read from it or
 open a tab wait for the user's Allow on a bar on the target pane.
 
-```
- TB4: plugins folder ──manifest──► discovery (background thread, after first frame)
- (plugin.yaml, program)                 │ found plugins, unusable ones with a reason
-                                        ▼
- TB5: user ── enable + trust warning, rights, events, Allow/Deny, panels, settings
-     │                     ▲
-     ▼                     │ bars, panels, notices, plugin log (untrusted text)
- UI thread: Host, confirmations, panels ◄──parsed Actions── reader threads ◄─┐
-     │            │                                                         │ stdout (actions)
-     │            │ events ──► writer ──stdin (JSON lines, EOF = stop)──► plugin process
-     │            │                                                         │ stderr (log)
-     │            ▼ after Allow only                                        │ runs as the user:
- TB2: pane PTYs ◄── fill_command, run_command (typed text)                   │ own network, files,
-     │      ──► read_output (selection or last lines, the previewed text)   │ children (TB6)
-     │                                                                      │
- TB3: open_tab ──argv──► new PTY child                                     ─┘
-     config.yaml ◄── enabled, granted rights and events, settings (TB4)
+```mermaid
+flowchart TD
+    folder["plugins folder<br/>(plugin.yaml, program)"]
+    config["config.yaml"]
+    discovery["discovery<br/>(background thread, after first frame)"]
+    user(["user"])
+    ui["UI thread:<br/>Host, confirmations, panels"]
+    readers["reader threads<br/>(stdout, stderr)"]
+    writer["writer thread"]
+    plugin["plugin process<br/>runs as the user"]
+    machine["network, files, children"]
+    ptys["pane PTYs"]
+    tab["new PTY child"]
+
+    folder -- "TB4: manifest" --> discovery
+    discovery -- "found plugins, unusable ones with a reason" --> ui
+    ui -- "TB4: enabled, confirmed run, granted rights and events, settings" --> config
+    user -- "TB5: enable + trust warning, rights, events, Allow/Deny, panels, settings" --> ui
+    ui -- "TB5: bars, panels, notices, plugin log (untrusted text)" --> user
+    ui -- "events" --> writer
+    writer -- "TB1: stdin (JSON lines, EOF = stop)" --> plugin
+    plugin -- "TB1: stdout (actions), stderr (log)" --> readers
+    readers -- "parsed actions" --> ui
+    plugin -- "TB6" --> machine
+    ui -- "TB2, after Allow only: fill_command, run_command (typed text)" --> ptys
+    ptys -- "TB2, after Allow only: read_output (the previewed text)" --> ui
+    ui -- "TB3, after Allow only: open_tab argv" --> tab
 ```
 
 Trust boundaries:
