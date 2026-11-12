@@ -1,6 +1,6 @@
 ---
 status: later
-blocked-by: [T-064, T-066]
+blocked-by: [T-064, T-066, T-080]
 ---
 # T-069: Plugin panels in the app sidebar
 
@@ -16,3 +16,4 @@ TM-plug-01 (panel header), -02, -10 (visible rows only), -17 and -23.
 Area: src.
 
 Spec: ../spec/0016-plugin-system.md
+Spec: ../spec/0018-app-sidebar.md

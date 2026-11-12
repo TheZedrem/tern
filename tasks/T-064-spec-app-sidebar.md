@@ -9,6 +9,7 @@ it sits next to the per-pane files sidebar (spec 0013), how panels are
 listed and switched, the SSH hosts as its first built-in panel, and how a
 plugin's panels (spec 0016, `PanelModel`) are drawn in it, including the
 "stopped" state and the log view. Written with the `write-spec` skill as
-spec 0017. Area: meta.
+spec 0018 (0017 went to port forwarding). Area: meta.
 
+Spec: ../spec/0018-app-sidebar.md
 Spec: ../spec/0016-plugin-system.md
