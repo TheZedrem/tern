@@ -14,7 +14,9 @@ The bar highlights every non-ASCII character of the command under a line
 saying so (§Model Untrusted text, AC7); the highlighting lives in one
 place that T-069's command buttons use too.
 Also carries out a command button's click (§Model Command buttons,
-TM-plug-23): the same text rules, right check and log line, no bar; the
+TM-plug-23): the same text rules, right check and log line. A
+`fill_command` button types on the click with no bar; a `run_command` or
+`open_tab` button raises the bar and waits for Allow. The
 button itself is drawn in T-069. Checked on
 Windows too: it writes to ConPTY. Area: src.
 

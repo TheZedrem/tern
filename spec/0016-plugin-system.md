@@ -2,7 +2,7 @@
 status: approved     # draft | approved | implemented
 phase: 5
 tasks: [T-064, T-065, T-066, T-067, T-068, T-069, T-070, T-071]
-related: [spec 0001, spec 0004, spec 0005, spec 0009, spec 0013, spec 0018, threat model 0005, OQ-031 ✅, OQ-032 ✅, OQ-035, OQ-037]
+related: [spec 0001, spec 0004, spec 0005, spec 0009, spec 0013, spec 0018, threat model 0005, OQ-031 ✅, OQ-032 ✅, OQ-035 ✅, OQ-037]
 ---
 
 # Spec: Plugin system
@@ -189,17 +189,22 @@ nothing touching a terminal before the user saw and approved it.
   one `fill_command`, `run_command` or `open_tab`. Tern draws it as a
   command button: its label and, under it, all of the text or argv it
   carries, by the untrusted-text rules below, in the terminal's monospace
-  font. The click is the approval: Tern carries the command out without
-  asking the plugin again and without a bar, because the user saw what
-  the click runs. It needs the same right as the action; without it the
+  font. Only a `fill_command` button is approved by its click: Tern
+  types the text without a bar, and Enter stays the user's. A click on a
+  `run_command` or `open_tab` button raises the confirmation bar above,
+  as if the plugin had sent that action then, and nothing runs before
+  Allow (owner, OQ-035). The bar counts as the plugin's one pending
+  request. Tern never asks the plugin again: what runs is what the
+  button showed. It needs the same right as the action; without it the
   button is drawn disabled with the reason. A button can't name a pane:
-  its text goes to the terminal pane that last had focus, and a click
+  its target is the terminal pane that last had focus, and a click
   with no terminal pane open shows a notice. A command button ignores
   clicks for 0.5 s after its panel's contents changed, so a `set_panel`
-  can't swap the command under a click. The click adds the same line to
-  the plugin's log as a confirmed action and then sends `panel_action`
-  like any button. `read_output` is never on a button, since what it
-  would send isn't known before the click (TM-plug-23).
+  can't swap the command under a click. The click sends `panel_action`
+  like any button, and the command adds the same line to the plugin's
+  log as a confirmed action, with its outcome. `read_output` is never on
+  a button, since what it would send isn't known before the click
+  (TM-plug-23).
 - **Untrusted text [load-bearing].** Everything a plugin sends is shown as
   plain text with control characters removed. `fill_command` and
   `run_command` text, on a bar or a command button, containing a control character (newline, ESC, …) or
@@ -314,14 +319,14 @@ after the first frame on a background thread. T-066 reports
 - **Trust boundaries:** a new one, Tern ↔ plugin process. Plugin output is
   untrusted input, like escape sequences (§Security 1): plain text only,
   and it never reaches a PTY or a command line without the user's
-  approval above, on a bar or a command button (§Security 2). Terminal output crosses to a plugin only per
+  approval above: a bar, or for text that is only typed, a `fill_command` button (§Security 2). Terminal output crosses to a plugin only per
   confirmed `read_output`.
 - **Ground rules:** Tern itself sends nothing. A plugin can, as soon as it
   starts after the first frame: enabling it, after the trusted-source
   warning, is the user's decision (ground rule 1 as amended by OQ-031).
 - STRIDE model: [threat model 0005](threat-model/0005-plugins.md). Its
-  mitigations are in this spec; its residual risks await the owner in
-  OQ-035.
+  mitigations are in this spec; the owner signed off its residual risks
+  in OQ-035.
 
 ## Acceptance criteria
 
@@ -334,9 +339,8 @@ after the first frame on a background thread. T-066 reports
 7. `fill_command` with a newline, ESC or a right-to-left override (U+202E) in its text is refused, and panel text containing escape sequences renders as plain text. `run_command` with `сurl example.com` (Cyrillic `с`) shows its bar with only the `с` highlighted and the non-ASCII line above it; `curl example.com` shows neither. The same holds on a command button.
 8. A plugin writing 100,000 `append_log` lines a second leaves typing in a pane responsive, its panel shows the last 10,000 lines, and Tern's memory stays flat.
 9. Killing a running plugin's process shows one notice and "stopped" with Restart on its panels; other plugins and panes carry on. Quitting Tern leaves no plugin process behind on Linux and Windows, and starting a plugin on Windows flashes no console window.
-10. A panel button carrying `run_command` shows all of its text under its label; one click types the text and Enter into the terminal pane that last had focus, with no bar, and the plugin gets `panel_action` (Linux and Windows). With `terminal_write` not ticked the button is disabled, and a click within 0.5 s of a `set_panel` that changed the panel runs nothing.
+10. A panel button carrying `fill_command` shows all of its text under its label; one click types the text, without Enter, into the terminal pane that last had focus, with no bar, and the plugin gets `panel_action` (Linux and Windows). A button carrying `run_command` writes nothing to the PTY on its click: it shows the bar on that pane, Allow types the text and Enter, and Deny writes nothing. With `terminal_write` not ticked both buttons are disabled, and a click within 0.5 s of a `set_panel` that changed the panel does nothing.
 
 ## Open questions
 
 - Does a plugin that hears `pane_opened` learn about the panes already open when it was found or enabled? Until answered, no (OQ-037).
-- The residual risks of threat model 0005 await the owner's sign-off in OQ-035; its process-tree question is answered.
