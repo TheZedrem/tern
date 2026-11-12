@@ -1,7 +1,7 @@
 ---
-status: implemented    # draft | approved | implemented
+status: approved    # draft | approved | implemented
 phase: 1
-tasks: [T-003, T-006, T-011, T-062, T-046]
+tasks: [T-003, T-006, T-011, T-062, T-046, T-079]
 related: [spec 0001, spec 0002, spec 0005]
 ---
 
@@ -28,7 +28,7 @@ immediately.
 - Splits: split right/down, close pane, resize by dragging a divider, directional focus, zoom (maximize) a pane
 - Active pane marking: in a tab showing two or more panes, the focused one stands out at a glance (owner's request, T-046)
 - Session restore: layout, titles and cwd per pane
-- A fresh tab on every launch: `open_new_tab: true` (default) adds one after the restored tabs; `false` lands on the last active tab (owner's request, T-062)
+- A fresh tab on every launch: `open_new_tab: true` (default) adds one after the restored tabs; `false` lands on the last active tab (owner's request, T-062). A restored plain local shell is focused instead of adding another (owner's request, T-079)
 - Title bar: on compositors that draw no window frame (GNOME), the tab bar doubles as the title bar
 - Tab bar side: `tab_bar: top | bottom | left | right`. Top and bottom are a bar, left and right a vertical list, all with the same clicks, renames, drags and drops; away from the top, only the title bar (window controls, drag to move) stays there, and only where the compositor draws no frame. Default `top` (owner's request, T-025)
 
@@ -109,7 +109,15 @@ title, else the profile's display name.
    With `open_new_tab: true`, boot appends one tab opening `default_profile`
    (in its `cwd`, else home) and makes it active instead: its shell is the only
    one spawned at boot, and every restored tab, including the last active
-   one, waits for first activation. With nothing to restore (no file,
+   one, waits for first activation.
+   **Reuse:** if a restored tab is a plain local shell, boot focuses it
+   instead of appending: a tab with exactly one leaf, a terminal running
+   `default_profile`, not split and not a files pane. Of several, the
+   rightmost wins (the previous launch's fresh tab sits there). It keeps
+   its saved cwd and title, and its shell is the one spawned at boot, so
+   boot still spawns exactly one shell. SSH, files and split tabs never
+   qualify; with none qualifying, boot appends as above.
+   With nothing to restore (no file,
    `restore_session: false`) it is the one fresh tab of flow 7, never a
    second. Whether a fresh tab nobody typed in is saved: OQ-030.
 7. **Empty, corrupt or unknown-version `session.json`:** boot one fresh tab.
@@ -164,7 +172,8 @@ frame themselves. Windows 11 always draws its own frame.
 9. A 5 000-character title set via OSC 2 shows in the tab bar capped at 200 characters, on one line, and the tab bar keeps its layout.
 10. On GNOME, the window moves by dragging the tab bar's empty area, resizes from its edges, and closes from its close button.
 12. In a tab with a terminal and a files pane, the focused one has the accent border and the other is dimmed, in both built-in themes; with one pane, or zoomed, neither shows. Moving focus sends no PTY resize. Setting `active_pane` to border 4 and color `#ff0000` on the settings screen redraws the border 4 px red without a restart; border 0 and dim 0 hide both.
-11. With `open_new_tab: true` and 3 saved tabs, relaunch shows 4 tabs, the new last one active, and exactly one shell running; with `false`, the saved active tab is active and no tab is added.
+11. With `open_new_tab: true` and 3 saved tabs (none a plain local shell), relaunch shows 4 tabs, the new last one active, and exactly one shell running; with `false`, the saved active tab is active and no tab is added.
+13. With `open_new_tab: true` and saved tabs [local shell in `/tmp`, SSH, local shell in `~/src`, split of two local shells], relaunch shows the same 4 tabs, the third one active in `~/src`, and exactly one shell running. Quitting and relaunching 5 times leaves 4 tabs.
 
 ## Open questions
 
