@@ -1,7 +1,7 @@
 ---
 status: approved       # draft | approved | implemented
 phase: 1
-tasks: [T-003, T-006, T-011, T-062, T-046, T-079, T-086]
+tasks: [T-003, T-006, T-011, T-062, T-046, T-079, T-086, T-087]
 related: [spec 0001, spec 0002, spec 0005]
 ---
 
@@ -77,7 +77,18 @@ title, else the profile's display name.
    falls back to home. A new tab opens `default_profile` (spec 0005).
 2. **Close pane:** the PTY is killed and the sibling takes the freed space.
    Closing the last pane closes the tab, and closing the last tab quits the
-   app.
+   app, unless `close_last_tab: new_tab` (T-087).
+   **Last tab, kept open [load-bearing]:** with `close_last_tab: new_tab`
+   (default `quit`), whatever closes the window's last tab (its close
+   button, a middle click, `pane.close` on its last pane, its program
+   exiting under `close_on_exit`) leaves the window open with one fresh
+   tab of `default_profile` in its start folder, focused, as a new tab
+   (flow 1). The question about SFTP edits comes first as for any tab;
+   Cancel keeps the tab. Closing the window itself (its close button,
+   Alt+F4, Cmd+Q, the OS ending the session) still quits: only closing
+   the last *tab* is caught. If the fresh tab's program fails to start,
+   the pane shows the error (spec 0002, flow 9) and the window stays; it
+   never loops opening tabs.
    **Close tab with the middle button (T-086):** a middle click on a tab,
    in the bar or the side list, closes that tab exactly as its close
    button does: the same question when SFTP edits would go (spec 0008,
@@ -183,6 +194,7 @@ frame themselves. Windows 11 always draws its own frame.
 11. With `open_new_tab: true` and 3 saved tabs (none a plain local shell), relaunch shows 4 tabs, the new last one active, and exactly one shell running; with `false`, the saved active tab is active and no tab is added.
 13. With `open_new_tab: true` and saved tabs [local shell in `/tmp`, SSH, local shell in `~/src`, split of two local shells], relaunch shows the same 4 tabs, the third one active in `~/src`, and exactly one shell running. Quitting and relaunching 5 times leaves 4 tabs.
 14. A middle click on an inactive tab closes it and leaves the active tab shown and focused; on a tab with an unsent SFTP edit it asks first; pressing the middle button on a tab and releasing it on another closes neither; a middle click on the tab bar's empty area, the new-tab button or a pane closes nothing (Linux and Windows) (T-086).
+15. With `close_last_tab: new_tab`, closing the only tab by its close button, by Ctrl+Shift+W and by `exit` in its shell each leaves the window open with one new tab of `default_profile`, focused, and one shell running; closing the window's own close button still quits; with the default `quit`, closing the only tab quits as before (Linux and Windows) (T-087).
 
 ## Open questions
 

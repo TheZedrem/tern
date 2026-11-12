@@ -1,7 +1,7 @@
 ---
-status: implemented     # draft | approved | implemented
+status: approved        # draft | approved | implemented
 phase: 1
-tasks: [T-005, T-004, T-002, T-011, T-019, T-046, T-074]
+tasks: [T-005, T-004, T-002, T-011, T-019, T-046, T-074, T-087]
 related: [spec 0001, spec 0003, spec 0004]
 ---
 
@@ -84,6 +84,7 @@ new_tab: ask                        # what Ctrl+Shift+T opens: ask | default (sp
 close_on_exit: clean                # always | clean | never
 restore_session: true
 open_new_tab: true                  # a fresh tab on every launch, or a restored local shell focused (spec 0003)
+close_last_tab: quit                # quit | new_tab: what closing the last tab does (spec 0003)
 keybindings: { "ctrl+shift+d": pane.splitRight }
 
 theme:
