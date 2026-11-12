@@ -116,6 +116,11 @@ nothing touching a terminal before the user saw and approved it.
   asks for, which also shows the plugin's command line and folder. The
   confirmation comes every time a plugin goes from disabled to enabled, and
   can't be turned off.
+- **Open plugins folder.** The Plugins tab has an "Open plugins folder"
+  button, also the palette's `plugins.openFolder` (bindable, no default
+  key), which shows the plugins folder in the OS's file manager, creating
+  it first if it's missing, as "Open config folder" does for the config
+  (spec 0009). It starts and enables nothing (owner, 2026-11-12).
 - **One process per plugin, started by its first event [load-bearing].**
   Enabling starts nothing. Tern starts a plugin's process when an event is
   due for it and none is running, and writes that event as its first
@@ -341,7 +346,7 @@ after the first frame on a background thread. T-066 reports
 
 ## Acceptance criteria
 
-1. A folder with a valid manifest dropped into the plugins folder shows up on the Plugins tab as disabled, and its program has not run (a plugin that creates a file on start created none). Enabling it asks for confirmation with the trusted-source warning and its command line; cancelling leaves it disabled and not started. A manifest with `api: 2` is listed as unusable and never started.
+1. A folder with a valid manifest dropped into the plugins folder shows up on the Plugins tab as disabled, and its program has not run (a plugin that creates a file on start created none). Enabling it asks for confirmation with the trusted-source warning and its command line; cancelling leaves it disabled and not started. A manifest with `api: 2` is listed as unusable and never started. With no plugins folder yet, "Open plugins folder" on the Plugins tab, or `plugins.openFolder` from the palette, creates it and shows it in the file manager.
 2. With three plugins enabled that get `start`, no plugin process exists before the first-frame mark, and `--bench-startup 10` is within noise of a run with none. An enabled plugin without `start` has no process until its first event.
 3. A manifest command appears in the palette under its title; running it puts exactly one JSON line with `"event":"command"` on the plugin's stdin. Run twice in quick succession on a plugin that reads one line and exits 0, it starts two processes, the second after the first exited, each getting one line, with no notice. A plugin that stays running gets the second line only after it sent `ready`.
 4. `run_command` shows a bar on the target pane with the exact text. Typing `ls` and Enter while it shows runs `ls` in the shell and confirms nothing. Deny writes nothing to the PTY; Allow types the text and Enter; the plugin gets `action_result` either way (Linux and Windows).

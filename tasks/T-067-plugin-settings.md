@@ -12,7 +12,10 @@ its settings (manifest fields and the ones it sends with `set_settings`),
 restart it, and read its log. Unusable plugins show their reason
 (spec 0016, flows 2 and 8). Includes the re-confirmation when a
 manifest's `run` differs from the confirmed one (TM-plug-12) and the
-plain-text note on plugin settings (TM-plug-18). Area: src.
+plain-text note on plugin settings (TM-plug-18). Also the "Open plugins
+folder" button and its palette command `plugins.openFolder`, which
+create the folder if it's missing and show it in the file manager
+(§Model Open plugins folder). Area: src.
 
 Spec: ../spec/0016-plugin-system.md
 Spec: ../spec/0009-settings-screen.md
