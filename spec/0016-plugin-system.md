@@ -159,7 +159,7 @@ nothing touching a terminal before the user saw and approved it.
   | `ready` | Lets Tern write the plugin's next event | — | no |
   | `set_panel` | Replaces a panel's items: text, rows with buttons, buttons, command buttons, one input field, a log | — | no |
   | `append_log` | Appends text to a panel's log (streaming) | — | no |
-  | `open_panel` | Shows one of its panels; never takes keyboard focus | — | no |
+  | `open_panel` | Shows one of its panels; never takes keyboard focus. Carried out once per act of the user's on the plugin, else dropped with a log line ([spec 0018](0018-app-sidebar.md), flow 6) | — | no |
   | `notify` | A notice; one at a time per plugin | — | no |
   | `set_settings` | Replaces the plugin's dynamic settings fields | — | no |
   | `fill_command` | Types text at a pane's prompt, without Enter | `terminal_write` | yes |

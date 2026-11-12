@@ -68,7 +68,7 @@ SFTP sidebar alike, because both are the same browser.
 - *Later (planned)*: an `editor` setting that overrides the OS's default app for edit copies and Edit-chosen files (T-056)
 - *Later (planned)*: suggestions in the path field: a dropdown of matching folders as the user types, fuzzy-matched like the filter, with Tab to complete (T-038)
 - *Later (planned)*: permissions: view and change a file's mode, owner and group, on every target that supports them; a Windows disk has ACLs instead, and what it offers is decided when this is specified (T-048)
-- *Later (planned)*: the sidebar (`Ctrl+Shift+S`) on a local pane too, showing the Local target from the folder the pane's shell is in (T-049)
+- The sidebar's Files panel on a local pane, showing the Local target from the folder the pane's shell is in: pinned in [spec 0018](0018-app-sidebar.md), Files panel (T-049)
 - Local file operations beyond rename, delete and new folder (copy, move,
   properties): the OS's file manager does those
 

@@ -1,19 +1,18 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved     # draft | approved | implemented
 phase: 5
-tasks: [T-064, T-080, T-069]
+tasks: [T-064, T-080, T-049, T-084, T-069]
 related: [spec 0003, spec 0004, spec 0006, spec 0008, spec 0009, spec 0013, spec 0016, spec 0017, threat model 0003, threat model 0005, OQ-036, OQ-038]
 ---
 
 # Spec: App sidebar
 
 Pins the sidebar: one per window that hosts panels, where it sits, how
-panels are listed and switched, what is saved, and its two built-in
-panels, Files and SSH hosts. It replaces the per-pane sidebar of spec
-0008: the file browser and the port forwards become its Files panel, and
-it stays open when the user switches tabs. Spec 0016 pins what a plugin's
-panel contains and does; this spec pins the sidebar that draws it. The
-choices the owner hasn't made yet are in OQ-036 and OQ-038.
+panels are listed and switched, what is saved, and its built-in panels:
+Files, SSH hosts and Port forwards. It replaces the per-pane sidebar of
+spec 0008: the file browser becomes its Files panel, the port forwards a
+panel of their own, and it stays open when the user switches tabs. Spec 0016 pins what a plugin's
+panel contains and does; this spec pins the sidebar that draws it.
 
 ## Problem & goal
 
@@ -37,7 +36,8 @@ meant for the shell.
 - The sidebar: placement, show and hide, width, the panel strip, the panel header
 - What is saved of it, and what a relaunch brings back
 - The panel extension point, used by built-in and plugin panels alike
-- The Files panel: the file browser and port forwards of the active pane, moved here from the pane's own sidebar
+- The Files panel: the file browser of the active pane, an SSH pane's host or a local pane's disk
+- The Port forwards panel: the active SSH pane's forwards, listed only while an SSH pane is active
 - The SSH hosts panel: list, filter, open in a new tab
 - How plugin panels are hosted: order, header, icon, the stopped state, the log, when `open_panel` is carried out
 - Commands `sidebar.toggle` (which takes over `Ctrl+Shift+S` from `sftp.toggle`) and `sidebar.focus`, and the setting `app_sidebar`, which `sftp_sidebar` becomes
@@ -46,7 +46,6 @@ meant for the shell.
 
 - Panel items and their behavior (`set_panel`, command buttons, bounds): [spec 0016](0016-plugin-system.md)
 - What the file browser and the port forwards show and do: specs 0008, 0013 and 0017. Only where they are drawn and what opens them changes
-- Port forwards as a panel of its own instead of the switch inside Files: *Later*
 - Adding, editing or grouping hosts in the panel; a context menu (split with host, forget password): *Later*. The picker and the settings screen do these today
 - Local profiles in the hosts panel: never; `Ctrl+Shift+T` lists them
 - A palette picker for panels, reordering or hiding panels, collapsing host groups, dragging a host into a split: *Later*
@@ -56,7 +55,7 @@ meant for the shell.
 
 ### Affected areas
 
-- New `src/sidebar/` (`mod.rs` the sidebar and its panel registry, `hosts.rs` the SSH hosts panel, `files.rs` the Files panel); new `src/layout/sidebar.rs` (the workspace's wiring: commands, placement, saving), which replaces the per-pane sidebar host in `src/layout/files.rs`; `src/session.rs`; `src/commands/`; config, `src/settings/pages/appearance.rs`, `src/default-config.yaml`
+- New `src/sidebar/` (`mod.rs` the sidebar and its panel registry, `hosts.rs` the SSH hosts panel, `pane.rs` the panel that follows the active pane, which Files and Port forwards both are); new `src/layout/sidebar.rs` (the workspace's wiring: commands, placement, saving), which replaces the per-pane sidebar host in `src/layout/files.rs`; `src/session.rs`; `src/commands/`; config, `src/settings/pages/appearance.rs`, `src/default-config.yaml`
 - With T-080: `spec/architecture.md` §Code layout gains `sidebar/` and its session row in §Data stores gains the sidebar's state
 - With T-080, the specs this one overrides are amended: spec 0008 (`sftp_sidebar` is now `app_sidebar`; the sidebar is the window's, not a flag of each pane; `sftp.toggle` is an old name for `sidebar.toggle`; the width is saved; flow 1 and AC3), spec 0017 (Esc no longer closes the sidebar), spec 0004's key table, and threat model 0003's TM-sftp-15 wording
 
@@ -86,7 +85,8 @@ meant for the shell.
   of files, hosts or plugins; the built-in panels register themselves
   exactly as a plugin panel does, with no code path of their own in the
   sidebar.
-- **Order [load-bearing].** Files, SSH hosts, then plugin panels by
+- **Order [load-bearing].** Files, SSH hosts, Port forwards while it is
+  listed, then plugin panels by
   plugin name (ignoring case), each plugin's in manifest order. A plugin
   can't choose its place.
 - **Strip.** A row of icon buttons at the top,
@@ -127,17 +127,32 @@ meant for the shell.
   the sidebar opens on next, in this run and the next; Files is where it
   starts. Saved by spec 0003's debounced save. With `restore_session:
   false` the sidebar starts closed, on Files.
-- **Files panel [load-bearing].** Draws what the pane's sidebar drew
-  (spec 0008; the Files and Port forwards switch of spec 0017), always
+- **Files panel [load-bearing].** Draws the one file browser (spec 0013)
   for the window's *active pane*, never a stale one, its header naming
-  `user@host` (TM-sftp-01, -15, TM-fwd-07). Sessions stay the panes':
-  switching back to a pane shows its folder, transfers and edits where
-  they were. A pane's SFTP session is created by an act of the user's on
-  the sidebar (opening it on Files, or switching to Files) while that
-  pane is active, or by the panel's "Show files" button. Switching to an
-  SSH pane that has no session, and a relaunch, connect nothing: the
-  panel shows `user@host` and that button (OQ-038). On a local pane it
-  says there are no files to show yet; T-049 puts the Local target there.
+  the target: `user@host`, or Local (TM-sftp-01, -15). Each pane has its
+  own browser, kept while the pane lives: switching back to a pane shows
+  its folder, transfers and edits where they were.
+  - *SSH pane:* its host over SFTP (spec 0008). The session is created
+    by an act of the user's on the sidebar (opening it on Files, or
+    switching to Files) while that pane is active, or by the panel's
+    "Show files" button. Switching to an SSH pane that has no session,
+    and a relaunch, connect nothing: the panel shows `user@host` and
+    that button.
+  - *Local pane (T-049):* the Local target, shown at once since nothing
+    connects, also after a pane switch and a relaunch. It starts in the
+    folder the pane's shell last reported (OSC 7), else the pane's start
+    folder, read once when the browser is made; it doesn't follow later
+    `cd`s (T-034). A program run from it opens in a pane beside the
+    active one, as from a files pane (spec 0013, flow 4).
+  - *Files pane:* it has its own browser, so the panel only says so.
+- **Port forwards panel [load-bearing] (T-084).** A built-in panel of its
+  own (`forwards`), drawing spec 0017's view for the active SSH pane's
+  host, its header naming `user@host` (TM-fwd-07). It is registered
+  while the active pane is an SSH pane and removed while it isn't, so
+  its strip button is only there when forwards can be added. If it is
+  the shown panel when the active pane stops being an SSH pane, Files is
+  shown, and it doesn't come back by itself. Showing it connects
+  nothing.
 - **SSH hosts panel.** The hosts of `ssh::hosts`, the picker's list
   (spec 0006, Model), under their groups as headings, each row its label
   and, dimmed, its destination. A filter field on top narrows by label,
@@ -148,11 +163,11 @@ meant for the shell.
 ### Module surface
 
 - `sidebar::Sidebar` (a GPUI entity): `register(Panel)`, `remove(&PanelId)`, `show(&PanelId)`, `toggle()`, `focus()`, and its `open`, `width` and shown panel for the session. Emits `Shown(PanelId)` and `Hidden(PanelId)`; T-069 turns them into `panel_opened` and `panel_closed`
-- `sidebar::Panel { id, title, icon, plugin, view }`, `sidebar::PanelId` (`Files | Hosts | Plugin { plugin, panel }`)
-- `sidebar::files::FilesPanel`: draws the active pane's browser and forwards, which stay in `src/files/` and `src/forwards/`
+- `sidebar::Panel { id, title, icon, plugin, view }`, `sidebar::PanelId` (`Files | Hosts | Forwards | Plugin { plugin, panel }`)
+- `sidebar::pane::PanePanel`: draws a view of the active pane. Files is one, over the pane's browser (`src/files/`); Port forwards is another, over `forwards::view::ForwardsView`
 - `sidebar::hosts::HostsPanel`: emits `Open(host id)`; the workspace opens it with the picker's own `open_profile_tab`
 - `Workspace` hosts the sidebar through `layout/sidebar.rs`; it doesn't own panels (AGENTS.md, hazard 9)
-- Commands, in the palette and bindable (spec 0004): `sidebar.toggle` ("Toggle sidebar", `Ctrl+Shift+S`, `Cmd+S` on macOS) and `sidebar.focus` ("Focus sidebar", no default key). `sftp.toggle` leaves the palette but stays an accepted name for `sidebar.toggle` in `keys:`, so existing configs keep working (T-049). `pane.portForwards` (spec 0017) opens the sidebar on Files with Port forwards shown
+- Commands, in the palette and bindable (spec 0004): `sidebar.toggle` ("Toggle sidebar", `Ctrl+Shift+S`, `Cmd+S` on macOS) and `sidebar.focus` ("Focus sidebar", no default key). `sftp.toggle` leaves the palette but stays an accepted name for `sidebar.toggle` in `keybindings:`, so existing configs keep working (T-049); the settings screen's Record and Reset treat such an entry as the command's own. `pane.portForwards` (spec 0017) opens the sidebar on the Port forwards panel, the keyboard in its add row
 - Setting `app_sidebar: left | right` (default `right`), on the settings screen's Appearance page where `sftp_sidebar` was, with its template line in `src/default-config.yaml` in place of the old one (spec 0009)
 - **Migration [load-bearing].** `sftp_sidebar` is read as the old name of `app_sidebar`, with no notice; if a file has both, `app_sidebar` wins. Tern never rewrites the file for this by itself: the next time the settings screen saves the side, it writes `app_sidebar` and removes the `sftp_sidebar` line. So a config with `sftp_sidebar: left` keeps its sidebar on the left
 
@@ -180,8 +195,9 @@ meant for the shell.
    `~/.ssh/config` or `Include` shows the picker's notice, once per read.
 5. **A panel arrives or leaves:** plugin panels are registered when
    discovery (spec 0016, flow 1) finds an enabled, usable plugin and
-   removed when it is disabled or becomes unusable. If the shown panel
-   leaves, Files is shown.
+   removed when it is disabled or becomes unusable; Port forwards comes
+   and goes with the active pane (Model). If the shown panel leaves,
+   Files is shown.
 6. **`open_panel` [load-bearing]:** it opens the sidebar if needed and
    shows the panel, without focus. Tern carries out one per act of the
    user's: only if the user ran one of the plugin's commands or acted in
@@ -194,12 +210,16 @@ meant for the shell.
 7. **Relaunch:** see Startup impact. A saved `panel` that is a plugin's
    comes back as `files`: showing it would send `panel_opened` and start
    the plugin, and only a ticked `start` may start a plugin at launch
-   (spec 0016). Files connects nothing at launch (Model).
+   (spec 0016). A saved `forwards` comes back as Port forwards if the
+   active pane is an SSH pane, else as `files`. Files connects nothing
+   at launch (Model).
 8. **Switching panes:** with Files shown, focusing another pane or tab
-   redraws the panel for that pane in the same frame: its session if it
-   has one, the "Show files" button if it is an SSH pane without one, the
-   local text otherwise. The sidebar stays open and on Files; other
-   panels don't change at all. A pane's prompts still open that pane's
+   redraws the panel for that pane in the same frame: its browser if it
+   has one, the "Show files" button if it is an SSH pane without a
+   session, Local in a local pane's folder otherwise. The sidebar stays
+   open and on Files. Port forwards follows the active pane the same way
+   and leaves with it (flow 5); SSH hosts and plugins' panels don't
+   change at all. A pane's prompts still open that pane's
    dialog (spec 0008, flow 1).
 9. **No room:** in a window too narrow for 200 px beside the panes'
    minimum (spec 0003), the sidebar isn't drawn; its flag stays, and it
@@ -256,17 +276,16 @@ Tern ↔ plugin boundary, and keeps
 ## Acceptance criteria
 
 1. With a shell focused, `Ctrl+Shift+S` shows the sidebar on Files the first time and `ls` + Enter typed right after runs in the shell; `Ctrl+Shift+S` again hides it. `Ctrl+R` with the sidebar open reaches the shell. Each toggle changes the shell's column count (`tput cols`; Linux and Windows) and leaves no stale rows.
-2. With the sidebar open on SSH pane A's files, switching to a local tab and back keeps it open the whole time and shows A's folder and running transfers where they were, without reconnecting. Switching to SSH pane B, which has no session, shows B's `user@host` with "Show files" and starts no `ssh` process until it is clicked; A's listing is never drawn while B is active.
+2. With the sidebar open on SSH pane A's files, switching to a local tab keeps it open and shows Local in the folder that tab's shell is in (T-049); switching back shows A's folder and running transfers where they were, without reconnecting. Switching to SSH pane B, which has no session, shows B's `user@host` with "Show files" and starts no `ssh` process until it is clicked; A's listing is never drawn while B is active.
 3. Showing SSH hosts, hiding the sidebar and showing it again shows SSH hosts; so does quitting and relaunching. With no `session.json` it opens on Files.
-4. With `tab_bar: left` and `app_sidebar: left`, the order from the left is tab list, sidebar, panes; with `tab_bar: top` the tab bar spans above the sidebar. A config with only `sftp_sidebar: left` gives the same; changing the side on the settings screen moves an open sidebar without a restart and leaves `app_sidebar` and no `sftp_sidebar` in the file. The template in `src/default-config.yaml` has `app_sidebar` only. `sftp.toggle` is not in the palette, a `keys:` entry binding it toggles the sidebar, and `pane.portForwards` opens the sidebar on Files with Port forwards shown.
+4. With `tab_bar: left` and `app_sidebar: left`, the order from the left is tab list, sidebar, panes; with `tab_bar: top` the tab bar spans above the sidebar. A config with only `sftp_sidebar: left` gives the same; changing the side on the settings screen moves an open sidebar without a restart and leaves `app_sidebar` and no `sftp_sidebar` in the file. The template in `src/default-config.yaml` has `app_sidebar` only. `sftp.toggle` is not in the palette, and a `keybindings:` entry binding it toggles the sidebar. With an SSH pane active the strip reads Files, SSH hosts, Port forwards, and `pane.portForwards` opens the sidebar on Port forwards; with a local pane active the strip has no Port forwards button, and switching to one while Port forwards is shown shows Files (T-084).
 5. The hosts panel lists the same hosts under the same groups as `Ctrl+Shift+H`; typing part of a group name in the filter narrows it to that group; a host added to `~/.ssh/config` shows after F5. A double click, or Enter, on a host opens a connected tab named after it with the keyboard in it (Linux and Windows); single clicks start no `ssh` process.
-6. `sidebar.focus` on SSH hosts puts typing into the filter field and none of it reaches the shell; Esc returns typing to the shell with the sidebar still open, in the Files panel and its Port forwards view too.
+6. `sidebar.focus` on SSH hosts puts typing into the filter field and none of it reaches the shell; Esc returns typing to the shell with the sidebar still open, in the Files and Port forwards panels too.
 7. Quitting with the sidebar open at 320 px on an SSH pane's files and relaunching shows it at 320 px on the first frame and makes no connection; `~/.ssh/config` is not read before the first-frame mark, and `--bench-startup 10` is within noise of a run with it closed. `session.json` holds the flag, the width and a panel ID and no host name. With `restore_session: false` it starts closed.
-8. A panel registered in a test through the same call the built-in panels use appears in the strip after them and shows its view; removing it while shown shows Files. `src/sidebar/mod.rs` names neither files, hosts nor plugins. Spec 0008's and spec 0017's acceptance criteria still pass, apart from the lines this spec overrides.
+8. A panel registered in a test through the same call the built-in panels use appears in the strip after them and shows its view; removing it while shown shows Files. `src/sidebar/mod.rs` has no code path for a particular panel: beyond declaring its submodules, it names no panel ID or panel type. Spec 0008's and spec 0017's acceptance criteria still pass, apart from the lines this spec overrides.
 9. With plugins `alpha` and `Zeta` enabled (T-069), the strip reads Files, SSH hosts, alpha's panels, Zeta's in manifest order; a plugin panel's header reads `Plugin <name>`, one named `SSH Hosts` reads `Plugin SSH Hosts`, and `icon: no-such-icon` shows the default icon. A killed plugin's panel keeps its place and header and shows "stopped" with Restart.
 10. After running a plugin's command with the sidebar closed, its `open_panel` shows its panel and the next keystrokes still reach the shell; a click on a command button within 0.5 s runs nothing. After the user closes the sidebar, a second `open_panel` with no act of the user's shows nothing and adds a line to the plugin's log. Quitting on a plugin's panel and relaunching shows Files and starts no plugin process. At 200 px a command button's whole command is readable, wrapped.
 
 ## Open questions
 
-- OQ-036: the choices made here on the owner's behalf: the strip instead of an always-visible rail, the state in `session.json`, a plugin's panel not restored, one `open_panel` per act of the user's, and a double click to connect. Each has its conservative choice written in above.
-- OQ-038: the choices that came with moving the file browser in: no connection by a pane switch, the `right` default kept, Port forwards kept as a switch inside Files, and Esc no longer closing the sidebar.
+None. OQ-036 and OQ-038 were answered as written here when the owner approved the spec (2026-11-12).

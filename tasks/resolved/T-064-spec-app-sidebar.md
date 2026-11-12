@@ -1,5 +1,5 @@
 ---
-status: next
+status: resolved
 blocked-by: []
 ---
 # T-064: Write the app sidebar spec
