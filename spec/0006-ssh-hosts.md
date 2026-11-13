@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 2
-tasks: [T-012, T-013, T-014, T-015, T-006, T-011]
+tasks: [T-012, T-013, T-014, T-015, T-006, T-011, T-090]
 related: [spec 0002, spec 0003, spec 0004, spec 0005, OQ-001 ✅, OQ-016, research 0001, threat model 0001]
 ---
 
@@ -146,7 +146,9 @@ arguments, the environment or a log.
 5. **Drop:** when ssh exits with 255 (connection failed or lost), the pane
    stays open with `[connection closed: press Enter to reconnect]`, and
    Enter reruns the same command. Other exits follow `close_on_exit`
-   (spec 0002).
+   (spec 0002); when that leaves the pane open, the exit notice adds
+   `press Enter to reconnect` and Enter reruns the command the same way
+   (T-090).
 6. **Restore [load-bearing]:** a restored SSH tab never connects by itself;
    it shows `Press Enter to connect to <label>`. Connecting at boot would
    be network at startup (architecture §Ground rules). The same holds for
@@ -222,7 +224,7 @@ Trust boundaries:
 5. A wrong remembered password leads to exactly one dialog, with no retry loop, offering to replace it.
 6. A first connection to an unknown host shows ssh's full host-key question with the fingerprint in a dialog, and nothing answers it automatically.
 7. Running the helper by hand with a wrong token prints no secret and exits 1.
-8. Cutting the network mid-session leaves the tab open with the reconnect hint, and Enter reconnects.
+8. Cutting the network mid-session leaves the tab open with the reconnect hint, and Enter reconnects. An SSH tab left open by a non-zero exit (e.g. 130) also reconnects on Enter.
 9. Relaunching with a saved SSH tab opens no network connection until Enter is pressed in that tab.
 10. On Windows 11, the same remembered-password login works through Credential Manager and a named pipe.
 
