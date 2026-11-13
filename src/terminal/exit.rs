@@ -13,9 +13,6 @@ const MAX_TITLE_CHARS: usize = 200;
 /// The most of a prompt a dialog shows (TM-askpass-08).
 const MAX_PROMPT_BYTES: usize = 4096;
 
-/// The notice written into the grid when an SSH connection drops.
-const RECONNECT_NOTICE: &str = "\r\n\x1b[2m[connection closed: press Enter to reconnect]\x1b[0m";
-
 /// A program's title as a tab shows it: control characters dropped, runs
 /// of whitespace collapsed, at most 200 characters (spec 0003).
 pub fn clean_title(title: &str) -> String {
@@ -85,29 +82,41 @@ pub enum AfterExit {
     Close,
     /// Shows the exit code and stays.
     Stay,
-    /// Says the connection closed and waits for Enter to reconnect.
+    /// Stays like `Stay`, and Enter reruns the SSH command.
     Reconnect,
 }
 
-/// What a pane does after its program exited with `code`. A dropped SSH
-/// connection (exit 255) stays open whatever `policy` says (spec 0006,
-/// flow 5); everything else follows `policy`.
+/// What a pane does after its program exited with `code` (spec 0006, flow
+/// 5). A dropped SSH connection (exit 255) stays open whatever `policy`
+/// says; everything else follows `policy`, and an SSH pane that stays
+/// offers to reconnect.
 pub fn after_exit(reconnects: bool, policy: CloseOnExit, code: Option<i32>) -> AfterExit {
     if reconnects && code == Some(ssh::CONNECTION_LOST) {
         AfterExit::Reconnect
     } else if closes_on_exit(policy, code) {
         AfterExit::Close
+    } else if reconnects {
+        AfterExit::Reconnect
     } else {
         AfterExit::Stay
     }
 }
 
-/// The notice written into the grid when the program exits.
-pub fn exit_notice(code: Option<i32>) -> String {
-    match code {
-        Some(code) => format!("\r\n\x1b[2m[process exited with code {code}]\x1b[0m"),
-        None => "\r\n\x1b[2m[process was killed by a signal]\x1b[0m".to_owned(),
-    }
+/// The notice written into the grid when the program exits; `reconnects`
+/// adds the hint that Enter reconnects, and names ssh's 255 a closed
+/// connection.
+pub fn exit_notice(code: Option<i32>, reconnects: bool) -> String {
+    let what = match code {
+        Some(ssh::CONNECTION_LOST) if reconnects => "connection closed".to_owned(),
+        Some(code) => format!("process exited with code {code}"),
+        None => "process was killed by a signal".to_owned(),
+    };
+    let hint = if reconnects {
+        ": press Enter to reconnect"
+    } else {
+        ""
+    };
+    format!("\r\n\x1b[2m[{what}{hint}]\x1b[0m")
 }
 
 impl TerminalPane {
@@ -121,11 +130,7 @@ impl TerminalPane {
         };
         let after = after_exit(self.profile.ssh, policy, code);
         self.reconnect = after == AfterExit::Reconnect;
-        let notice = if self.reconnect {
-            RECONNECT_NOTICE.to_owned()
-        } else {
-            exit_notice(code)
-        };
+        let notice = exit_notice(code, self.reconnect);
         if let State::Running(running) = &self.state {
             let mut parser = Processor::<StdSyncHandler>::new();
             parser.advance(&mut *running.term.lock(), notice.as_bytes());
@@ -165,12 +170,48 @@ mod tests {
         assert!(!closes_on_exit(policy, Some(3)));
     }
 
+    /// The notice the pane's grid shows on the line after the program's
+    /// last output.
+    fn notice_after_output(code: Option<i32>, reconnects: bool) -> String {
+        let mut bytes = b"bye".to_vec();
+        bytes.extend_from_slice(exit_notice(code, reconnects).as_bytes());
+        let term = term_with(60, 3, &bytes);
+        let lines = screen(&term);
+        assert_eq!(lines[0], "bye");
+        lines[1].clone()
+    }
+
     #[test]
-    fn exit_notice_shows_the_code_on_the_line_after_the_output() {
-        let mut bytes = b"hi".to_vec();
-        bytes.extend_from_slice(exit_notice(Some(3)).as_bytes());
-        let term = term_with(40, 3, &bytes);
-        assert_eq!(screen(&term)[..2], ["hi", "[process exited with code 3]"]);
+    fn a_local_pane_shows_the_exit_code_without_a_reconnect_hint() {
+        let cases = [
+            (Some(3), "[process exited with code 3]"),
+            // 255 is an exit code like any other for a local program.
+            (Some(255), "[process exited with code 255]"),
+            (None, "[process was killed by a signal]"),
+        ];
+        for (code, notice) in cases {
+            assert_eq!(notice_after_output(code, false), notice, "{code:?}");
+        }
+    }
+
+    /// Spec 0006, flow 5 (AC8): a dropped connection says so; any other
+    /// ssh exit that leaves the pane open shows its code. Both offer Enter.
+    #[test]
+    fn an_ssh_pane_that_stays_shows_the_reconnect_hint() {
+        let cases = [
+            (Some(255), "[connection closed: press Enter to reconnect]"),
+            (
+                Some(130),
+                "[process exited with code 130: press Enter to reconnect]",
+            ),
+            (
+                None,
+                "[process was killed by a signal: press Enter to reconnect]",
+            ),
+        ];
+        for (code, notice) in cases {
+            assert_eq!(notice_after_output(code, true), notice, "{code:?}");
+        }
     }
 
     /// Spec 0006, flow 5: ssh exits 255 when the connection failed or
@@ -184,18 +225,19 @@ mod tests {
     }
 
     /// The remote shell's `exit`, a failed remote command, a signal: the
-    /// pane does what `close_on_exit` says, as for any program.
+    /// pane does what `close_on_exit` says, and when it stays, Enter
+    /// reconnects.
     #[test]
-    fn every_other_ssh_exit_follows_close_on_exit() {
-        use AfterExit::{Close, Stay};
-        // Exit codes 0 and 1, then killed by a signal.
+    fn every_other_ssh_exit_follows_close_on_exit_and_stays_to_reconnect() {
+        use AfterExit::{Close, Reconnect};
+        // Exit codes 0 and 130, then killed by a signal.
         let cases = [
             (CloseOnExit::Always, [Close, Close, Close]),
-            (CloseOnExit::Clean, [Close, Stay, Stay]),
-            (CloseOnExit::Never, [Stay, Stay, Stay]),
+            (CloseOnExit::Clean, [Close, Reconnect, Reconnect]),
+            (CloseOnExit::Never, [Reconnect, Reconnect, Reconnect]),
         ];
         for (policy, expected) in cases {
-            for (code, after) in [Some(0), Some(1), None].into_iter().zip(expected) {
+            for (code, after) in [Some(0), Some(130), None].into_iter().zip(expected) {
                 assert_eq!(after_exit(true, policy, code), after, "{policy:?} {code:?}");
             }
         }
@@ -221,19 +263,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Spec 0006, flow 5.
-    #[test]
-    fn a_dropped_connection_shows_the_reconnect_hint_on_the_line_after_the_output() {
-        let mut bytes = b"Connection to prod closed.".to_vec();
-        bytes.extend_from_slice(RECONNECT_NOTICE.as_bytes());
-        let term = term_with(60, 3, &bytes);
-        let expected = [
-            "Connection to prod closed.",
-            "[connection closed: press Enter to reconnect]",
-        ];
-        assert_eq!(screen(&term)[..2], expected);
     }
 
     /// `raw` cleans to `words`, joined by single spaces or by nothing: a

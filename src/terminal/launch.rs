@@ -1,5 +1,5 @@
 //! Starting a pane's program: at first, at Enter in a waiting pane, and
-//! again when a dropped SSH connection reconnects (spec 0006).
+//! again when an ended SSH connection reconnects (spec 0006).
 
 use super::pty::{self, GridSize};
 use super::{Asker, Running, State, TerminalPane, answer_prompts};
@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 /// What starts a pane's program: at first, at Enter in a waiting pane, and
-/// again when a dropped connection reconnects.
+/// again when an ended connection reconnects.
 pub struct Launch {
     pub command: pty::Command,
     pub cwd: Option<PathBuf>,

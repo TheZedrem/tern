@@ -96,7 +96,8 @@ pub fn hosts(profiles: &[Profile], ssh_config: &Path) -> (Vec<Host>, Vec<String>
 }
 
 /// The exit code ssh reports for a connection that failed or dropped,
-/// which a pane offers to reconnect after (spec 0006, flow 5).
+/// after which a pane stays open whatever `close_on_exit` says (spec 0006,
+/// flow 5).
 pub const CONNECTION_LOST: i32 = 255;
 
 /// What connects to `profile`: `ssh [-l user] [-p port] [-i file] <host>`,

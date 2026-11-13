@@ -126,7 +126,7 @@ pub struct PaneProfile {
     /// The pane's theme; `None` follows `theme.default`.
     pub theme: Option<String>,
     /// An SSH connection (spec 0006): its prompts are answered in the app,
-    /// and when it drops it waits for Enter to reconnect.
+    /// and when it ends and the pane stays, Enter reconnects.
     pub ssh: bool,
     /// A program run from a files pane (spec 0013, flow 4): it stays open
     /// after it exits, whatever `close_on_exit` says, so its output and
@@ -227,7 +227,8 @@ pub struct TerminalPane {
     /// Bench panes never close on exit; the bench quits after the first frame.
     bench: bool,
     exited: bool,
-    /// The SSH connection dropped and Enter reconnects (spec 0006, flow 5).
+    /// The SSH connection ended, the pane stayed, and Enter reconnects
+    /// (spec 0006, flow 5).
     reconnect: bool,
     has_output: bool,
     first_frame_scheduled: bool,
