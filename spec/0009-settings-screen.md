@@ -1,7 +1,7 @@
 ---
 status: approved       # draft | approved | implemented
 phase: 1
-tasks: [T-017, T-011, T-058, T-046, T-057, T-087]
+tasks: [T-017, T-011, T-058, T-046, T-057, T-087, T-089]
 related: [spec 0004, spec 0005, spec 0006, OQ-010 ✅]
 ---
 
@@ -83,7 +83,9 @@ can be changed from the screen, the change applies within a second, and
    command's key and writes it under `keybindings:`; a default it takes
    over goes to the shell, under spec 0004's rules. "Reset" removes the
    entry.
-4. **Profiles:** "Add" opens an empty profile form (type local or SSH);
+4. **Profiles:** "Add local profile" and "Add SSH profile" sit above the
+   profile list, so they stay in reach however many profiles there are.
+   Either opens an empty profile form of that type;
    its directory field has a "Browse…" button that opens the OS's folder
    picker (the XDG portal on Linux) and fills in the pick, `~` for home,
    and an SSH profile's key file field has one that opens the file picker
