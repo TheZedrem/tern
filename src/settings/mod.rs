@@ -597,7 +597,8 @@ impl Render for SettingsView {
             );
         }
         if !searching && self.page == Page::Profiles {
-            body.push(Self::profile_buttons(cx).into_any_element());
+            // Above the list, so a long list never scrolls them away.
+            body.insert(0, Self::profile_buttons(cx).into_any_element());
         }
         // The profile form takes the body while it's open.
         let body: Vec<AnyElement> = match self.render_form(cx) {

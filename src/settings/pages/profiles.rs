@@ -339,6 +339,7 @@ impl SettingsView {
                     .child(div().w(px(200.)).text_sm().truncate().child(what))
                     .child(
                         Button::new(("profile-edit", ix))
+                            .debug_selector(move || format!("profile-edit-{ix}"))
                             .label("Edit")
                             .xsmall()
                             .ghost()
@@ -367,7 +368,7 @@ impl SettingsView {
             .collect()
     }
 
-    /// Below the profile list: adding one.
+    /// Above the profile list: adding one.
     pub(in crate::settings) fn profile_buttons(cx: &mut Context<Self>) -> gpui::Div {
         div()
             .flex()
@@ -375,6 +376,7 @@ impl SettingsView {
             .pt(px(10.))
             .child(
                 Button::new("profile-add-local")
+                    .debug_selector(|| "profile-add-local".into())
                     .label("Add local profile")
                     .small()
                     .outline()
@@ -384,6 +386,7 @@ impl SettingsView {
             )
             .child(
                 Button::new("profile-add-ssh")
+                    .debug_selector(|| "profile-add-ssh".into())
                     .label("Add SSH profile")
                     .small()
                     .outline()
@@ -428,6 +431,41 @@ mod tests {
         assert!(!open, "Cancel closed the form");
         screen.cx.simulate_keystrokes("escape");
         assert_eq!(screen.closed.get(), 1);
+    }
+
+    /// Spec 0009, flow 4: "Add local profile" and "Add SSH profile" sit
+    /// above the profile list, local and SSH profiles alike.
+    #[gpui::test]
+    fn the_add_profile_buttons_sit_above_the_profile_list(cx: &mut TestAppContext) {
+        let loaded = crate::config::parse(concat!(
+            "profiles:\n",
+            "  htop:\n",
+            "    type: local\n",
+            "    command: [htop]\n",
+            "  prod:\n",
+            "    type: ssh\n",
+            "    host: prod.example.com\n",
+        ));
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        let mut screen = open_screen_with(loaded.config, cx);
+        screen.click("settings-tab-Profiles");
+        screen.cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let buttons = ["profile-add-local", "profile-add-ssh"].map(|selector| {
+            let bounds = screen.cx.debug_bounds(selector);
+            bounds.unwrap_or_else(|| panic!("{selector} isn't drawn"))
+        });
+        let rows: Vec<_> = ["profile-edit-0", "profile-edit-1"]
+            .into_iter()
+            .filter_map(|selector| screen.cx.debug_bounds(selector))
+            .collect();
+        assert_eq!(rows.len(), 2, "htop and prod are listed");
+        let lowest_button = buttons.iter().map(|bounds| bounds.bottom()).max();
+        let first_row = rows.iter().map(|bounds| bounds.top()).min();
+        assert!(
+            lowest_button < first_row,
+            "buttons end at {lowest_button:?}, the list starts at {first_row:?}"
+        );
     }
 
     /// Opens an empty profile form, an SSH one if `ssh`, on the Profiles
