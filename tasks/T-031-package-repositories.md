@@ -34,4 +34,15 @@ repositories ship together, signed with one GPG key. Area: meta.
   repository, install, tag a newer version, and the system's update picks
   it up with signatures verified.
 
+**Prepared (2026-11-14):** `.github/workflows/repositories.yml` runs after
+each Release (and by hand) and publishes through
+`packaging/linux/repositories.sh`; `docs/development.md` describes it.
+Checked in containers with a throwaway key and the v0.9.0 packages: the
+site built on Ubuntu 24.04, and `dnf install tern` on Fedora 45 and
+`apt install tern` on Debian 13 installed from it with signatures checked.
+Left: the owner runs `packaging/linux/setup-repositories.sh` (key, backup,
+`TERN_SIGNING_KEY`, Pages source, first run); then README's install
+section, and the update check on Fedora, openSUSE, Debian 13 and Ubuntu
+24.04 with the next tag.
+
 Spec: ../spec/architecture.md

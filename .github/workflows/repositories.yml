@@ -1,0 +1,91 @@
+# The dnf/zypper and apt repositories on GitHub Pages (T-031): after each
+# release, the .rpm and .deb of the latest releases are signed and
+# published as one site, so `dnf upgrade`, `zypper up` and `apt upgrade`
+# pick up a new Tern. Nothing binary is committed to git. Needs the
+# owner's TERN_SIGNING_KEY secret (an armored GPG secret key without a
+# passphrase) and Pages set to deploy from GitHub Actions; without the
+# key it does nothing.
+name: Repositories
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a newer release's run replaces a waiting one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    outputs:
+      signed: ${{ steps.key.outputs.signed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Import the signing key
+        id: key
+        env:
+          KEY: ${{ secrets.TERN_SIGNING_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::warning::No TERN_SIGNING_KEY secret: the repositories aren't published."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "$KEY" | gpg --batch --import
+          id=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install the repository tools
+        if: steps.key.outputs.signed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm createrepo-c apt-utils
+
+      # Pages allows 1 GB per site; 20 releases of a ~20 MB .rpm and .deb
+      # stay well under it. Older ones remain on the releases page.
+      - name: Download the latest releases' packages
+        if: steps.key.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p packages
+          gh release list -R "$GITHUB_REPOSITORY" --limit 20 --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' | while read -r tag; do
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" --dir packages \
+              --pattern '*.rpm' --pattern '*.deb'
+          done
+
+      - name: Build the repositories
+        if: steps.key.outputs.signed == 'true'
+        run: |
+          packaging/linux/repositories.sh packages site "${{ steps.key.outputs.id }}" \
+            "https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}"
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: steps.key.outputs.signed == 'true'
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.signed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

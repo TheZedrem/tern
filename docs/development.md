@@ -107,6 +107,31 @@ magick assets/icon.png -define icon:auto-resize=256,128,64,48,32,24,16 assets/ic
 
 `assets/icon.ico` is the Windows icon `build.rs` embeds in `tern.exe`.
 
+### Package repositories
+
+After each release, `.github/workflows/repositories.yml` downloads the
+`.rpm` and `.deb` of the latest 20 releases, signs them, and publishes a
+dnf/zypper repository (`rpm/`) and a flat apt repository (`deb/`) as one
+GitHub Pages site, with the public key at its root as `tern.asc`
+(T-031). Nothing binary is committed to git. The work is
+`packaging/linux/repositories.sh`, which needs `rpmsign`, `createrepo_c`,
+`apt-ftparchive` and a GPG key without a passphrase; to build the site
+locally in a container:
+
+```sh
+podman run --rm -v "$PWD:/src:ro,z" -v "$PWD/target/repo:/work:z" ubuntu:24.04 bash -c '
+  apt-get update && apt-get install -y rpm createrepo-c apt-utils gnupg &&
+  gpg --batch --passphrase "" --quick-gen-key "Tern test" rsa4096 sign never &&
+  id=$(gpg --list-secret-keys --with-colons | awk -F: "/^fpr:/ {print \$10; exit}") &&
+  /src/packaging/linux/repositories.sh /work/packages /work/site "$id" file:///site'
+```
+
+with the packages in `target/repo/packages`. The workflow does nothing
+without the `TERN_SIGNING_KEY` secret. `packaging/linux/setup-repositories.sh`
+walks the owner through making the key, backing it up, storing the
+secret and switching Pages to GitHub Actions; run it again to rotate the
+key, which every user then has to trust anew.
+
 ## Windows installer
 
 CI builds the MSI on every push, and a tag adds that one to the release
