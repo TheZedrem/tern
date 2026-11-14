@@ -220,7 +220,7 @@ impl TerminalPane {
 
     /// The selection as copy puts it on the clipboard, if anything is
     /// selected.
-    fn selected_text(&self) -> Option<String> {
+    pub(super) fn selected_text(&self) -> Option<String> {
         let State::Running(running) = &self.state else {
             return None;
         };

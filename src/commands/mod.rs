@@ -80,8 +80,46 @@ actions!(
         /// Picks what the focused files pane shows: Local, a host, or
         /// Disconnect (spec 0013, flow 2).
         SwitchFilesTarget,
+        /// Allows the plugin request on the focused pane (spec 0016,
+        /// Confirmation).
+        AllowPluginRequest,
+        /// Denies the plugin request on the focused pane.
+        DenyPluginRequest,
     ]
 );
+
+/// A plugin's manifest command, `plugin.<plugin>.<command>` (spec 0016,
+/// Commands): one action for every plugin, carrying both names.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = tern, no_json)]
+pub struct PluginCommand {
+    pub plugin: String,
+    pub command: String,
+}
+
+impl PluginCommand {
+    /// The command a config ID names, if it is a `plugin.*` one, without
+    /// reading a manifest: the plugin may not be found yet.
+    pub fn parse(id: &str) -> Option<Self> {
+        let (plugin, command) = id.strip_prefix("plugin.")?.split_once('.')?;
+        let valid = |part: &str| {
+            !part.is_empty()
+                && part.len() <= 64
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+        };
+        (valid(plugin) && valid(command)).then(|| Self {
+            plugin: plugin.to_owned(),
+            command: command.to_owned(),
+        })
+    }
+
+    /// Its ID in the config and the palette.
+    pub fn id(&self) -> String {
+        format!("plugin.{}.{}", self.plugin, self.command)
+    }
+}
 
 /// Activates tab N, counted from 0.
 #[derive(Clone, PartialEq, Debug, Action)]
@@ -194,6 +232,16 @@ pub const COMMANDS: &[AppCommand] = &[
     command("plugins.openFolder", Some("Open plugins folder"), || {
         Box::new(OpenPluginsFolder)
     }),
+    command(
+        "plugin.allowRequest",
+        Some("Allow the plugin's request"),
+        || Box::new(AllowPluginRequest),
+    ),
+    command(
+        "plugin.denyRequest",
+        Some("Deny the plugin's request"),
+        || Box::new(DenyPluginRequest),
+    ),
     command("app.checkForUpdates", Some("Check for updates"), || {
         Box::new(CheckForUpdates)
     }),

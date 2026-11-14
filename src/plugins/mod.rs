@@ -13,18 +13,19 @@ pub mod panel;
 mod panels;
 mod process;
 mod protocol;
+mod requests;
 
 pub use listing::ListedPlugin;
 pub use manifest::{FieldKind, Right, Subscription};
 pub use panels::ListedPanel;
-pub use protocol::{Action, PaneInfo};
+pub use protocol::{Action, Id, Outcome, PaneInfo};
 
 use crate::config::PluginSettings;
 use futures::StreamExt;
 use gpui::{AppContext, Context, EventEmitter};
 use manifest::{Found, Manifest};
 use process::{Message, Process};
-use protocol::{Event, Outcome, Pane};
+use protocol::{Event, Pane};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::task::Poll;
@@ -94,6 +95,12 @@ struct Plugin {
     /// The settings fields its last `set_settings` drew, under the
     /// manifest's (flow 8).
     fields: Vec<manifest::Field>,
+    /// One of its requests waits on a bar (spec 0016, Confirmation).
+    asking: bool,
+    /// The user denied its last request and hasn't acted on it since.
+    denied: bool,
+    /// When its last notice went up.
+    notified: Option<Instant>,
 }
 
 struct Running {
@@ -223,19 +230,6 @@ impl Host {
                 _ => Event::PaneOpened { pane },
             };
             self.enqueue(ix, event, cx);
-        }
-    }
-
-    /// An action the workspace can't carry out yet: said in the plugin's
-    /// log, and refused if it waits for a result.
-    // TODO(T-067, T-068): gone once every action is carried out.
-    pub fn unhandled(&mut self, plugin: &str, action: &Action, cx: &mut Context<Self>) {
-        let Some(ix) = self.index(plugin) else {
-            return;
-        };
-        self.log(ix, format!("`{}` isn't available yet", action.name()), cx);
-        if action.right().is_some() {
-            self.refuse(ix, action, cx);
         }
     }
 
@@ -589,6 +583,9 @@ impl Plugin {
             acted: false,
             log: VecDeque::new(),
             fields: Vec::new(),
+            asking: false,
+            denied: false,
+            notified: None,
         }
     }
 }

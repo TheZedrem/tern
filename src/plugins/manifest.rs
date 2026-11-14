@@ -69,7 +69,6 @@ pub struct Manifest {
     pub run: Vec<String>,
     pub rights: Vec<Right>,
     pub events: Vec<Subscription>,
-    #[allow(dead_code, reason = "listed in the palette (T-068)")]
     pub commands: Vec<Named>,
     pub panels: Vec<Named>,
     pub settings: Vec<Field>,

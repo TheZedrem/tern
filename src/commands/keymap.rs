@@ -3,7 +3,7 @@
 //! default keys, so they reach the shell again, and a key the config binds
 //! leaves the command it was the default of.
 
-use super::{AppCommand, by_config_id, by_id};
+use super::{AppCommand, PluginCommand, by_config_id, by_id};
 use crate::config::{Keybinding, NewTab};
 use gpui::{App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, OperatingSystem};
 use std::collections::BTreeSet;
@@ -59,8 +59,16 @@ pub fn bind(user: &[Keybinding], new_tab: NewTab, cx: &mut App) -> Vec<String> {
     let context = KeyBindingContextPredicate::parse(CONTEXT).ok().map(Rc::new);
     let (planned, mut notices) = plan_for(user, new_tab);
     let mut bindings = Vec::with_capacity(planned.len());
-    for (keys, command) in planned {
-        match KeyBinding::load(&keys, (command.action)(), context.clone(), false, None, cx) {
+    let actions = planned
+        .into_iter()
+        .map(|(keys, command)| (keys, (command.action)()))
+        .chain(
+            plugin_keys(user)
+                .into_iter()
+                .map(|(keys, command)| (keys, Box::new(command) as Box<dyn gpui::Action>)),
+        );
+    for (keys, action) in actions {
+        match KeyBinding::load(&keys, action, context.clone(), false, None, cx) {
             Ok(binding) => bindings.push(binding),
             Err(error) => notices.push(format!("`{keys}` couldn't be bound: {error}")),
         }
@@ -92,7 +100,21 @@ pub fn plan_for(
 ) -> (Vec<(String, &'static AppCommand)>, Vec<String>) {
     let mut notices = Vec::new();
     let mut own = Vec::new();
+    // A plugin's command takes its key too, bound by `plugin_keys`.
+    let plugins: Vec<String> = plugin_keys(user)
+        .into_iter()
+        .map(|(keys, _)| keys)
+        .collect();
     for entry in user {
+        if PluginCommand::parse(&entry.command).is_some() {
+            if let Err(reason) = gpui_keys(&entry.keys) {
+                notices.push(format!(
+                    "config.yaml line {}: keybinding `{}` was skipped: {reason}",
+                    entry.line, entry.keys
+                ));
+            }
+            continue;
+        }
         let checked = by_config_id(&entry.command)
             .ok_or_else(|| format!("there is no command `{}`", entry.command))
             .and_then(|command| Ok((gpui_keys(&entry.keys)?, command)));
@@ -107,7 +129,12 @@ pub fn plan_for(
     let rebound: BTreeSet<&str> = own.iter().map(|(_, command)| command.id).collect();
     // Compared as keystrokes: `shift+ctrl+d` takes `ctrl-shift-d`.
     let keystroke = |keys: &str| Keystroke::parse_with_os(keys, OS).ok();
-    let taken: Vec<Keystroke> = own.iter().filter_map(|(keys, _)| keystroke(keys)).collect();
+    let taken: Vec<Keystroke> = own
+        .iter()
+        .map(|(keys, _)| keys)
+        .chain(&plugins)
+        .filter_map(|keys| keystroke(keys))
+        .collect();
     let mut planned: Vec<(String, &'static AppCommand)> = defaults_for(new_tab)
         .into_iter()
         .filter(|(keys, id)| {
@@ -117,6 +144,19 @@ pub fn plan_for(
         .collect();
     planned.extend(own);
     (planned, notices)
+}
+
+/// The keys `user` gives plugin commands, as GPUI writes them. Any
+/// `plugin.*` ID is accepted without reading a manifest; a key whose
+/// plugin or command is missing says so when pressed (spec 0016,
+/// Commands).
+pub fn plugin_keys(user: &[Keybinding]) -> Vec<(String, PluginCommand)> {
+    user.iter()
+        .filter_map(|entry| {
+            let command = PluginCommand::parse(&entry.command)?;
+            Some((gpui_keys(&entry.keys).ok()?, command))
+        })
+        .collect()
 }
 
 /// The default keys, as GPUI writes them, with the command each runs. App

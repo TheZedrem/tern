@@ -14,7 +14,6 @@ const MAX_LOG_CHARS: usize = 1024;
 /// What Tern tells a plugin.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
-#[allow(dead_code, reason = "commands and results are sent by T-068")]
 pub enum Event {
     Start,
     Command { command: String },
@@ -50,7 +49,6 @@ pub struct PaneInfo {
 /// What became of an action that asked for something.
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code, reason = "confirmations answer with the others (T-068)")]
 pub enum Outcome {
     Allowed,
     Denied,

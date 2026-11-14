@@ -1,6 +1,6 @@
 //! What a plugin wants typed, run or opened, as the user is shown it
-//! before it happens (spec 0016, Untrusted text): on a command button now,
-//! on a confirmation bar with T-068. The text is shown exactly as it would
+//! before it happens (spec 0016, Untrusted text): on a command button and
+//! on a confirmation bar. The text is shown exactly as it would
 //! run, so text that could hide what it runs is refused instead of cleaned
 //! (TM-plug-04, -05).
 

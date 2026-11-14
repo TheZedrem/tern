@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 1
-tasks: [T-004, T-002, T-011]
+tasks: [T-004, T-002, T-011, T-068]
 related: [spec 0002, spec 0003, spec 0005]
 ---
 
@@ -87,6 +87,17 @@ reports Shift plus a digit as the symbol the layout types there
 (`Ctrl+Shift+2` arrives as `Ctrl+"` on a German layout), so no
 `Ctrl+Shift+digit` binding can match. `Alt+digit` matches the digit as
 typed, on layouts that type digits with Shift (French) too.
+
+**Plugin commands** (spec 0016, Commands; T-068): each enabled plugin's
+manifest commands are palette lines `<plugin name>: <title>` with the ID
+`plugin.<plugin>.<command>`, one GPUI action carrying both names.
+`keybindings:` accepts any `plugin.*` ID without reading a manifest, so a
+key works before plugins are found; a key whose plugin or command is
+missing, disabled or stopped shows a notice when pressed. A plugin key
+takes its keystroke from a default like any user key. They have no
+default keys, and the Keyboard tab lists only the app's own commands;
+`plugin.allowRequest` and `plugin.denyRequest` are app commands without
+default keys.
 
 ### Flows
 

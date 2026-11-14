@@ -17,8 +17,10 @@ use std::rc::Rc;
 /// moment its plugin is found enabled until it is disabled, whether or not
 /// the sidebar exists yet, so what a plugin sent is there when it's shown.
 pub(super) struct Plugins {
-    host: Entity<Host>,
+    pub(super) host: Entity<Host>,
     panels: Vec<(PanelId, Entity<PluginPanel>)>,
+    /// Requests waiting on a pane's bar (spec 0016, Confirmation).
+    pub(super) requests: Vec<super::requests::Request>,
 }
 
 impl Plugins {
@@ -82,6 +84,7 @@ impl Workspace {
         self.plugins = Some(Plugins {
             host,
             panels: Vec::new(),
+            requests: Vec::new(),
         });
     }
 
@@ -116,6 +119,7 @@ impl Workspace {
     }
 
     pub(super) fn plugins_pane_closed(&mut self, leaf: LeafId, cx: &mut Context<Self>) {
+        self.drop_requests_of(leaf, cx);
         if let Some(plugins) = &self.plugins {
             plugins
                 .host
@@ -147,8 +151,8 @@ impl Workspace {
                 None => {
                     let view = cx.new(|cx| PluginPanel::new(font.clone(), window, cx));
                     let (plugin, panel) = (listed.plugin.clone(), listed.panel.clone());
-                    cx.subscribe(&view, move |this, _, event, cx| {
-                        this.plugin_panel_event(&plugin, &panel, event, cx);
+                    cx.subscribe_in(&view, window, move |this, _, event, window, cx| {
+                        this.plugin_panel_event(&plugin, &panel, event, window, cx);
                     })
                     .detach();
                     view
@@ -214,9 +218,13 @@ impl Workspace {
                 };
                 self.open_plugin_panel(plugin, id, window, cx);
             }
-            // TODO(T-067, T-068): notices, settings fields and the
-            // confirmed actions.
-            action => host.update(cx, |host, cx| host.unhandled(plugin, action, cx)),
+            Action::Notify { text } => host.update(cx, |host, cx| host.notify(plugin, text, cx)),
+            Action::FillCommand { .. }
+            | Action::RunCommand { .. }
+            | Action::ReadOutput { .. }
+            | Action::OpenTab { .. } => self.plugin_request(plugin, action, window, cx),
+            // The host answers these itself.
+            Action::Ready | Action::SetSettings { .. } => {}
         }
     }
 
@@ -249,29 +257,30 @@ impl Workspace {
         sidebar.update(cx, |sidebar, cx| sidebar.show_unasked(&id, cx));
     }
 
-    /// What the user did in `panel` of `plugin`, told to the plugin.
+    /// What the user did in `panel` of `plugin`, told to the plugin; a
+    /// command button's command is carried out too (spec 0016, Command
+    /// buttons).
     fn plugin_panel_event(
         &mut self,
         plugin: &str,
         panel: &str,
         event: &PluginPanelEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(plugins) = &self.plugins else {
+        let Some(host) = self.plugin_host() else {
             return;
         };
-        plugins.host.update(cx, |host, cx| match event {
-            PluginPanelEvent::Action(id) => host.panel_action(plugin, panel, id, cx),
+        host.update(cx, |host, cx| match event {
+            PluginPanelEvent::Action(id) | PluginPanelEvent::Command { id, .. } => {
+                host.panel_action(plugin, panel, id, cx)
+            }
             PluginPanelEvent::Input(text) => host.panel_input(plugin, panel, text, cx),
             PluginPanelEvent::Restart => host.restart(plugin, panel, cx),
-            PluginPanelEvent::Command { id, command } => {
-                host.panel_action(plugin, panel, id, cx);
-                // TODO(T-068): type a `fill_command`, and raise the bar for
-                // a `run_command` or an `open_tab`.
-                let name = command.name();
-                host.dropped(plugin, format!("a `{name}` button isn't available yet"), cx);
-            }
         });
+        if let PluginPanelEvent::Command { command, .. } = event {
+            self.plugin_button(plugin, command.clone(), window, cx);
+        }
     }
 
     /// A plugin's panel came on screen (`shown`) or left it: its plugin is
@@ -341,6 +350,7 @@ mod tests {
             workspace.plugins = Some(Plugins {
                 host: host.clone(),
                 panels: Vec::new(),
+                requests: Vec::new(),
             });
             host
         });

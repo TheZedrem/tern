@@ -55,7 +55,20 @@ impl Workspace {
             title: format!("Open profile: {}", profile.display_name()),
             id: profile.id,
         });
-        let entries = commands.chain(profiles).collect();
+        // The enabled plugins' commands (spec 0016, Commands).
+        let plugin_commands = self
+            .plugin_host()
+            .map(|host| host.read(cx).commands())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|listed| Entry::Plugin {
+                title: listed.title,
+                command: commands::PluginCommand {
+                    plugin: listed.plugin,
+                    command: listed.command,
+                },
+            });
+        let entries = commands.chain(plugin_commands).chain(profiles).collect();
         let quick = self.forward_shortcut(cx);
         self.show_palette(None, window, cx, |window, cx| {
             Palette::new(entries, "Run a command or open a profile", None, window, cx)

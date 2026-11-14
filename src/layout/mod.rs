@@ -13,6 +13,7 @@ mod panes;
 mod plugins;
 mod profiles;
 mod reload;
+mod requests;
 mod session;
 mod sidebar;
 mod splits;
@@ -22,8 +23,9 @@ mod updates;
 
 use crate::commands::{
     self, CloseTab, CopySelection, DecreaseFontSize, FocusDown, FocusLeft, FocusRight, FocusUp,
-    GoToTab, IncreaseFontSize, NewTab, NextTab, Paste, PreviousTab, RenameTab, ResetFontSize,
-    Search, SplitDown, SplitDownWithProfile, SplitRight, SplitRightWithProfile, ZoomPane,
+    GoToTab, IncreaseFontSize, NewTab, NextTab, Paste, PluginCommand, PreviousTab, RenameTab,
+    ResetFontSize, Search, SplitDown, SplitDownWithProfile, SplitRight, SplitRightWithProfile,
+    ZoomPane,
 };
 use crate::config::{self, Config, SidebarSide, TabBarSide};
 use crate::files::browser;
@@ -509,6 +511,7 @@ impl Workspace {
             "font.increase" => size < *FONT_SIZES.end(),
             "font.decrease" => size > *FONT_SIZES.start(),
             "font.reset" => self.zoom != 0.0,
+            "plugin.allowRequest" | "plugin.denyRequest" => self.has_focused_request(),
             id => id
                 .strip_prefix("tab.goTo")
                 .and_then(|n| n.parse::<usize>().ok())
@@ -670,6 +673,11 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_config))
             .on_action(cx.listener(Self::open_config_folder))
             .on_action(cx.listener(Self::open_plugins_folder))
+            .on_action(cx.listener(Self::allow_plugin_request))
+            .on_action(cx.listener(Self::deny_plugin_request))
+            .on_action(cx.listener(|this, command: &PluginCommand, window, cx| {
+                this.run_plugin_command(command, window, cx);
+            }))
             .on_action(cx.listener(Self::check_for_updates))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.switch_tab(Tabs::next_tab, window, cx);

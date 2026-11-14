@@ -328,6 +328,7 @@ impl Workspace {
             })
             .child(pane)
             .children(dim)
+            .children(self.request_bar(leaf, cx))
             .children(handle)
             .children(mark)
             .on_drag_move(cx.listener(

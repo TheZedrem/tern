@@ -64,6 +64,12 @@ pub enum Entry {
         current: bool,
         change: Change,
     },
+    /// A plugin's manifest command, `<plugin name>: <title>` (spec 0016,
+    /// Commands).
+    Plugin {
+        title: String,
+        command: super::PluginCommand,
+    },
 }
 
 impl Entry {
@@ -73,7 +79,7 @@ impl Entry {
             Entry::Profile { title, .. }
             | Entry::Forward { title, .. }
             | Entry::AddForward { title, .. } => title,
-            Entry::Setting { title, .. } => title,
+            Entry::Setting { title, .. } | Entry::Plugin { title, .. } => title,
             Entry::Theme { name, .. } => name,
             Entry::Host(host)
             | Entry::ForgetHost(host)
@@ -118,6 +124,9 @@ impl Entry {
             Entry::Profile { id, title } => CommandItem::new()
                 .label(title.clone())
                 .keywords([id.clone()]),
+            Entry::Plugin { title, command } => CommandItem::new()
+                .label(title.clone())
+                .action(Box::new(command.clone())),
             Entry::Theme { name, current } => {
                 CommandItem::new().label(name.clone()).checked(*current)
             }
@@ -306,7 +315,7 @@ impl Palette {
                 cx.emit(PaletteEvent::AddForward(forward.clone()));
             }
             // A command has run through its action already.
-            Some(Entry::Command { .. }) | None => {}
+            Some(Entry::Command { .. } | Entry::Plugin { .. }) | None => {}
         }
         cx.emit(PaletteEvent::Closed { cancelled: false });
     }
@@ -328,6 +337,7 @@ impl Render for Palette {
         // config.yaml binds keys to, or where a host connects.
         let footer: SharedString = match self.highlighted.and_then(|ix| self.entries.get(ix)) {
             Some(Entry::Command { command, .. }) => command.id.into(),
+            Some(Entry::Plugin { command, .. }) => command.id().into(),
             Some(Entry::Host(host) | Entry::ForgetHost(host) | Entry::SplitWith { host, .. }) => {
                 host.destination.clone().into()
             }

@@ -55,6 +55,11 @@ earlier Tauri version took 1.07 s to start and was dropped.
 - A files pane that shows the local disk or any saved host as a tree next to your terminals
 - Port forwards (local, remote and SOCKS) from the sidebar, listening on 127.0.0.1 unless you allow the network; never saved
 
+**Plugins**
+
+- Plugins are programs of your own choosing that you drop into the plugins folder and enable on the settings screen's Plugins tab, after a warning to install only what you trust
+- They add sidebar panels and palette commands; whatever they want typed, run or read in a terminal waits for your Allow on a bar that shows it exactly
+
 **Privacy**
 
 - No telemetry and no network traffic at startup. The release check is opt-in.
@@ -134,7 +139,7 @@ local only for this machine and an existing directory.
 
 **Toward 1.0** ([roadmap](spec/architecture.md#roadmap))
 
-- **Plugins:** an extensible sidebar, themes as plugins, and plugin registries you browse in the app
+- **Plugins:** file-browser targets from plugins, an author guide with examples, themes as plugins, and plugin registries you browse in the app
 - SSH port forwarding (local, remote and SOCKS) from the SFTP sidebar, in a few clicks ([spec 0017](spec/0017-port-forwarding.md))
 - Suggestions from your command history as you type
 - A theme editor with a live preview

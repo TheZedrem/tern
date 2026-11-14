@@ -12,6 +12,7 @@ mod launch;
 pub mod link;
 mod mouse;
 pub mod osc7;
+mod plugin_io;
 pub mod prompt;
 pub mod pty;
 pub mod search;

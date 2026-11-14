@@ -140,8 +140,8 @@ Every boundary of the sketch appears: TB1 in -02, -04, -08, -10, -14,
 
 - [x] T-066: host (TM-plug-01's discovery check, -10, -12, -13, -14's
   check, -15, -16's event contents, -17, -19) and -11
-- [ ] T-067: Plugins tab (TM-plug-12's re-confirmation, -18's note)
-- [ ] T-068: confirmations (TM-plug-01's labels, -03 to -09, -16's count,
+- [x] T-067: Plugins tab (TM-plug-12's re-confirmation, -18's note)
+- [x] T-068: confirmations (TM-plug-01's labels, -03 to -09, -16's count,
   -20), and a command button's click (-23): typing a fill, raising the
   bar for the rest
 - [x] T-069: panels (TM-plug-01's header, -02, -10's visible rows, -17),

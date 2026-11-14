@@ -111,10 +111,10 @@ impl Host {
     /// The user ran one of `plugin`'s commands or acted in one of its
     /// panels, which lets its next `open_panel` through (spec 0018,
     /// flow 6).
-    // T-068 calls it for a plugin's commands too.
     pub(super) fn user_acted(&mut self, plugin: &str) {
         if let Some(ix) = self.index(plugin) {
             self.plugins[ix].acted = true;
+            self.plugins[ix].denied = false;
         }
     }
 
