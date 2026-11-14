@@ -30,6 +30,7 @@ close_on_exit: clean  # always | clean (exit code 0) | never
 copy_on_select: false # copy a selection as soon as it's made
 restore_session: true # reopen the last run's tabs and splits
 open_new_tab: true    # every launch opens a fresh tab after the restored ones, or focuses a restored plain local shell
+close_last_tab: quit  # quit | new_tab: closing the last tab quits, or leaves the window open with a fresh tab
 open_links: ctrl_click # ctrl_click (Cmd+click on macOS) | click
 tab_bar: top          # top | bottom | left | right (left and right: vertical tabs)
 app_sidebar: right    # left | right: where the sidebar opens (Ctrl+Shift+S)

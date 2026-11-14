@@ -34,7 +34,7 @@ earlier Tauri version took 1.07 s to start and was dropped.
 
 **Terminal**
 
-- Tabs, vertical tabs and split panes, rearranged by drag and drop; the focused pane gets an accent border and the others dim (`active_pane`)
+- Tabs, vertical tabs and split panes, rearranged by drag and drop; the focused pane gets an accent border and the others dim (`active_pane`); a middle click closes a tab, and `close_last_tab: new_tab` keeps the window open when the last tab closes
 - Session restore: tabs, splits and the window come back as you left them, with a fresh tab opened on top, or a restored local shell focused instead (`open_new_tab: false` to skip it)
 - Splits and restored tabs open in the shell's working directory, with the opt-in [shell integration](#shell-integration) on Windows and everywhere for SSH
 - Search, clickable links, IME input, right-click paste, copy on select and the Linux primary selection

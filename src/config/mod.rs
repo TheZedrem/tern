@@ -48,6 +48,8 @@ pub struct Config {
     /// Every launch opens a fresh tab after the restored ones and shows it
     /// (spec 0003, flow 6).
     pub open_new_tab: bool,
+    /// What closing the window's last tab does (spec 0003, flow 2).
+    pub close_last_tab: CloseLastTab,
     /// Copy a selection to the clipboard as soon as it's made (spec 0002,
     /// flow 4).
     pub copy_on_select: bool,
@@ -84,6 +86,15 @@ pub struct Config {
 pub enum UpdateCheck {
     Daily,
     Off,
+}
+
+/// What closing the window's last tab does: quit, or leave the window open
+/// with a fresh tab (spec 0003, flow 2).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseLastTab {
+    Quit,
+    NewTab,
 }
 
 /// What the new-tab key opens: asks which profile, or the default one
@@ -324,6 +335,7 @@ impl Default for Config {
             keybindings: Vec::new(),
             restore_session: true,
             open_new_tab: true,
+            close_last_tab: CloseLastTab::Quit,
             copy_on_select: false,
             cursor: Cursor::default(),
             active_pane: ActivePane::default(),

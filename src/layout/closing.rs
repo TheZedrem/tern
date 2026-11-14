@@ -5,6 +5,7 @@ use super::tabs::{Closed, TabId};
 use super::tree::LeafId;
 use super::{Workspace, answers, show_notice};
 use crate::commands::ClosePane;
+use crate::config::CloseLastTab;
 use crate::session::Session;
 use gpui::{App, Context, ParentElement, SharedString, Styled, Window, div, px};
 use gpui_component::WindowExt;
@@ -225,6 +226,17 @@ impl Workspace {
     }
 
     fn after_close(&mut self, closed: Closed, window: &mut Window, cx: &mut Context<Self>) {
+        if closed == Closed::Last && self.config.close_last_tab == CloseLastTab::NewTab {
+            // The window stays with a fresh default tab in place of the
+            // last one, whose panes are already stopped (spec 0003, flow 2).
+            let leaf = self.tabs.new_tab();
+            self.tabs.close_tab(0);
+            let profile = self.config.default_profile();
+            self.spawn_pane(leaf, profile, None, window, cx);
+            self.save_soon(window, cx);
+            self.show_active(window, cx);
+            return;
+        }
         if closed == Closed::Last {
             // Nothing is left to restore: the normal case, not a corrupt
             // file (spec 0003, flow 7).
@@ -264,5 +276,168 @@ impl Workspace {
         if let Some(id) = self.tabs.tabs().get(ix).map(|tab| tab.id) {
             self.close(Closing::Tab(id), window, cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::commands::ClosePane;
+    use crate::config::tests::TempDir;
+    use crate::config::{self, Config};
+    use crate::layout::sidebar::tests::{Rig, boot};
+    use crate::layout::tests::open_workspace;
+    use crate::layout::tree::LeafId;
+    use crate::session::tests::{leaf, tab};
+    use crate::session::{self, Session};
+    use crate::terminal::PaneEvent;
+    use gpui::{Modifiers, TestAppContext};
+    use std::path::PathBuf;
+
+    /// A config whose `default_profile` runs `cat`, which waits on its
+    /// input and ends when its pane does, with `close_last_tab` as given.
+    fn keeping_open(close_last_tab: &str) -> Config {
+        let loaded = config::parse(&format!(
+            concat!(
+                "default_profile: cat\n",
+                "close_last_tab: {}\n",
+                "profiles:\n",
+                "  cat:\n",
+                "    type: local\n",
+                "    command: [cat]\n",
+            ),
+            close_last_tab
+        ));
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        loaded.config
+    }
+
+    /// One tab of one local shell, pane 1, waiting for Enter.
+    fn one_shell() -> Session {
+        Session::new(None, vec![tab(leaf(1, "shell", None, None), 1)], 0)
+    }
+
+    /// A workspace showing one idle shell tab under `config`, saving its
+    /// session to `session_path`, so closing the last tab the quitting
+    /// way leaves an empty session there.
+    fn one_tab<'a>(config: Config, session_path: PathBuf, cx: &'a mut TestAppContext) -> Rig<'a> {
+        // The fresh tab's `cat` runs on a PTY thread of its own.
+        cx.executor().allow_parking();
+        let (workspace, cx) = open_workspace(boot(&one_shell()), config, cx);
+        workspace.update(cx, |workspace, _| {
+            workspace.session_path = Some(session_path);
+        });
+        Rig { workspace, cx }
+    }
+
+    /// How a test closes the window's only tab.
+    #[derive(Clone, Copy, Debug)]
+    enum CloseBy {
+        /// Its close button in the tab bar.
+        Button,
+        /// Ctrl+Shift+W: `pane.close` on its only pane.
+        ClosePane,
+        /// Its program exiting under `close_on_exit`.
+        Exit,
+    }
+
+    impl Rig<'_> {
+        fn tab_count(&mut self) -> usize {
+            self.workspace
+                .read_with(self.cx, |workspace, _| workspace.tabs.tabs().len())
+        }
+
+        fn close_only_tab(&mut self, by: CloseBy) {
+            match by {
+                CloseBy::Button => {
+                    self.draw();
+                    let close = self.cx.debug_bounds("tab-close-0").expect("drawn");
+                    self.cx.simulate_click(close.center(), Modifiers::none());
+                    self.draw();
+                }
+                CloseBy::ClosePane => self.run(ClosePane),
+                CloseBy::Exit => {
+                    let pane = self
+                        .workspace
+                        .read_with(self.cx, |workspace, _| workspace.panes[&1].clone());
+                    pane.update(self.cx, |_, cx| cx.emit(PaneEvent::Exited));
+                    self.draw();
+                }
+            }
+        }
+
+        /// The shown tab's only pane: its profile, and whether its program
+        /// runs now rather than waiting for Enter.
+        fn only_pane(&mut self) -> (LeafId, String, bool) {
+            self.workspace.read_with(self.cx, |workspace, cx| {
+                let tab = workspace.tabs.active();
+                assert_eq!(tab.root.leaves(), vec![tab.focused], "one pane");
+                let pane = workspace.panes[&tab.focused].read(cx);
+                let started = !workspace.pending.contains_key(&tab.focused);
+                (tab.focused, pane.profile().id.clone(), started)
+            })
+        }
+    }
+
+    /// Closes the only tab `by` with `close_last_tab: new_tab` and checks
+    /// what AC15 (spec 0003) asks: the window keeps one fresh tab of
+    /// `default_profile`, its program running and the keyboard in it, and
+    /// nothing quits, so no session without tabs is saved.
+    fn keeps_one_fresh_default_tab(by: CloseBy, cx: &mut TestAppContext) {
+        let root = TempDir::new("close-last-tab-new-tab");
+        let path = root.path().join("session.json");
+        let mut rig = one_tab(keeping_open("new_tab"), path.clone(), cx);
+        rig.close_only_tab(by);
+
+        assert_eq!(rig.tab_count(), 1);
+        let (leaf, profile, started) = rig.only_pane();
+        assert_ne!(leaf, 1, "the closed pane is gone");
+        assert_eq!(profile, "cat", "default_profile");
+        assert!(started, "its program runs");
+        assert!(rig.pane_has_the_keyboard(leaf), "focused");
+        let stopped = rig
+            .workspace
+            .read_with(rig.cx, |workspace, _| !workspace.panes.contains_key(&1));
+        assert!(stopped, "the closed pane was stopped");
+        if let Some(saved) = session::load(&path).expect("readable if saved") {
+            assert!(!saved.tabs.is_empty(), "saved as quitting: {saved:?}");
+        }
+    }
+
+    /// AC15 (spec 0003), flow 2: by its close button.
+    #[gpui::test]
+    fn with_new_tab_closing_the_only_tab_by_its_button_keeps_a_fresh_tab(cx: &mut TestAppContext) {
+        keeps_one_fresh_default_tab(CloseBy::Button, cx);
+    }
+
+    /// AC15 (spec 0003), flow 2: by Ctrl+Shift+W on its only pane.
+    #[gpui::test]
+    fn with_new_tab_closing_the_only_pane_keeps_a_fresh_tab(cx: &mut TestAppContext) {
+        keeps_one_fresh_default_tab(CloseBy::ClosePane, cx);
+    }
+
+    /// AC15 (spec 0003), flow 2: by its program exiting.
+    #[gpui::test]
+    fn with_new_tab_the_only_programs_exit_keeps_a_fresh_tab(cx: &mut TestAppContext) {
+        keeps_one_fresh_default_tab(CloseBy::Exit, cx);
+    }
+
+    /// AC15 (spec 0003), flow 2: with the default `quit`, closing the only
+    /// tab quits as before: it saves a session without tabs and starts no
+    /// new tab.
+    #[gpui::test]
+    fn with_quit_closing_the_only_tab_quits(cx: &mut TestAppContext) {
+        let root = TempDir::new("close-last-tab-quit");
+        let path = root.path().join("session.json");
+        let mut rig = one_tab(keeping_open("quit"), path.clone(), cx);
+        rig.close_only_tab(CloseBy::Button);
+
+        let saved = session::load(&path)
+            .expect("a readable session")
+            .expect("quitting saved one");
+        assert!(saved.tabs.is_empty(), "{saved:?}");
+        let panes = rig
+            .workspace
+            .read_with(rig.cx, |workspace, _| workspace.panes.len());
+        assert_eq!(panes, 0, "no fresh tab started");
     }
 }

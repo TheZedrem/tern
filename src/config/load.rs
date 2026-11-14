@@ -303,6 +303,11 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.open_new_tab = open;
                     }
                 }
+                "close_last_tab" => {
+                    if let Some(close) = map.next_value()? {
+                        config.close_last_tab = close;
+                    }
+                }
                 "copy_on_select" => {
                     if let Some(copy) = map.next_value()? {
                         config.copy_on_select = copy;
@@ -709,8 +714,8 @@ mod tests {
     use super::*;
     use crate::config::tests::{TempDir, profile_ids, ssh_to};
     use crate::config::{
-        CloseOnExit, CursorStyle, FilesExecutable, NewTab, OpenLinks, SftpClick, SidebarSide,
-        TEMPLATE, UpdateCheck, UploadMode,
+        CloseLastTab, CloseOnExit, CursorStyle, FilesExecutable, NewTab, OpenLinks, SftpClick,
+        SidebarSide, TEMPLATE, UpdateCheck, UploadMode,
     };
     use crate::terminal::FontSettings;
     use crate::terminal::pty::Command;
@@ -1044,6 +1049,38 @@ mod tests {
         assert!(config.copy_on_select);
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(notices[0].contains("new_tab"), "{}", notices[0]);
+    }
+
+    /// Spec 0005 §Model, spec 0003 flow 2: closing the last tab quits
+    /// unless `close_last_tab: new_tab` keeps the window open.
+    #[test]
+    fn close_last_tab_is_quit_unless_set_to_new_tab() {
+        assert_eq!(parse("").config.close_last_tab, CloseLastTab::Quit);
+        for (text, close) in [
+            ("close_last_tab: quit\n", CloseLastTab::Quit),
+            ("close_last_tab: new_tab\n", CloseLastTab::NewTab),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.close_last_tab, close, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a value `close_last_tab` doesn't take, like `new-tab`,
+    /// falls back to `quit` with a notice naming the key; the rest of the
+    /// file still applies.
+    #[test]
+    fn a_bad_close_last_tab_falls_back_to_quit_with_a_notice_and_the_rest_applies() {
+        let Loaded { config, notices } = parse(concat!(
+            "scrollback: 500\n",
+            "close_last_tab: new-tab\n",
+            "copy_on_select: true\n",
+        ));
+        assert_eq!(config.close_last_tab, CloseLastTab::Quit);
+        assert_eq!(config.scrollback, 500);
+        assert!(config.copy_on_select);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("close_last_tab"), "{}", notices[0]);
     }
 
     /// Spec 0018, Migration: under its old name, `sftp_sidebar`, the

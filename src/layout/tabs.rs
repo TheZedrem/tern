@@ -23,7 +23,8 @@ pub enum Closed {
     Pane,
     /// The tab closed too.
     Tab,
-    /// That was the last tab: the app quits.
+    /// That was the last tab: the app quits, unless `close_last_tab:
+    /// new_tab` puts a fresh tab in its place (spec 0003, flow 2).
     Last,
 }
 

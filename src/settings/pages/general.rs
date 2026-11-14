@@ -1,6 +1,8 @@
 //! The General tab: startup, updates and what double-clicks do.
 
-use crate::config::{Config, FilesExecutable, NewTab, SftpClick, UpdateCheck, UploadMode};
+use crate::config::{
+    CloseLastTab, Config, FilesExecutable, NewTab, SftpClick, UpdateCheck, UploadMode,
+};
 use crate::settings::change::Change;
 use crate::settings::{Page, Pick, Row, SettingsView, choice};
 use gpui::prelude::FluentBuilder;
@@ -58,6 +60,24 @@ impl SettingsView {
                         path: vec!["open_new_tab"],
                         value: on.to_string(),
                         reads: |config| config.open_new_tab.to_string(),
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            Row::new(
+                Page::General,
+                "Startup",
+                "Closing the last tab",
+                "close last tab quit window keep open new tab exit",
+                self.options(
+                    "close-last-tab",
+                    &[("quit", "Quits Tern"), ("new_tab", "Opens a new tab")],
+                    close_last_tab_name(config),
+                    |value| {
+                        choice(vec!["close_last_tab"], value, |config| {
+                            close_last_tab_name(config).to_owned()
+                        })
                     },
                     cx,
                 )
@@ -177,6 +197,14 @@ impl SettingsView {
                 .into_any_element(),
             ),
         ]
+    }
+}
+
+/// `close_last_tab` as the file writes it.
+fn close_last_tab_name(config: &Config) -> &'static str {
+    match config.close_last_tab {
+        CloseLastTab::Quit => "quit",
+        CloseLastTab::NewTab => "new_tab",
     }
 }
 
