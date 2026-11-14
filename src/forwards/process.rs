@@ -318,6 +318,42 @@ pub(super) mod tests {
             }
         }
 
+        /// TM-fwd-13: the kernel ends ssh when the thread that started it
+        /// ends, which in Tern is the UI thread, so a crash or `kill -9`
+        /// takes every forward with it. ssh runs as long as that thread
+        /// does.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn ssh_ends_with_the_thread_that_started_it() {
+            let dir = crate::config::tests::TempDir::new("forward-process-pdeathsig");
+            let pidfile = dir.path().join("pid");
+            let script = format!("echo $$ > '{}'; exec sleep 60", pidfile.display());
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let starter = std::thread::spawn(move || {
+                let started = Process::spawn(&sh(&script)).expect("sh runs");
+                let _ = released.recv();
+                started
+            });
+            // Held until the end so a failure still stops ssh, through the
+            // handle and never by PID.
+            let (_process, _exit) = {
+                let pid = read_pid(&pidfile);
+                std::thread::sleep(Duration::from_millis(200));
+                assert!(alive(&pid), "ssh {pid} ended while its thread runs");
+                release.send(()).expect("the starter waits");
+                let started = starter.join().expect("the starter returns ssh");
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while alive(&pid) {
+                    assert!(
+                        Instant::now() < deadline,
+                        "ssh {pid} outlived the thread that started it"
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                started
+            };
+        }
+
         /// The PID the fake ssh wrote to `pidfile`, once it has.
         pub(crate) fn read_pid(pidfile: &std::path::Path) -> String {
             let deadline = Instant::now() + Duration::from_secs(5);
