@@ -2484,4 +2484,103 @@ switch ($mode) {
         // The second crash is a notice of its own.
         assert_eq!(notices(&seen).len(), 2, "{:?}", notices(&seen));
     }
+
+    /// Spec 0016, Commands and AC3: an enabled plugin's manifest commands
+    /// are listed for the palette under `<name>: <title>`, a disabled
+    /// one's are not; running one sends exactly one `command` event. A
+    /// missing plugin or command, a disabled plugin and a stopped one say
+    /// why instead, and start nothing (flow 6).
+    #[gpui::test]
+    fn a_plugin_command_runs_only_on_an_enabled_running_plugin(cx: &mut TestAppContext) {
+        let lab = Lab::new("commands");
+        let commands = "commands: [{ id: show, title: Show }, { id: hide, title: Hide }]\n";
+        let docker = lab.plugin("docker", "stay", commands);
+        let off = lab.plugin("off", "stay", commands);
+        let crasher = lab.plugin("crasher", "crash", &format!("{commands}{HEARS_PANES}"));
+        let disabled = PluginSettings {
+            enabled: false,
+            ..grant("stay", &[], &[])
+        };
+        let (host, seen) = lab.host(
+            cx,
+            [
+                ("docker", grant("stay", &[], &[])),
+                ("off", disabled),
+                ("crasher", grant("crash", &[], PANES)),
+            ],
+        );
+        let listed = host.read_with(cx, |host, _| host.commands());
+        let listed: Vec<(&str, &str, &str)> = listed
+            .iter()
+            .map(|c| (c.plugin.as_str(), c.command.as_str(), c.title.as_str()))
+            .collect();
+        for (plugin, command, title) in [
+            ("docker", "show", "Name of docker: Show"),
+            ("docker", "hide", "Name of docker: Hide"),
+        ] {
+            assert!(
+                listed.contains(&(plugin, command, title)),
+                "{listed:?} lacks {title}"
+            );
+        }
+        assert!(
+            !listed.iter().any(|(plugin, ..)| *plugin == "off"),
+            "{listed:?}"
+        );
+
+        let ran = |cx: &mut TestAppContext, plugin: &str, command: &str| {
+            host.update(cx, |host, cx| host.run_command(plugin, command, cx))
+        };
+        assert_eq!(ran(cx, "docker", "show"), Ok(()));
+        let got = wait_for_events(cx, &docker, 1);
+        assert_eq!(names(&got), ["command"]);
+        assert_eq!(got[0]["command"], "show");
+
+        open(&host, cx, 1);
+        wait_until(cx, "the crash", |cx| {
+            state(&host, cx, "crasher") == Some(State::Stopped)
+        });
+        let refused = [
+            ("nobody", "show", "no plugin"),
+            ("docker", "nothing", "no command"),
+            ("off", "show", "isn't enabled"),
+            ("crasher", "show", "stopped"),
+        ];
+        for (plugin, command, why) in refused {
+            let said = ran(cx, plugin, command).expect_err(plugin);
+            assert!(said.contains(why), "{plugin}.{command}: {said}");
+        }
+        settle(cx);
+        assert_eq!(events(&docker).len(), 1, "a missing command reached it");
+        assert_eq!(pids(&off), [""; 0], "a disabled plugin started");
+        assert_eq!(pids(&crasher).len(), 1, "a stopped plugin started again");
+        assert_eq!(notices(&seen).len(), 1, "{:?}", notices(&seen));
+    }
+
+    /// Actions, `notify`: a notice naming the plugin, "one at a time per
+    /// plugin": one more while the first is up is dropped with a log line,
+    /// and another plugin's still shows.
+    #[gpui::test]
+    fn a_plugin_has_one_notice_up_at_a_time(cx: &mut TestAppContext) {
+        let lab = Lab::new("notify");
+        lab.plugin("chatty", "stay", "");
+        lab.plugin("quiet", "stay", "");
+        let enabled = || grant("stay", &[], &[]);
+        let (host, seen) = lab.host(cx, [("chatty", enabled()), ("quiet", enabled())]);
+        let notify = |cx: &mut TestAppContext, plugin: &str, text: &str| {
+            host.update(cx, |host, cx| host.notify(plugin, text, cx));
+        };
+        notify(cx, "chatty", "built");
+        notify(cx, "chatty", "built again");
+        notify(cx, "quiet", "done");
+        cx.run_until_parked();
+        assert_eq!(
+            notices(&seen),
+            ["Name of chatty: built", "Name of quiet: done"]
+        );
+        let said = log(&host, cx, "chatty");
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("notify"), "{said:?}");
+        assert_eq!(log(&host, cx, "quiet"), [""; 0]);
+    }
 }

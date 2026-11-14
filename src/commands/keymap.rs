@@ -807,4 +807,75 @@ mod tests {
             assert_eq!(converted(keys), Ok(canonical(gpui)), "{keys}");
         }
     }
+
+    /// Spec 0016, Commands: "The keymap accepts any `plugin.*` ID without
+    /// reading a manifest", here one no plugin has, and it takes the key
+    /// from the command it was the default of, so the key runs only the
+    /// plugin's command.
+    #[test]
+    fn a_key_for_a_plugin_command_binds_without_a_manifest_and_takes_a_default_key() {
+        let loaded = config::parse(concat!(
+            "keybindings:\n",
+            "  \"ctrl+shift+d\": plugin.no-such-plugin.containers\n",
+        ));
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        let (planned, notices) = plan(&loaded.config.keybindings);
+        assert!(notices.is_empty(), "{notices:?}");
+        assert!(
+            runs(&planned, "ctrl-shift-d").is_none(),
+            "the default still has the key"
+        );
+        let keys: Vec<(String, String)> = plugin_keys(&loaded.config.keybindings)
+            .into_iter()
+            .map(|(keys, command)| (canonical(&keys), command.id()))
+            .collect();
+        assert_eq!(
+            keys,
+            [(
+                canonical("ctrl-shift-d"),
+                "plugin.no-such-plugin.containers".to_owned()
+            )]
+        );
+    }
+
+    /// A `plugin.*` ID names a plugin and a command, each 1 to 64 of
+    /// `a-z`, `0-9`, `-` and `_` (spec 0016, Model); anything else isn't
+    /// a plugin's command and is no command at all.
+    #[test]
+    fn only_a_well_formed_plugin_id_is_a_plugin_command() {
+        let parsed = PluginCommand::parse("plugin.docker_2.show-containers");
+        assert_eq!(
+            parsed,
+            Some(PluginCommand {
+                plugin: "docker_2".into(),
+                command: "show-containers".into(),
+            })
+        );
+        let long = format!("plugin.{}.x", "a".repeat(65));
+        for id in [
+            "plugin.Docker.show",
+            "plugin.docker",
+            "plugin..show",
+            "plugin.docker.",
+            "plugin.docker.show.more",
+            "docker.show",
+            long.as_str(),
+        ] {
+            assert_eq!(PluginCommand::parse(id), None, "{id}");
+        }
+        let (planned, notices) = plan(&[entry("ctrl+shift+d", "plugin.Docker.show", 4)]);
+        assert_eq!(ids(&planned), ids(&plan(&[]).0));
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("line 4"), "{}", notices[0]);
+    }
+
+    /// Spec 0016, Confirmation: `plugin.allowRequest` and
+    /// `plugin.denyRequest` are commands without default keys.
+    #[test]
+    fn allow_and_deny_request_are_commands_without_default_keys() {
+        for id in ["plugin.allowRequest", "plugin.denyRequest"] {
+            assert!(by_config_id(id).is_some(), "{id} isn't a command");
+            assert_eq!(default_keys(id), [""; 0], "{id}");
+        }
+    }
 }

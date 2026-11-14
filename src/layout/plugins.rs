@@ -303,7 +303,7 @@ impl Workspace {
 /// workspace between the plugin host, the panels and the sidebar, against
 /// real plugin processes in a folder of the test's own.
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::commands::FocusSidebar;
     use crate::config::PluginSettings;
@@ -333,7 +333,11 @@ mod tests {
     /// their panels. `start_plugins` can't be used: it reads the user's
     /// own plugins folder. So the host's events are handed to the
     /// workspace here, the way `start_plugins` hands them over.
-    fn start(rig: &mut Rig<'_>, lab: &Lab, plugins: &[(&str, PluginSettings)]) -> Entity<Host> {
+    pub(in crate::layout) fn start(
+        rig: &mut Rig<'_>,
+        lab: &Lab,
+        plugins: &[(&str, PluginSettings)],
+    ) -> Entity<Host> {
         lab.ends_with(rig.cx);
         let (root, granted) = (lab.root(), granted(plugins));
         let host = rig.workspace.update_in(rig.cx, |workspace, window, cx| {
@@ -371,7 +375,11 @@ mod tests {
     }
 
     /// The view of `plugin`'s `panel`.
-    fn view(rig: &mut Rig<'_>, plugin: &str, panel: &str) -> Entity<PluginPanel> {
+    pub(in crate::layout) fn view(
+        rig: &mut Rig<'_>,
+        plugin: &str,
+        panel: &str,
+    ) -> Entity<PluginPanel> {
         rig.workspace.read_with(rig.cx, |workspace, _| {
             let plugins = workspace.plugins.as_ref().expect("the host was started");
             let (_, view) = plugins.panel(plugin, panel).expect("the panel was made");

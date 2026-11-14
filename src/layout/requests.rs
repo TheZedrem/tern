@@ -537,3 +537,633 @@ impl Workspace {
         requests.iter().position(|request| request.pane == pane)
     }
 }
+
+/// Spec 0016, Confirmation, Command buttons, Untrusted text and flow 5,
+/// against real panes: each runs a program that records what reaches its
+/// PTY in `typed-<pane>`, so what was typed is what the file holds.
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::commands::{ClosePane, FocusLeft, FocusRight};
+    use crate::layout::plugins::tests::{start, view};
+    use crate::layout::sidebar::tests::{Rig, two_hosts};
+    use crate::layout::tests::open_workspace;
+    use crate::layout::tree::Axis;
+    use crate::layout::{Boot, BootPane};
+    use crate::plugins::tests::{Lab, events, grant, names, settle, wait_for_events, wait_until};
+    use crate::plugins::{Host, Right};
+    use crate::session::Session;
+    use crate::session::tests::{leaf, split, tab};
+    use crate::sidebar::plugin::PluginPanelEvent;
+    use crate::terminal::pty::{self, GridSize};
+    use crate::terminal::{Launch, Start};
+    use crate::theme;
+    use crate::timing::Timing;
+    use gpui::{Entity, TestAppContext};
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    /// The plugin that asks; its folder is the lab's `asker`.
+    const ASKER: &str = "asker";
+    const MANIFEST: &str = concat!(
+        "rights: [terminal_write, terminal_read, open_tab]\n",
+        "commands: [{ id: go, title: Go }]\n",
+        "panels: [{ id: main, title: Main }]\n",
+    );
+
+    /// A pane's program: two lines of output, then everything that
+    /// reaches its PTY, byte for byte, into `typed-<pane>`. Raw mode, so
+    /// text without Enter arrives too; echo stays on, so typing shows.
+    fn recorder(pane: LeafId) -> pty::Command {
+        let script =
+            format!("printf 'one\\ntwo\\n'; stty raw; : > ready-{pane}; exec cat > typed-{pane}");
+        pty::Command {
+            program: "sh".into(),
+            args: vec!["-c".into(), script],
+            env: BTreeMap::new(),
+        }
+    }
+
+    /// One tab of two recording panes side by side, pane 1 focused and
+    /// pane 4 beside it, both in `dir`.
+    fn recording_rig<'a>(dir: &Path, cx: &'a mut TestAppContext) -> Rig<'a> {
+        cx.executor().allow_parking();
+        let panes = split(
+            Axis::Row,
+            0.5,
+            leaf(1, "shell", None, None),
+            leaf(4, "shell", None, None),
+        );
+        let session = Session::new(None, vec![tab(panes, 1)], 0);
+        let config = two_hosts();
+        let boot = Boot::restore(&session, (1200.0, 800.0), |saved, area| {
+            let profile = config.profile(&saved.profile).expect("a known profile");
+            let launch = Launch {
+                command: recorder(saved.id),
+                cwd: Some(dir.to_owned()),
+                timing: Arc::new(Timing::new(Instant::now())),
+            };
+            let started = pty::spawn(
+                &launch.command,
+                GridSize::fit(area, (8.0, 16.0)),
+                launch.cwd.as_deref(),
+                1000,
+                false,
+                Arc::clone(&launch.timing),
+            );
+            BootPane {
+                start: Start::Started(started),
+                launch,
+                profile: (&profile).into(),
+                theme: theme::DARK,
+                title: saved.title.clone(),
+            }
+        })
+        .expect("a session with tabs");
+        let (workspace, cx) = open_workspace(boot, config, cx);
+        Rig { workspace, cx }
+    }
+
+    /// The lab with the asking plugin, the workspace of two recording
+    /// panes with its host started, and the plugin's folder. Both panes
+    /// are recording and show their two lines.
+    fn bench<'a>(name: &str, cx: &'a mut TestAppContext) -> (Lab, PathBuf, Rig<'a>, Entity<Host>) {
+        let lab = Lab::new(&format!("requests-{name}"));
+        let folder = lab.plugin(ASKER, "stay", MANIFEST);
+        let every = [Right::TerminalWrite, Right::TerminalRead, Right::OpenTab];
+        let mut rig = recording_rig(&lab.root(), cx);
+        let host = start(&mut rig, &lab, &[(ASKER, grant("stay", &every, &[]))]);
+        let root = lab.root();
+        for pane in [1, 4] {
+            wait_until(rig.cx, "the pane to record", |cx| {
+                let shown = rig.workspace.read_with(cx, |workspace, cx| {
+                    workspace.panes[&pane].read(cx).output(10)
+                });
+                root.join(format!("ready-{pane}")).exists() && shown.ends_with("two")
+            });
+        }
+        (lab, folder, rig, host)
+    }
+
+    /// What reached pane `pane`'s PTY so far.
+    fn typed(dir: &Path, pane: LeafId) -> String {
+        std::fs::read_to_string(dir.join(format!("typed-{pane}"))).unwrap_or_default()
+    }
+
+    /// Waits for pane `pane` to have got exactly `text`, and nothing more
+    /// after a while.
+    fn wait_typed(rig: &mut Rig<'_>, dir: &Path, pane: LeafId, text: &str) {
+        wait_until(rig.cx, &format!("{text:?} in pane {pane}"), |_| {
+            typed(dir, pane).len() >= text.len()
+        });
+        settle(rig.cx);
+        assert_eq!(typed(dir, pane), text, "pane {pane}");
+    }
+
+    /// The requests waiting on bars: the pane and the kind of each.
+    fn pending(rig: &mut Rig<'_>) -> Vec<(LeafId, &'static str)> {
+        rig.draw();
+        rig.workspace.read_with(rig.cx, |workspace, _| {
+            let requests = &workspace.plugins.as_ref().expect("a host").requests;
+            let shown = requests
+                .iter()
+                .map(|request| (request.pane, request.asked.kind()));
+            shown.collect()
+        })
+    }
+
+    /// Whether pane `pane` draws a bar.
+    fn has_bar(rig: &mut Rig<'_>, pane: LeafId) -> bool {
+        rig.workspace.update(rig.cx, |workspace, cx| {
+            workspace.request_bar(pane, cx).is_some()
+        })
+    }
+
+    /// `action` of the asking plugin arrives, its right already checked by
+    /// the host.
+    fn arrives(rig: &mut Rig<'_>, action: Action) {
+        rig.workspace.update_in(rig.cx, |workspace, window, cx| {
+            workspace.plugin_request(ASKER, &action, window, cx);
+        });
+        rig.draw();
+    }
+
+    fn run(text: &str, id: u64, pane: Option<LeafId>) -> Action {
+        Action::RunCommand {
+            id: Some(Id::Number(id)),
+            pane,
+            text: text.into(),
+        }
+    }
+
+    fn fill(text: &str, id: u64) -> Action {
+        Action::FillCommand {
+            id: Some(Id::Number(id)),
+            pane: None,
+            text: text.into(),
+        }
+    }
+
+    /// Answers the focused pane's request from the palette, once Allow
+    /// takes clicks.
+    fn allow(rig: &mut Rig<'_>) {
+        std::thread::sleep(ALLOW_GUARD + Duration::from_millis(100));
+        rig.run(AllowPluginRequest);
+    }
+
+    fn deny(rig: &mut Rig<'_>) {
+        rig.run(DenyPluginRequest);
+    }
+
+    /// The `action_result`s the plugin got so far: each one's `id` and
+    /// result.
+    fn results(folder: &Path) -> Vec<(Value, String)> {
+        let got = events(folder);
+        let results = got.iter().filter(|event| event["event"] == "action_result");
+        let said = results.map(|event| {
+            let result = event["result"].as_str().expect("a result").to_owned();
+            (event["id"].clone(), result)
+        });
+        said.collect()
+    }
+
+    /// Waits for the plugin's `count`th `action_result`, and returns all.
+    fn wait_for_results(rig: &mut Rig<'_>, folder: &Path, count: usize) -> Vec<(Value, String)> {
+        let what = format!("{count} action results");
+        wait_until(rig.cx, &what, |_| results(folder).len() >= count);
+        results(folder)
+    }
+
+    fn result(id: u64, result: &str) -> (Value, String) {
+        (Value::from(id), result.to_owned())
+    }
+
+    fn log(rig: &mut Rig<'_>, host: &Entity<Host>) -> Vec<String> {
+        host.read_with(rig.cx, |host, _| {
+            host.log_of(ASKER).map(str::to_owned).collect()
+        })
+    }
+
+    /// Runs `plugin.asker.go`, as the palette or a key does.
+    fn run_its_command(rig: &mut Rig<'_>) {
+        rig.run(PluginCommand {
+            plugin: ASKER.into(),
+            command: "go".into(),
+        });
+    }
+
+    /// AC4, Confirmation [load-bearing], flow 5, from the plugin's own
+    /// line on: `run_command` shows a bar on the focused pane and types
+    /// nothing until Allow; typing `ls` and Enter meanwhile goes to the
+    /// shell and confirms nothing; Allow ignores the first 0.5 s; then it
+    /// types exactly the text and Enter, and the plugin gets `allowed`
+    /// with its `id`. The log line names the kind, the pane and the
+    /// outcome, never the text (TM-plug-07).
+    #[gpui::test]
+    fn a_run_command_waits_for_allow_and_then_types_its_text_and_enter(cx: &mut TestAppContext) {
+        let (lab, folder, mut rig, host) = bench("run", cx);
+        let dir = lab.root();
+        let ask = r#"{"action":"run_command","id":7,"text":"echo SECRET-RUN"}"#;
+        std::fs::write(folder.join("say"), format!("{ask}\n")).expect("write say");
+        run_its_command(&mut rig);
+        wait_until(rig.cx, "the bar", |cx| {
+            rig.workspace.read_with(cx, |workspace, _| {
+                workspace
+                    .plugins
+                    .as_ref()
+                    .is_some_and(|p| !p.requests.is_empty())
+            })
+        });
+        assert_eq!(pending(&mut rig), [(1, "run_command")]);
+        assert!(has_bar(&mut rig, 1));
+        assert!(!has_bar(&mut rig, 4));
+        assert!(rig.pane_has_the_keyboard(1), "the bar took the keyboard");
+
+        rig.run(AllowPluginRequest);
+        assert_eq!(pending(&mut rig).len(), 1, "Allow took a click at once");
+
+        rig.keys("l s enter");
+        wait_typed(&mut rig, &dir, 1, "ls\r");
+        assert_eq!(pending(&mut rig).len(), 1, "Enter confirmed the bar");
+
+        allow(&mut rig);
+        wait_typed(&mut rig, &dir, 1, "ls\recho SECRET-RUN\r");
+        assert_eq!(typed(&dir, 4), "", "it typed into another pane");
+        assert_eq!(pending(&mut rig), []);
+        assert!(!has_bar(&mut rig, 1));
+        let got = wait_for_events(rig.cx, &folder, 2);
+        assert_eq!(names(&got), ["command", "action_result"]);
+        assert_eq!(results(&folder), [result(7, "allowed")]);
+
+        let label = rig
+            .workspace
+            .read_with(rig.cx, |workspace, cx| workspace.pane_label(1, cx));
+        let said = log(&mut rig, &host);
+        assert_eq!(said.len(), 1, "{said:?}");
+        for part in ["run_command", label.as_str(), "allowed", "UTC"] {
+            assert!(said[0].contains(part), "no {part:?} in {said:?}");
+        }
+        assert!(!said.iter().any(|line| line.contains("SECRET")), "{said:?}");
+    }
+
+    /// AC4 and Confirmation: Deny writes nothing and the plugin gets
+    /// `denied`. Its next confirmed actions are `refused`, with no bar,
+    /// until the user runs one of its commands; and again after the next
+    /// Deny, until the user acts in one of its panels.
+    #[gpui::test]
+    fn deny_writes_nothing_and_refuses_the_plugin_until_the_user_acts_on_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (lab, folder, mut rig, _host) = bench("deny", cx);
+        let dir = lab.root();
+        arrives(&mut rig, run("rm -rf build", 1, None));
+        assert_eq!(pending(&mut rig).len(), 1);
+        deny(&mut rig);
+        assert_eq!(pending(&mut rig), []);
+        assert_eq!(
+            wait_for_results(&mut rig, &folder, 1),
+            [result(1, "denied")]
+        );
+
+        arrives(&mut rig, run("echo again", 2, None));
+        arrives(&mut rig, fill("echo again", 3));
+        assert_eq!(pending(&mut rig), [], "a bar after a Deny");
+        assert!(!has_bar(&mut rig, 1));
+        assert_eq!(
+            wait_for_results(&mut rig, &folder, 3)[1..],
+            [result(2, "refused"), result(3, "refused")]
+        );
+
+        run_its_command(&mut rig);
+        arrives(&mut rig, run("echo after the command", 4, None));
+        assert_eq!(pending(&mut rig), [(1, "run_command")]);
+        deny(&mut rig);
+        arrives(&mut rig, run("echo refused", 5, None));
+        assert_eq!(pending(&mut rig), []);
+
+        let panel = view(&mut rig, ASKER, "main");
+        panel.update(rig.cx, |_, cx| {
+            cx.emit(PluginPanelEvent::Action("refresh".into()));
+        });
+        rig.draw();
+        arrives(&mut rig, run("echo after the panel", 6, None));
+        assert_eq!(pending(&mut rig), [(1, "run_command")]);
+        assert_eq!(
+            wait_for_results(&mut rig, &folder, 5)[3..],
+            [result(4, "denied"), result(5, "refused")]
+        );
+        settle(rig.cx);
+        assert_eq!(typed(&dir, 1), "", "a denied or refused request typed");
+    }
+
+    /// Confirmation: "One request per plugin is pending at a time; more
+    /// are refused." The waiting one stays, and Allow carries out only it.
+    #[gpui::test]
+    fn a_second_request_while_one_waits_is_refused(cx: &mut TestAppContext) {
+        let (lab, folder, mut rig, _host) = bench("second", cx);
+        let dir = lab.root();
+        arrives(&mut rig, run("echo first", 1, None));
+        arrives(&mut rig, run("echo second", 2, Some(4)));
+        arrives(&mut rig, fill("echo third", 3));
+        assert_eq!(pending(&mut rig), [(1, "run_command")]);
+        assert!(!has_bar(&mut rig, 4));
+        assert_eq!(
+            wait_for_results(&mut rig, &folder, 2),
+            [result(2, "refused"), result(3, "refused")]
+        );
+
+        allow(&mut rig);
+        wait_typed(&mut rig, &dir, 1, "echo first\r");
+        assert_eq!(typed(&dir, 4), "");
+        assert_eq!(
+            wait_for_results(&mut rig, &folder, 3)[2],
+            result(1, "allowed")
+        );
+    }
+
+    /// AC7, Untrusted text [load-bearing]: `fill_command` or `run_command`
+    /// text with a control character (newline, ESC) or a format character
+    /// (U+202E, a zero-width space), or over 4 KiB, is refused with no
+    /// bar. Exactly 4 KiB, and non-ASCII, still get one.
+    #[gpui::test]
+    fn text_with_a_control_or_format_character_or_over_4_kib_gets_no_bar(cx: &mut TestAppContext) {
+        let (lab, folder, mut rig, _host) = bench("untrusted", cx);
+        let dir = lab.root();
+        let over = "a".repeat(4 * 1024 + 1);
+        let refused = [
+            fill("ls\nrm -rf ~", 1),
+            fill("echo \u{1b}[31mred", 2),
+            fill("echo \u{202e}txt.exe", 3),
+            run("cu\u{200b}rl example.com", 4, None),
+            run("echo\ttab", 5, None),
+            fill(&over, 6),
+        ];
+        for action in refused {
+            arrives(&mut rig, action);
+            assert_eq!(pending(&mut rig), [], "a bar for refused text");
+        }
+        let got = wait_for_results(&mut rig, &folder, 6);
+        let outcomes: Vec<&str> = got.iter().map(|(_, result)| result.as_str()).collect();
+        assert_eq!(outcomes, ["refused"; 6]);
+
+        // A refusal isn't a Deny: the plugin's next request gets its bar.
+        let full = "a".repeat(4 * 1024);
+        arrives(&mut rig, fill(&full, 7));
+        assert_eq!(pending(&mut rig), [(1, "fill_command")]);
+        deny(&mut rig);
+        arrives(&mut rig, run("сurl example.com", 8, None));
+        assert_eq!(pending(&mut rig), [], "refused after the Deny");
+        run_its_command(&mut rig);
+        arrives(&mut rig, run("сurl example.com", 9, None));
+        assert_eq!(
+            pending(&mut rig),
+            [(1, "run_command")],
+            "non-ASCII is shown"
+        );
+        settle(rig.cx);
+        assert_eq!(typed(&dir, 1), "");
+    }
+
+    /// AC6, flow 5: `read_output` sends nothing until Allow, and then
+    /// exactly the text its bar previewed, read when it arrived: what the
+    /// pane shows by Allow isn't in it. With Deny the plugin gets
+    /// `denied` and no text.
+    #[gpui::test]
+    fn read_output_sends_exactly_what_its_bar_showed(cx: &mut TestAppContext) {
+        let (_lab, folder, mut rig, _host) = bench("read", cx);
+        let read = |id: u64| Action::ReadOutput {
+            id: Some(Id::Number(id)),
+            pane: Some(4),
+            lines: Some(5),
+        };
+        arrives(&mut rig, read(1));
+        assert_eq!(pending(&mut rig), [(4, "read_output")]);
+        let shown = rig.workspace.read_with(rig.cx, |workspace, _| {
+            match &workspace.plugins.as_ref().expect("a host").requests[0].asked {
+                Asked::Read(text) => text.clone(),
+                Asked::Command(_) => unreachable!("a read was asked"),
+            }
+        });
+        assert_eq!(shown, "one\ntwo");
+
+        // Typing in pane 4 echoes there, after the bar came up.
+        rig.run(FocusRight);
+        rig.keys("x y z");
+        wait_until(rig.cx, "the echo", |cx| {
+            rig.workspace.read_with(cx, |workspace, cx| {
+                workspace.panes[&4].read(cx).output(5).contains("xyz")
+            })
+        });
+        settle(rig.cx);
+        assert_eq!(events(&folder), [Value::Null; 0], "sent before Allow");
+
+        allow(&mut rig);
+        let got = wait_for_events(rig.cx, &folder, 2);
+        assert_eq!(names(&got), ["action_result", "output"]);
+        assert_eq!(got[0]["result"], "allowed");
+        assert_eq!(got[1]["id"], 1);
+        assert_eq!(got[1]["text"], shown.as_str());
+
+        arrives(&mut rig, read(2));
+        deny(&mut rig);
+        let got = wait_for_events(rig.cx, &folder, 3);
+        settle(rig.cx);
+        assert_eq!(
+            names(&events(&folder)),
+            ["action_result", "output", "action_result"]
+        );
+        assert_eq!(got[2]["id"], 2);
+        assert_eq!(got[2]["result"], "denied");
+    }
+
+    /// Confirmation: the target is the action's `pane`, else the pane
+    /// focused when it arrived, and "never follows focus later"; the
+    /// palette's Allow and Deny act on the focused pane's request only.
+    #[gpui::test]
+    fn a_request_keeps_its_pane_and_the_palette_answers_the_focused_ones(cx: &mut TestAppContext) {
+        let (lab, folder, mut rig, _host) = bench("target", cx);
+        let dir = lab.root();
+        arrives(&mut rig, fill("make", 1));
+        assert_eq!(pending(&mut rig), [(1, "fill_command")]);
+
+        rig.run(FocusRight);
+        assert!(rig.pane_has_the_keyboard(4));
+        assert_eq!(
+            pending(&mut rig),
+            [(1, "fill_command")],
+            "it followed focus"
+        );
+        allow(&mut rig);
+        deny(&mut rig);
+        assert_eq!(pending(&mut rig).len(), 1, "answered from another pane");
+
+        rig.run(FocusLeft);
+        allow(&mut rig);
+        wait_typed(&mut rig, &dir, 1, "make");
+        assert_eq!(typed(&dir, 4), "");
+
+        rig.run(FocusRight);
+        arrives(&mut rig, fill("make test", 2));
+        assert_eq!(pending(&mut rig), [(4, "fill_command")]);
+        allow(&mut rig);
+        wait_typed(&mut rig, &dir, 4, "make test");
+        assert_eq!(
+            wait_for_results(&mut rig, &folder, 2),
+            [result(1, "allowed"), result(2, "allowed")]
+        );
+    }
+
+    /// Flow 5: the target pane closing first drops the request, and the
+    /// plugin gets `no_pane`. Its next request may wait on a bar again.
+    #[gpui::test]
+    fn closing_the_target_pane_drops_its_request_with_no_pane(cx: &mut TestAppContext) {
+        let (_lab, folder, mut rig, host) = bench("close", cx);
+        arrives(&mut rig, run("echo gone", 1, Some(1)));
+        assert_eq!(pending(&mut rig), [(1, "run_command")]);
+        rig.run(ClosePane);
+        assert!(
+            !rig.workspace
+                .read_with(rig.cx, |w, _| w.panes.contains_key(&1))
+        );
+        assert_eq!(pending(&mut rig), []);
+        assert_eq!(
+            wait_for_results(&mut rig, &folder, 1),
+            [result(1, "no_pane")]
+        );
+        let said = log(&mut rig, &host);
+        assert!(
+            said.iter().any(|line| line.contains("run_command")),
+            "{said:?}"
+        );
+        assert!(
+            !said.iter().any(|line| line.contains("echo gone")),
+            "{said:?}"
+        );
+
+        arrives(&mut rig, run("echo next", 2, None));
+        assert_eq!(pending(&mut rig), [(4, "run_command")]);
+    }
+
+    /// AC10, Command buttons [load-bearing]: a `fill_command` button types
+    /// its text into the focused terminal pane at once, without Enter and
+    /// without a bar, and the plugin gets `panel_action`. A `run_command`
+    /// button writes nothing on its click and raises the bar; Allow types
+    /// the text and Enter, Deny writes nothing. Each adds a log line
+    /// without the text.
+    #[gpui::test]
+    fn a_fill_button_types_at_once_and_a_run_button_raises_the_bar(cx: &mut TestAppContext) {
+        let (lab, folder, mut rig, host) = bench("buttons", cx);
+        let dir = lab.root();
+        let panel = view(&mut rig, ASKER, "main");
+        let click = |rig: &mut Rig<'_>, id: &str, command: Command| {
+            panel.update(rig.cx, |_, cx| {
+                cx.emit(PluginPanelEvent::Command {
+                    id: id.into(),
+                    command,
+                });
+            });
+            rig.draw();
+        };
+
+        rig.run(FocusRight);
+        click(
+            &mut rig,
+            "status",
+            Command::Fill {
+                text: "git status".into(),
+            },
+        );
+        assert_eq!(pending(&mut rig), [], "a fill button raised a bar");
+        wait_typed(&mut rig, &dir, 4, "git status");
+        assert_eq!(typed(&dir, 1), "");
+        let got = wait_for_events(rig.cx, &folder, 1);
+        assert_eq!(names(&got[..1]), ["panel_action"]);
+        assert_eq!(got[0]["id"], "status");
+
+        click(
+            &mut rig,
+            "build",
+            Command::Run {
+                text: "make".into(),
+            },
+        );
+        assert_eq!(pending(&mut rig), [(4, "run_command")]);
+        settle(rig.cx);
+        assert_eq!(
+            typed(&dir, 4),
+            "git status",
+            "a run button wrote on its click"
+        );
+        allow(&mut rig);
+        wait_typed(&mut rig, &dir, 4, "git statusmake\r");
+
+        click(
+            &mut rig,
+            "build",
+            Command::Run {
+                text: "make".into(),
+            },
+        );
+        assert_eq!(pending(&mut rig), [(4, "run_command")]);
+        deny(&mut rig);
+        settle(rig.cx);
+        assert_eq!(typed(&dir, 4), "git statusmake\r", "Deny wrote");
+
+        let said = log(&mut rig, &host);
+        assert_eq!(said.len(), 3, "{said:?}");
+        assert!(
+            said[0].contains("fill_command") && said[0].contains("allowed"),
+            "{said:?}"
+        );
+        assert!(
+            said[1].contains("run_command") && said[1].contains("allowed"),
+            "{said:?}"
+        );
+        assert!(
+            said[2].contains("run_command") && said[2].contains("denied"),
+            "{said:?}"
+        );
+        let texts = ["git status", "make"];
+        assert!(
+            !said
+                .iter()
+                .any(|line| texts.iter().any(|text| line.contains(text))),
+            "{said:?}"
+        );
+    }
+
+    /// Actions, `open_tab`: nothing opens before Allow; then a tab running
+    /// exactly the argv opens and is shown.
+    #[gpui::test]
+    fn an_allowed_open_tab_opens_a_tab_running_its_argv(cx: &mut TestAppContext) {
+        let (lab, folder, mut rig, _host) = bench("open-tab", cx);
+        let opened = lab.root().join("opened");
+        // It stays, reading its PTY, so its tab does too.
+        let script = format!("printf '%s' \"$1\" > '{}'; exec cat", opened.display());
+        let argv = vec!["sh".into(), "-c".into(), script, "sh".into(), "a b".into()];
+        let tabs = |rig: &mut Rig<'_>| rig.workspace.read_with(rig.cx, |w, _| w.tabs.tabs().len());
+        arrives(
+            &mut rig,
+            Action::OpenTab {
+                id: Some(Id::Number(1)),
+                argv,
+            },
+        );
+        assert_eq!(pending(&mut rig), [(1, "open_tab")]);
+        settle(rig.cx);
+        assert_eq!(tabs(&mut rig), 1);
+        assert!(!opened.exists(), "it ran before Allow");
+
+        allow(&mut rig);
+        assert_eq!(tabs(&mut rig), 2);
+        wait_until(rig.cx, "the tab's program", |_| {
+            std::fs::read_to_string(&opened).is_ok_and(|text| text == "a b")
+        });
+        assert_eq!(
+            wait_for_results(&mut rig, &folder, 1),
+            [result(1, "allowed")]
+        );
+    }
+}
