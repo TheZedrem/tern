@@ -40,6 +40,7 @@ The GPUI spike measured 333 ms warm and 811 ms cold (spec 0001).
 |---|---|---|---|---|---|
 | v0.5.0 | 346.1 ms | 304.0 ms | 319.8 ms | 190.4 ms | 2026-11-10 |
 | v0.7.0 | 621.9 ms | 357.8 ms | 401.4 ms | 208.6 ms | 2026-11-11 |
+| v0.9.0 | 738.7 ms | 142.8 ms | 308.5 ms | 86.2 ms | 2026-11-14 |
 
 v0.7.0's row looks 55 ms slower than v0.5.0's, but it isn't: built and
 run back to back on the same day, v0.5.0 measured 327.7–350.6 ms warm and

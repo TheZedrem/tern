@@ -6939,7 +6939,7 @@ dependencies = [
 
 [[package]]
 name = "tern"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "alacritty_terminal",
  "dirs 7.0.0",
