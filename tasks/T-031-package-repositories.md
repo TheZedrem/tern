@@ -45,7 +45,7 @@ site built on Ubuntu 24.04, and `dnf install tern` on Fedora 45 and
 https://thezedrem.github.io/tern/ and README's Install section has the
 commands. With them, v0.9.0 installed from the live site on Fedora 45,
 openSUSE Tumbleweed, Debian 13 and Ubuntu 24.04 (containers), signatures
-checked. Left: with the next tag, check that each system's update picks
+checked; the owner also installed it on a second PC. Left: with the next tag, check that each system's update picks
 up the newer version.
 
 Spec: ../spec/architecture.md
