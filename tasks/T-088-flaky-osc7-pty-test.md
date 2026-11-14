@@ -11,4 +11,9 @@ test binaries were building) and passed in the next full run and in five
 runs alone. Find what it waits on that a loaded machine can miss, and
 make it wait for that instead of for time. Area: src.
 
+Seen again on 2026-11-14 in a full run while other test binaries ran:
+`terminal::pty::tests::an_ssh_panes_osc7_report_is_kept_only_as_its_remote_folder`,
+a sibling in the same file, failed once and passed three runs alone. Both
+likely share the wait.
+
 Spec: ../spec/0003-tabs-splits-and-session-restore.md
