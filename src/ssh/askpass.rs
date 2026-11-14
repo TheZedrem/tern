@@ -620,6 +620,26 @@ fn parse_token(hex: &str) -> Option<Token> {
 mod tests {
     use super::*;
 
+    /// The Tern binary `cargo test` builds into the profile directory
+    /// (`target/debug`), found from this test binary's path: an ancestor
+    /// of it, at a depth that depends on cargo's version (`deps/` before
+    /// Rust 1.100, `build/tern/<hash>/` since).
+    fn built_binary() -> std::path::PathBuf {
+        let name = format!("tern{}", std::env::consts::EXE_SUFFIX);
+        let tests = std::env::current_exe().expect("the test binary's path");
+        tests
+            .ancestors()
+            .skip(1)
+            .map(|dir| dir.join(&name))
+            .find(|binary| binary.is_file())
+            .unwrap_or_else(|| {
+                panic!(
+                    "no {name} above {}: `cargo test` builds it, `cargo test --bin` doesn't",
+                    tests.display()
+                )
+            })
+    }
+
     /// ssh's question for a host it doesn't know yet (OpenSSH 10.6), which
     /// it asks with no hint.
     const UNKNOWN_HOST: &str = "The authenticity of host 'prod.example.com (192.0.2.10)' can't be established.\n\
@@ -845,21 +865,8 @@ mod tests {
             }
         }
 
-        /// The Tern binary, which `cargo test` builds beside the
-        /// directory of this test binary (`target/debug/deps`).
         fn binary() -> PathBuf {
-            let tests = std::env::current_exe().expect("the test binary's path");
-            let binary = tests
-                .parent()
-                .and_then(Path::parent)
-                .expect("a target directory")
-                .join("tern");
-            assert!(
-                binary.is_file(),
-                "no {}: `cargo test` builds it, `cargo test --bin` doesn't",
-                binary.display()
-            );
-            binary
+            super::built_binary()
         }
 
         /// The binary run as ssh runs its askpass helper, with `args` (the
@@ -1545,17 +1552,7 @@ mod tests {
     fn a_windows_helper_waits_for_the_answer() {
         use futures::FutureExt;
         use std::process::{Command, Stdio};
-        let binary = std::env::current_exe()
-            .expect("the test binary's path")
-            .parent()
-            .and_then(std::path::Path::parent)
-            .expect("a target directory")
-            .join("tern.exe");
-        assert!(
-            binary.is_file(),
-            "no {}: `cargo test` builds it",
-            binary.display()
-        );
+        let binary = built_binary();
         let (endpoint, listener) = Endpoint::open().expect("open the pipe");
         let server = Server::serve(endpoint, listener, String::new());
         let mut connection = server.connect().expect("a connection");
