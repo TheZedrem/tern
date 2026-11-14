@@ -63,6 +63,9 @@ mapping from keys to bytes. Pane IDs are `u32`, unique per app run.
   The app ships opt-in shell-integration
   snippets for bash, zsh and pwsh under `shell-integration/`, which the user
   sources from their rc file (OQ-008). Nothing is injected automatically.
+  The packages carry them at a fixed path: `/usr/share/tern/shell-integration/`
+  in the `.deb` and `.rpm`, `$APPDIR/usr/share/tern/shell-integration/` in
+  the AppImage, `shell-integration\` next to `tern.exe` in the MSI (T-072).
 - **Glyphs:** the default font is the embedded Lilex. Characters it lacks
   (CJK, emoji, Nerd Font icons) fall back per glyph to installed fonts
   through GPUI's text system (OQ-011).

@@ -15,6 +15,7 @@ install -Dm644 packaging/linux/de.zedrem.tern.desktop -t "$dir/usr/share/applica
 install -Dm644 assets/icon.png "$dir/$icons/de.zedrem.tern.png"
 install -Dm644 LICENSE "$dir/usr/share/doc/tern/LICENSE"
 install -Dm644 assets/fonts/lilex/OFL.txt "$dir/usr/share/doc/tern/Lilex-OFL.txt"
+install -Dm644 shell-integration/tern.{bash,zsh,ps1} -t "$dir/usr/share/tern/shell-integration"
 # appimagetool takes the desktop file and icon from the AppDir's root.
 ln -s usr/share/applications/de.zedrem.tern.desktop "$dir/"
 ln -s "$icons/de.zedrem.tern.png" "$dir/"

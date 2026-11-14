@@ -101,6 +101,9 @@ assets = [
     ["packaging/linux/de.zedrem.tern.desktop", "usr/share/applications/", "644"],
     ["assets/icon.png", "usr/share/icons/hicolor/512x512/apps/de.zedrem.tern.png", "644"],
     ["assets/fonts/lilex/OFL.txt", "usr/share/doc/tern/Lilex-OFL.txt", "644"],
+    ["shell-integration/tern.bash", "usr/share/tern/shell-integration/", "644"],
+    ["shell-integration/tern.zsh", "usr/share/tern/shell-integration/", "644"],
+    ["shell-integration/tern.ps1", "usr/share/tern/shell-integration/", "644"],
 ]
 
 # Fedora and openSUSE name these packages differently, so the runtime
@@ -112,6 +115,9 @@ assets = [
     { source = "assets/icon.png", dest = "/usr/share/icons/hicolor/512x512/apps/de.zedrem.tern.png", mode = "644" },
     { source = "LICENSE", dest = "/usr/share/licenses/tern/LICENSE", mode = "644", doc = true },
     { source = "assets/fonts/lilex/OFL.txt", dest = "/usr/share/licenses/tern/Lilex-OFL.txt", mode = "644", doc = true },
+    { source = "shell-integration/tern.bash", dest = "/usr/share/tern/shell-integration/tern.bash", mode = "644" },
+    { source = "shell-integration/tern.zsh", dest = "/usr/share/tern/shell-integration/tern.zsh", mode = "644" },
+    { source = "shell-integration/tern.ps1", dest = "/usr/share/tern/shell-integration/tern.ps1", mode = "644" },
 ]
 
 [package.metadata.generate-rpm.requires]

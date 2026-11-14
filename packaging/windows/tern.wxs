@@ -1,6 +1,7 @@
 <!--
   Tern's MSI (spec 0012): a per-user install of tern.exe into
-  %LOCALAPPDATA%\Programs\Tern plus a Start menu shortcut, no UAC prompt.
+  %LOCALAPPDATA%\Programs\Tern, its shell-integration snippets beside it
+  and a Start menu shortcut, no UAC prompt.
   Built from the release tern.exe; docs/development.md has the commands
   and release.yml builds it for every tag. The version comes from tern.exe's version info, which build.rs takes
   from Cargo.toml, so there's one place to bump it.
@@ -34,7 +35,9 @@
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramsFolder" Name="Programs">
-        <Directory Id="INSTALLFOLDER" Name="Tern" />
+        <Directory Id="INSTALLFOLDER" Name="Tern">
+          <Directory Id="SHELLINTEGRATION" Name="shell-integration" />
+        </Directory>
       </Directory>
     </StandardDirectory>
 
@@ -48,6 +51,17 @@
                      Type="integer" Value="1" KeyPath="yes" />
       <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
       <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+    </Component>
+
+    <!-- The opt-in shell-integration snippets (spec 0002, cwd), next to
+         tern.exe; nothing sources them unless the user does. -->
+    <Component Id="ShellIntegration" Directory="SHELLINTEGRATION" Guid="3560D5D9-116F-4659-8CFF-A8155C3E4D74">
+      <File Id="TernPs1" Source="$(sys.SOURCEFILEDIR)..\..\shell-integration\tern.ps1" />
+      <File Id="TernBash" Source="$(sys.SOURCEFILEDIR)..\..\shell-integration\tern.bash" />
+      <File Id="TernZsh" Source="$(sys.SOURCEFILEDIR)..\..\shell-integration\tern.zsh" />
+      <RegistryValue Root="HKCU" Key="Software\Tern" Name="ShellIntegration"
+                     Type="integer" Value="1" KeyPath="yes" />
+      <RemoveFolder Id="RemoveShellIntegration" On="uninstall" />
     </Component>
 
     <!-- The AppUserModelID matches the window's (OQ-021), so a pinned

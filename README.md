@@ -109,9 +109,17 @@ up automatically.
 
 | Shell | Add to | Line |
 |---|---|---|
-| bash | `~/.bashrc` | `. /path/to/tern/shell-integration/tern.bash` |
-| zsh | `~/.zshrc` | `source /path/to/tern/shell-integration/tern.zsh` |
-| PowerShell 7 | `$PROFILE` | `. /path/to/tern/shell-integration/tern.ps1` |
+| bash | `~/.bashrc` | `. /usr/share/tern/shell-integration/tern.bash` |
+| zsh | `~/.zshrc` | `source /usr/share/tern/shell-integration/tern.zsh` |
+| PowerShell 7 | `$PROFILE` | `. "$env:LOCALAPPDATA\Programs\Tern\shell-integration\tern.ps1"` |
+
+The `.deb` and `.rpm` install the snippets to
+`/usr/share/tern/shell-integration/`, the MSI next to `tern.exe` (the
+path above). The AppImage carries them at
+`$APPDIR/usr/share/tern/shell-integration/`, where `$APPDIR` is set only
+in shells Tern started, so guard the line:
+`[ -n "$APPDIR" ] && . "$APPDIR/usr/share/tern/shell-integration/tern.bash"`.
+From a clone, use `shell-integration/` in it.
 
 On Linux, local panes follow `cd` without it. On a server, the snippet
 lets the sidebar's files start in the shell's folder. A report counts as
