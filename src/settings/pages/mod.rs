@@ -5,9 +5,11 @@ mod appearance;
 mod general;
 mod import;
 mod keyboard;
+mod plugins;
 mod profiles;
 mod terminal;
 
 pub use general::update_check_name;
 pub(super) use import::ImportCard;
+pub(super) use plugins::PluginFields;
 pub(super) use profiles::Form;

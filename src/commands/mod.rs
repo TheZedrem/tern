@@ -39,6 +39,9 @@ actions!(
         OpenConfig,
         /// Shows `config.yaml` in the OS's file manager (spec 0009).
         OpenConfigFolder,
+        /// Opens the plugins folder in the OS's file manager, creating it
+        /// first (spec 0016).
+        OpenPluginsFolder,
         /// Opens the host picker (spec 0006).
         ConnectToHost,
         /// Opens the host picker to forget what's saved for a host (spec
@@ -187,6 +190,9 @@ pub const COMMANDS: &[AppCommand] = &[
     }),
     command("config.openFolder", Some("Open config folder"), || {
         Box::new(OpenConfigFolder)
+    }),
+    command("plugins.openFolder", Some("Open plugins folder"), || {
+        Box::new(OpenPluginsFolder)
     }),
     command("app.checkForUpdates", Some("Check for updates"), || {
         Box::new(CheckForUpdates)

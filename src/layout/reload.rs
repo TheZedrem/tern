@@ -318,7 +318,8 @@ impl Workspace {
     ) {
         if self.settings.is_none() {
             let config = self.config.clone();
-            let view = cx.new(|cx| SettingsView::new(config, window, cx));
+            let host = self.plugin_host();
+            let view = cx.new(|cx| SettingsView::new(config, host, window, cx));
             let events = cx.subscribe_in(&view, window, Self::settings_event);
             self.settings = Some(SettingsScreen {
                 view,

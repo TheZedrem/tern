@@ -7,13 +7,15 @@
 //! (OQ-031).
 
 pub mod command;
+mod listing;
 mod manifest;
 pub mod panel;
 mod panels;
 mod process;
 mod protocol;
 
-pub use manifest::{Right, Subscription};
+pub use listing::ListedPlugin;
+pub use manifest::{FieldKind, Right, Subscription};
 pub use panels::ListedPanel;
 pub use protocol::{Action, PaneInfo};
 
@@ -58,7 +60,6 @@ pub enum HostEvent {
 
 /// Where a found plugin is.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code, reason = "shown on the Plugins tab (T-067)")]
 pub enum State {
     Unusable(String),
     Disabled,
@@ -90,6 +91,9 @@ struct Plugin {
     /// since its last `open_panel`, which lets the next one through.
     acted: bool,
     log: VecDeque<String>,
+    /// The settings fields its last `set_settings` drew, under the
+    /// manifest's (flow 8).
+    fields: Vec<manifest::Field>,
 }
 
 struct Running {
@@ -236,7 +240,6 @@ impl Host {
     }
 
     /// Where plugin `id` is, if it was found.
-    #[allow(dead_code, reason = "shown on the Plugins tab (T-067)")]
     pub fn state(&self, id: &str) -> Option<State> {
         let ix = self.index(id)?;
         let plugin = &self.plugins[ix];
@@ -252,7 +255,6 @@ impl Host {
     /// Plugin `id`'s log, oldest line first: its stderr and what Tern
     /// dropped or refused. Never an event's or an action's payload
     /// (TM-plug-17).
-    #[allow(dead_code, reason = "shown on the Plugins tab (T-067)")]
     pub fn log_of(&self, id: &str) -> impl Iterator<Item = &str> {
         self.index(id)
             .into_iter()
@@ -472,6 +474,10 @@ impl Host {
             self.log(ix, dropped.into(), cx);
             return;
         }
+        if let Action::SetSettings { fields } = action {
+            self.set_fields(ix, fields, cx);
+            return;
+        }
         let plugin = self.plugins[ix].id.clone();
         cx.emit(HostEvent::Action { plugin, action });
     }
@@ -582,6 +588,7 @@ impl Plugin {
             stopped: false,
             acted: false,
             log: VecDeque::new(),
+            fields: Vec::new(),
         }
     }
 }

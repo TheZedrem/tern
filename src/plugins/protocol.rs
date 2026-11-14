@@ -2,7 +2,7 @@
 //! one JSON object per line, actions come back the same way. Everything a
 //! plugin sends is untrusted input (threat model 0005, TB1).
 
-use super::manifest::{API, Right};
+use super::manifest::{API, Field, Right};
 use super::panel::{self, Item};
 use crate::config::Setting;
 use serde::{Deserialize, Serialize};
@@ -109,9 +109,8 @@ pub enum Action {
         text: String,
     },
     SetSettings {
-        // TODO(T-067): typed with the Plugins tab that draws them.
-        #[serde(default)]
-        fields: serde_json::Value,
+        #[serde(default, deserialize_with = "super::manifest::dynamic_fields")]
+        fields: Vec<Field>,
     },
     FillCommand {
         #[serde(default)]

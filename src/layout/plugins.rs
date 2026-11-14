@@ -6,6 +6,7 @@
 
 use super::tree::LeafId;
 use super::{Workspace, show_notice};
+use crate::commands::OpenPluginsFolder;
 use crate::plugins::{self, Action, Host, HostEvent, PaneInfo};
 use crate::sidebar::plugin::{self as panel_view, PluginPanel, PluginPanelEvent};
 use crate::sidebar::{Panel, PanelId};
@@ -30,6 +31,42 @@ impl Plugins {
 }
 
 impl Workspace {
+    /// The plugin host, once plugins were looked for after the first
+    /// frame.
+    pub(super) fn plugin_host(&self) -> Option<Entity<Host>> {
+        self.plugins.as_ref().map(|plugins| plugins.host.clone())
+    }
+
+    /// Opens the plugins folder in the OS's file manager, creating it off
+    /// the UI thread first; it starts and enables nothing (spec 0016,
+    /// Open plugins folder).
+    pub(super) fn open_plugins_folder(
+        &mut self,
+        _: &OpenPluginsFolder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = plugins::root() else {
+            show_notice("This system has no data directory.".into(), window, cx);
+            return;
+        };
+        let created = cx.background_spawn({
+            let root = root.clone();
+            async move { std::fs::create_dir_all(&root) }
+        });
+        cx.spawn_in(window, async move |_, cx| {
+            let result = created.await;
+            let _ = cx.update(|window, cx| match result {
+                Ok(()) => cx.open_with_system(&root),
+                Err(error) => {
+                    let notice = format!("Couldn't create {}: {error}", root.display());
+                    show_notice(notice, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Looks for plugins (flow 1). Called after the first frame; the host
     /// reads the folders off the UI thread.
     pub(super) fn start_plugins(&mut self, window: &mut Window, cx: &mut Context<Self>) {

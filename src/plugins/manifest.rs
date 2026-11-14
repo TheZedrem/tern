@@ -49,11 +49,21 @@ pub enum Subscription {
     PaneClosed,
 }
 
+impl Subscription {
+    /// Its name in a manifest and in the config.
+    pub fn name(self) -> &'static str {
+        match self {
+            Subscription::Start => "start",
+            Subscription::PaneOpened => "pane_opened",
+            Subscription::PaneClosed => "pane_closed",
+        }
+    }
+}
+
 /// A usable manifest: checked, its texts cleaned by the title rules.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Manifest {
     pub name: String,
-    #[allow(dead_code, reason = "shown on the Plugins tab (T-067)")]
     pub version: String,
     /// The command line on this OS, as written: what the user confirms.
     pub run: Vec<String>,
@@ -62,7 +72,6 @@ pub struct Manifest {
     #[allow(dead_code, reason = "listed in the palette (T-068)")]
     pub commands: Vec<Named>,
     pub panels: Vec<Named>,
-    #[allow(dead_code, reason = "drawn on the Plugins tab (T-067)")]
     pub settings: Vec<Field>,
 }
 
@@ -77,7 +86,6 @@ pub struct Named {
 
 /// One of the plugin's own settings.
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code, reason = "drawn on the Plugins tab (T-067)")]
 pub struct Field {
     pub key: String,
     pub label: String,
@@ -85,7 +93,6 @@ pub struct Field {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code, reason = "drawn on the Plugins tab (T-067)")]
 pub enum FieldKind {
     Text,
     Bool,
@@ -381,6 +388,25 @@ fn named(raw: Vec<RawNamed>, what: &str) -> Result<Vec<Named>, String> {
         all.push(Named { id, title, icon });
     }
     Ok(all)
+}
+
+/// The most fields one `set_settings` may draw.
+const MAX_DYNAMIC_FIELDS: usize = 64;
+
+/// The fields of a `set_settings` action, checked by the manifest's rules
+/// (spec 0016, flow 8); used as serde's `deserialize_with`.
+pub fn dynamic_fields<'de, D>(deserializer: D) -> Result<Vec<Field>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let raw = Vec::<RawField>::deserialize(deserializer)?;
+    if raw.len() > MAX_DYNAMIC_FIELDS {
+        return Err(D::Error::custom(format!(
+            "more than {MAX_DYNAMIC_FIELDS} settings"
+        )));
+    }
+    fields(raw).map_err(D::Error::custom)
 }
 
 fn fields(raw: Vec<RawField>) -> Result<Vec<Field>, String> {

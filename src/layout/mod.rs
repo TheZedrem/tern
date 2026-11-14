@@ -669,6 +669,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::close_focused_pane))
             .on_action(cx.listener(Self::open_config))
             .on_action(cx.listener(Self::open_config_folder))
+            .on_action(cx.listener(Self::open_plugins_folder))
             .on_action(cx.listener(Self::check_for_updates))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.switch_tab(Tabs::next_tab, window, cx);

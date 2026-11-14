@@ -11,10 +11,11 @@ mod pages;
 pub mod yaml;
 
 pub use pages::update_check_name;
-use pages::{Form, ImportCard};
+use pages::{Form, ImportCard, PluginFields};
 
 use crate::commands::OpenConfigFolder;
 use crate::config::{ActivePane, Config};
+use crate::plugins::Host;
 use change::Change;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -60,14 +61,13 @@ pub const FIELDS: &[&str] = &[
     "files_executable",
     "new_tab",
     "update_check",
+    "plugins",
 ];
 
 /// Template keys the screen leaves to the file, and why: custom themes are
-/// files of their own (spec 0009, out of scope), and `plugins` waits for
-/// its tab.
-// TODO(T-067): `plugins` moves to FIELDS with the Plugins tab.
+/// files of their own (spec 0009, out of scope).
 #[cfg(test)]
-pub const LEFT_TO_THE_FILE: &[&str] = &["theme.custom", "plugins"];
+pub const LEFT_TO_THE_FILE: &[&str] = &["theme.custom"];
 
 actions!(tern, [CloseSettings]);
 
@@ -115,17 +115,19 @@ pub enum Page {
     Terminal,
     Keyboard,
     Profiles,
+    Plugins,
     Import,
 }
 
 impl Page {
-    pub const ALL: [Page; 6] = [
+    pub const ALL: [Page; 7] = [
         Page::General,
         Page::Appearance,
         Page::Terminal,
         Page::Keyboard,
         Page::Profiles,
         Page::Import,
+        Page::Plugins,
     ];
 
     pub fn title(self) -> &'static str {
@@ -135,6 +137,7 @@ impl Page {
             Page::Terminal => "Terminal",
             Page::Keyboard => "Keyboard",
             Page::Profiles => "Profiles",
+            Page::Plugins => "Plugins",
             Page::Import => "Import",
         }
     }
@@ -207,6 +210,10 @@ pub struct SettingsView {
     search: Entity<InputState>,
     /// The Import tab's cards, once it (or a search) first showed them.
     imports: Vec<ImportCard>,
+    /// The plugin host, for the Plugins tab; `None` before the first
+    /// frame looked for plugins.
+    host: Option<Entity<Host>>,
+    plugins: PluginFields,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -220,8 +227,17 @@ impl Focusable for SettingsView {
 }
 
 impl SettingsView {
-    pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        config: Config,
+        host: Option<Entity<Host>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut subscriptions = Vec::new();
+        if let Some(host) = &host {
+            // A plugin found, stopped or logging shows at once.
+            subscriptions.push(cx.observe(host, |_, _, cx| cx.notify()));
+        }
         let fields = [
             Field::FontSize,
             Field::LineHeight,
@@ -283,6 +299,8 @@ impl SettingsView {
             quick: false,
             deleting: None,
             imports: Vec::new(),
+            host,
+            plugins: PluginFields::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -545,12 +563,14 @@ impl SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_plugin_fields(window, cx);
         let mut rows = self.general_rows(cx);
         rows.extend(self.appearance_rows(cx));
         rows.extend(self.terminal_rows(cx));
         rows.extend(self.keybinding_rows(cx));
         rows.extend(self.profile_rows(cx));
+        rows.extend(self.plugin_rows(cx));
         rows.extend(self.import_rows(cx));
 
         let query = self.search.read(cx).value().trim().to_owned();
@@ -815,7 +835,7 @@ mod tests {
     /// and a search for it by name finds it.
     #[test]
     fn the_import_tab_follows_profiles_and_is_found_by_search() {
-        assert_eq!(Page::ALL[4..], [Page::Profiles, Page::Import]);
+        assert_eq!(Page::ALL[4..6], [Page::Profiles, Page::Import]);
         for query in ["import", "Imp"] {
             assert!(matches(query, Page::Import.title()), "{query}");
         }
@@ -1007,7 +1027,7 @@ mod tests {
             let (closed, changes, opened) = (closed.clone(), changes.clone(), opened.clone());
             move |window, cx| {
                 let host = cx.new(|cx| {
-                    let view = cx.new(|cx| SettingsView::new(config, window, cx));
+                    let view = cx.new(|cx| SettingsView::new(config, None, window, cx));
                     let events = cx.subscribe(&view, move |_, _, event, _| match event {
                         SettingsEvent::Close => closed.set(closed.get() + 1),
                         SettingsEvent::Change(change) => changes.borrow_mut().push(change.clone()),

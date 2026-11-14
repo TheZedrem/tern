@@ -4,7 +4,7 @@
 
 use super::yaml;
 use crate::commands;
-use crate::config::{self, Config, Profile, ProfileKind};
+use crate::config::{self, Config, PluginSettings, Profile, ProfileKind, Setting};
 use std::path::Path;
 
 #[derive(Clone, Debug)]
@@ -39,6 +39,9 @@ pub enum Change {
         id: String,
         profile: Option<Box<ProfileForm>>,
     },
+    /// Plugin `id`'s entry under `plugins:` written whole as `entry`
+    /// (spec 0016, flows 2 and 8).
+    Plugin { id: String, entry: PluginSettings },
 }
 
 impl Change {
@@ -49,6 +52,7 @@ impl Change {
             Change::Renamed { to, .. } => (*to).to_owned(),
             Change::Bind { command, .. } => format!("keybindings (for {command})"),
             Change::Profile { id, .. } => format!("profiles.{id}"),
+            Change::Plugin { id, .. } => format!("plugins.{id}"),
         }
     }
 
@@ -77,6 +81,9 @@ impl Change {
                 Some(form) => yaml::upsert(text, &["profiles", id], &form.lines(id)),
                 None => yaml::remove(text, &["profiles", id]),
             },
+            Change::Plugin { id, entry } => {
+                yaml::upsert(text, &["plugins", id], &plugin_lines(id, entry))
+            }
         }
     }
 
@@ -106,6 +113,7 @@ impl Change {
             Change::Profile { id, profile } => {
                 config.profiles.iter().any(|found| found.id == *id) == profile.is_some()
             }
+            Change::Plugin { id, entry } => config.plugins.get(id) == Some(entry),
         }
     }
 
@@ -125,6 +133,46 @@ impl Change {
             Err(refused())
         }
     }
+}
+
+/// Plugin `id`'s entry as YAML lines for [`yaml::upsert`], flow style
+/// inside, so it stays a short block.
+fn plugin_lines(id: &str, entry: &PluginSettings) -> Vec<String> {
+    let list = |items: Vec<String>| format!("[{}]", items.join(", "));
+    let run = entry.run.iter().map(|word| yaml::scalar(word)).collect();
+    let rights = entry
+        .rights
+        .iter()
+        .map(|right| right.name().to_owned())
+        .collect();
+    let events = entry
+        .events
+        .iter()
+        .map(|event| event.name().to_owned())
+        .collect();
+    let settings: Vec<String> = entry
+        .settings
+        .iter()
+        .map(|(key, value)| {
+            let value = match value {
+                Setting::Bool(on) => on.to_string(),
+                Setting::Number(number) => super::number(*number),
+                Setting::Text(text) => yaml::scalar(text),
+            };
+            format!("{}: {value}", yaml::key_text(key))
+        })
+        .collect();
+    vec![
+        format!("{}:", yaml::key_text(id)),
+        format!("  enabled: {}", entry.enabled),
+        format!("  run: {}", list(run)),
+        format!("  rights: {}", list(rights)),
+        format!("  events: {}", list(events)),
+        match settings.is_empty() {
+            true => "  settings: {}".to_owned(),
+            false => format!("  settings: {{ {} }}", settings.join(", ")),
+        },
+    ]
 }
 
 /// A profile as the form edits it: every field as typed (spec 0005, 0006).

@@ -1,7 +1,7 @@
 ---
 status: implemented    # draft | approved | implemented
 phase: 1
-tasks: [T-017, T-011, T-058, T-046, T-057, T-087, T-089]
+tasks: [T-017, T-011, T-058, T-046, T-057, T-087, T-089, T-067]
 related: [spec 0004, spec 0005, spec 0006, OQ-010 ✅]
 ---
 
@@ -27,7 +27,7 @@ can be changed from the screen, the change applies within a second, and
 **In scope:**
 
 - "Open settings" (`settings.open`) in the palette; no default key (no `Shift` combination for it works on every layout, OQ-014)
-- Sections: Font (family from the installed fonts, size, line height), Theme, Cursor, Appearance (includes `active_pane` border width, color and dim; spec 0003), Behavior (`scrollback`, `close_on_exit`, `copy_on_select`, `open_links`, `restore_session`, `open_new_tab`, `close_last_tab`, `default_profile`), Keybindings, Profiles
+- Sections: Font (family from the installed fonts, size, line height), Theme, Cursor, Appearance (includes `active_pane` border width, color and dim; spec 0003), Behavior (`scrollback`, `close_on_exit`, `copy_on_select`, `open_links`, `restore_session`, `open_new_tab`, `close_last_tab`, `default_profile`), Keybindings, Profiles, Plugins (spec 0016)
 - Keybindings: each command with its key; record a new one, or reset it to the default
 - Profiles: add, edit, delete local and SSH profiles (spec 0005, 0006 fields)
 
@@ -70,7 +70,7 @@ can be changed from the screen, the change applies within a second, and
    (after `+` in a bar, at the bottom of a side list), shows the screen as a panel over the
    window; Esc or its close button leaves it. It shows the config as
    loaded, and follows reloads while open. Like Tabby's, it has tabs down
-   its left side (General, Appearance, Terminal, Keyboard, Profiles, and Import from spec 0014), each
+   its left side (General, Appearance, Terminal, Keyboard, Profiles, Import from spec 0014, and Plugins from spec 0016), each
    grouping its settings under headings, and the app's version below
    them; the panes below take no clicks
    while it's open. Its header's "Open config folder" button (also the
