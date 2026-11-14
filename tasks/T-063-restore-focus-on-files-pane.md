@@ -20,4 +20,12 @@ in `src/layout/mod.rs`) passes too. Next: reproduce on Linux (Wayland);
 the owner's steps from T-046 (which tab, `open_new_tab`, any click
 before typing) would narrow it.
 
+**Code read (2026-11-14):** the saved `focused` survives boot on every
+path (`Boot::restore`, `restore_behind`, `focus_active`), and only two
+things move a tab's focus to a terminal pane: a left or right click in
+it (`PaneEvent::Focused`) and the `pane.focus*` keys. A click that
+activates the Tern window lands on the pane under the pointer on
+Wayland, which would give exactly this report. Next: the owner's steps,
+in particular whether the window was clicked into before typing.
+
 Spec: ../spec/0003-tabs-splits-and-session-restore.md
