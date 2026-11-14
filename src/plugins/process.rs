@@ -42,7 +42,7 @@ pub struct Process {
     /// The writer thread's inbox. Dropping it closes the plugin's stdin.
     stdin: Option<mpsc::Sender<String>>,
     #[cfg(windows)]
-    job: Option<job::Job>,
+    job: Option<crate::job::Job>,
 }
 
 impl Process {
@@ -74,7 +74,8 @@ impl Process {
         }
         let mut child = command.spawn()?;
         #[cfg(windows)]
-        let job = job::Job::holding(&child);
+        // Its own job, so its children end with it, and with Tern (OQ-035).
+        let job = crate::job::Job::holding(&child);
         let (stdin, stdout, stderr) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take());
         let child = Arc::new(Mutex::new(child));
@@ -270,66 +271,6 @@ fn write_lines(
             Err(_) => {
                 tell(Message::Exited(None));
                 return;
-            }
-        }
-    }
-}
-
-/// A Job object holding one plugin's process tree (OQ-035): terminating
-/// it ends the plugin's children too, and Windows does so by itself when
-/// Tern is gone, a crash included.
-#[cfg(windows)]
-mod job {
-    use std::os::windows::io::AsRawHandle;
-    use std::process::Child;
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject,
-    };
-
-    pub struct Job(HANDLE);
-
-    impl Job {
-        /// A job with `child` in it, or `None` if Windows refuses one:
-        /// the plugin is then killed alone.
-        pub fn holding(child: &Child) -> Option<Self> {
-            // SAFETY: plain calls on handles this function owns or
-            // borrows from `child`, which outlives them.
-            unsafe {
-                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-                if handle.is_null() {
-                    return None;
-                }
-                let job = Self(handle);
-                let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                let set = SetInformationJobObject(
-                    job.0,
-                    JobObjectExtendedLimitInformation,
-                    (&raw const limits).cast(),
-                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                );
-                let assigned = AssignProcessToJobObject(job.0, child.as_raw_handle().cast());
-                (set != 0 && assigned != 0).then_some(job)
-            }
-        }
-
-        pub fn kill(&self) {
-            // SAFETY: the handle is open until `self` drops.
-            unsafe {
-                TerminateJobObject(self.0, 1);
-            }
-        }
-    }
-
-    impl Drop for Job {
-        fn drop(&mut self) {
-            // SAFETY: the handle was opened by `holding` and is closed
-            // once.
-            unsafe {
-                CloseHandle(self.0);
             }
         }
     }

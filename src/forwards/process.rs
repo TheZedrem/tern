@@ -41,11 +41,15 @@ impl Process {
             use std::os::windows::process::CommandExt;
             ssh.creation_flags(crate::ssh::CREATE_NO_WINDOW);
         }
-        // TODO(OQ-034): tie ssh to Tern's life so a crash can't leave it
-        // running (TM-fwd-13): `PR_SET_PDEATHSIG` on Linux needs `libc`,
-        // and Windows a Job object with KILL_ON_JOB_CLOSE. A normal quit
-        // already stops every forward (spec 0017, flow 8).
+        // A quit stops every forward (spec 0017, flow 8); the OS ends ssh
+        // when Tern dies any other way (TM-fwd-13).
+        #[cfg(target_os = "linux")]
+        dies_with_tern(&mut ssh);
         let mut child = ssh.spawn()?;
+        #[cfg(windows)]
+        if let Some(job) = run_job() {
+            job.assign(&child);
+        }
         let stderr = child.stderr.take();
         let child = Arc::new(Mutex::new(child));
         let (exited, exit) = oneshot::channel();
@@ -85,6 +89,39 @@ impl Drop for Process {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// Has the kernel send ssh `SIGTERM` when the thread that spawns it ends.
+/// Forwards are spawned on the UI thread, which ends only with Tern, so a
+/// crash or `kill -9` ends them too (TM-fwd-13).
+#[cfg(target_os = "linux")]
+fn dies_with_tern(ssh: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: getpid is async-signal-safe, called here before the fork.
+    let tern = unsafe { libc::getpid() };
+    // SAFETY: prctl and getppid are async-signal-safe, as `pre_exec`
+    // requires, and touch nothing of the parent's.
+    unsafe {
+        ssh.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Tern died before the signal was set: nothing would send it.
+            if libc::getppid() != tern {
+                return Err(std::io::Error::other("Tern is gone"));
+            }
+            Ok(())
+        });
+    }
+}
+
+/// The job every forward of this run joins, which Windows closes, ending
+/// them, when Tern is gone (TM-fwd-13). `None` if Windows refused one: a
+/// quit still stops them.
+#[cfg(windows)]
+fn run_job() -> Option<&'static crate::job::Job> {
+    static JOB: std::sync::OnceLock<Option<crate::job::Job>> = std::sync::OnceLock::new();
+    JOB.get_or_init(crate::job::Job::new).as_ref()
 }
 
 /// Reads `stderr` until it closes, keeping its last [`KEEP`] bytes, so ssh

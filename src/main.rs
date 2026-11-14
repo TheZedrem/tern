@@ -13,6 +13,8 @@ mod config;
 mod files;
 mod forwards;
 mod import;
+#[cfg(windows)]
+mod job;
 mod layout;
 mod plugins;
 mod secrets;

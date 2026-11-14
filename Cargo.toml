@@ -39,7 +39,8 @@ tokio = { version = "1", features = ["rt", "process", "io-util", "sync", "time",
 polling = "=3.11.0"
 
 [target.'cfg(unix)'.dependencies]
-# killpg, to end a plugin's whole process group (spec 0016, OQ-035).
+# killpg, to end a plugin's whole process group (spec 0016, OQ-035), and
+# PR_SET_PDEATHSIG, to end port forwards with Tern (TM-fwd-13).
 libc = "0.2"
 
 [dev-dependencies]
@@ -63,7 +64,8 @@ widestring = "1"
 # AttachConsole, so CLI output reaches the terminal of a GUI-subsystem tern.exe;
 # PeekNamedPipe, to wait on askpass helpers without a read; the registry,
 # for PuTTY's and WinSCP's sessions (spec 0015, OQ-029); Job objects, to
-# end a plugin's whole process tree (spec 0016, OQ-035), whose types need
+# end a plugin's whole process tree (spec 0016, OQ-035) and port forwards
+# with Tern (TM-fwd-13), whose types need
 # the Security and Threading features.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

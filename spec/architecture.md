@@ -147,6 +147,7 @@ frame needs. Everything else is a module under `src/`:
 - `secrets.rs` — the OS keychain
 - `update.rs` — the opt-in release check (spec 0011)
 - `timing.rs`, `bench.rs` — TTFP marks and the `--bench-startup` runner
+- `job.rs` — Windows Job objects, which end a plugin's process tree and every port forward when Tern is gone (OQ-035, TM-fwd-13)
 
 Modules are plain Rust that is testable without a window; GPUI views are a
 thin layer over them.
