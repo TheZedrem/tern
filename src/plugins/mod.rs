@@ -2244,4 +2244,244 @@ switch ($mode) {
         assert_eq!(notices(&seen).len(), 2, "{:?}", notices(&seen));
         assert_eq!(ids(&listed(&host, cx, "crasher")), ["containers", "logs"]);
     }
+
+    /// What the Plugins tab lists of plugin `id`.
+    fn tab_entry(host: &Entity<Host>, cx: &mut TestAppContext, id: &str) -> ListedPlugin {
+        cx.run_until_parked();
+        let all = host.read_with(cx, |host, _| host.plugins());
+        all.into_iter()
+            .find(|plugin| plugin.id == id)
+            .unwrap_or_else(|| panic!("{id} isn't listed"))
+    }
+
+    fn field(key: &str, label: &str, kind: FieldKind) -> manifest::Field {
+        manifest::Field {
+            key: key.into(),
+            label: label.into(),
+            kind,
+        }
+    }
+
+    /// AC1, flow 2, §Model "Disabled until enabled": the Plugins tab lists
+    /// every found plugin by folder name with what enabling it would
+    /// confirm (command line, folder) and what the user may tick (rights,
+    /// events) or type (settings), all from the manifest. An unusable one
+    /// is listed with its reason. Listing starts nothing.
+    #[gpui::test]
+    fn the_tab_lists_every_found_plugin_with_its_manifest(cx: &mut TestAppContext) {
+        let lab = Lab::new("tab-list");
+        let declares = concat!(
+            "version: 0.1.0\n",
+            "rights: [terminal_write, pane_info]\n",
+            "events: [pane_opened, start]\n",
+            "settings:\n",
+            "  - { key: socket, label: Docker socket, type: text }\n",
+            "  - { key: mode, label: Mode, type: choice, choices: [fast, slow] }\n",
+            "  - { key: debug, label: Debug, type: bool }\n",
+            "  - { key: port, label: Port, type: number }\n",
+        );
+        let docker = lab.plugin("docker", "stay", declares);
+        let argv = serde_json::to_string(&run("stay")).expect("an argv is JSON");
+        let future = lab.folder(
+            "future",
+            &format!("api: 2\nid: future\nname: Future\nrun: {argv}\n"),
+        );
+        lab.plugin("alpha", "stay", "");
+        let (host, seen) = lab.host(cx, []);
+
+        let all = host.read_with(cx, |host, _| host.plugins());
+        let ids: Vec<&str> = all.iter().map(|plugin| plugin.id.as_str()).collect();
+        assert_eq!(ids, ["alpha", "docker", "future"]);
+
+        let expected = ListedPlugin {
+            id: "docker".into(),
+            folder: docker.clone(),
+            state: State::Disabled,
+            name: "Name of docker".into(),
+            version: "0.1.0".into(),
+            run: run("stay"),
+            rights: vec![Right::TerminalWrite, Right::PaneInfo],
+            events: vec![Subscription::PaneOpened, Subscription::Start],
+            fields: vec![
+                field("socket", "Docker socket", FieldKind::Text),
+                field(
+                    "mode",
+                    "Mode",
+                    FieldKind::Choice(vec!["fast".into(), "slow".into()]),
+                ),
+                field("debug", "Debug", FieldKind::Bool),
+                field("port", "Port", FieldKind::Number),
+            ],
+            run_changed: false,
+        };
+        assert_eq!(tab_entry(&host, cx, "docker"), expected);
+
+        let unusable = tab_entry(&host, cx, "future");
+        assert!(
+            matches!(&unusable.state, State::Unusable(why) if !why.is_empty()),
+            "{:?}",
+            unusable.state
+        );
+        assert_eq!(
+            unusable.name, "future",
+            "an unusable one goes by its folder"
+        );
+        assert_eq!(unusable.folder, future);
+        assert!(unusable.run.is_empty() && unusable.fields.is_empty());
+
+        settle(cx);
+        assert_eq!(pids(&docker), [""; 0], "listing started a plugin");
+        assert_eq!(notices(&seen), [""; 0]);
+    }
+
+    /// TM-plug-12, §Model: a plugin enabled for a command line its
+    /// manifest no longer has is listed as needing the confirmation again,
+    /// and isn't started; one enabled for the manifest's own, or a
+    /// disabled one, isn't flagged.
+    #[gpui::test]
+    fn the_tab_flags_an_enabled_plugin_whose_command_line_changed(cx: &mut TestAppContext) {
+        let lab = Lab::new("tab-run-changed");
+        let changed = lab.plugin("changed", "stay", "events: [start]\n");
+        let same = lab.plugin("same", "stay", "events: [start]\n");
+        lab.plugin("off", "stay", "events: [start]\n");
+        let start = || grant("stay", &[], &[Subscription::Start]);
+        let (host, _) = lab.host(
+            cx,
+            [
+                (
+                    "changed",
+                    PluginSettings {
+                        run: run("once"),
+                        ..start()
+                    },
+                ),
+                ("same", start()),
+                (
+                    "off",
+                    PluginSettings {
+                        enabled: false,
+                        run: run("once"),
+                        ..start()
+                    },
+                ),
+            ],
+        );
+
+        wait_for_events(cx, &same, 1);
+        settle(cx);
+        let flagged = tab_entry(&host, cx, "changed");
+        assert!(flagged.run_changed);
+        assert_eq!(flagged.run, run("stay"), "the tab shows the manifest's");
+        assert_eq!(pids(&changed), [""; 0]);
+        assert!(!tab_entry(&host, cx, "same").run_changed);
+        assert!(!tab_entry(&host, cx, "off").run_changed);
+
+        // The confirmation again writes the manifest's command line.
+        regrant(&host, cx, [("changed", start()), ("same", start())]);
+        assert!(!tab_entry(&host, cx, "changed").run_changed);
+        assert_eq!(names(&wait_for_events(cx, &changed, 1)), ["start"]);
+    }
+
+    /// Flow 8: `set_settings` fields are drawn under the manifest's and a
+    /// later one replaces them. One naming a key the manifest has, or one
+    /// that isn't valid, is dropped whole with a log line, and the fields
+    /// stay as they were. Neither reaches the workspace.
+    #[gpui::test]
+    fn set_settings_fields_follow_the_manifests_and_a_clash_is_dropped(cx: &mut TestAppContext) {
+        let lab = Lab::new("tab-set-settings");
+        let declares =
+            format!("{HEARS_PANES}settings: [{{ key: socket, label: Socket, type: text }}]\n");
+        let first = r#"{"action":"set_settings","fields":[{"key":"context","label":"Context","type":"text"}]}"#;
+        let second = concat!(
+            r#"{"action":"set_settings","fields":["#,
+            r#"{"key":"host","label":"Host","type":"text"},"#,
+            r#"{"key":"tls","label":"TLS","type":"bool"},"#,
+            r#"{"key":"level","label":"Level","type":"choice","choices":["low","high"]}]}"#,
+        );
+        let clash = r#"{"action":"set_settings","fields":[{"key":"socket","label":"Socket again","type":"number"}]}"#;
+        let invalid = r#"{"action":"set_settings","fields":[{"key":"Not An Id","label":"Bad","type":"text"}]}"#;
+
+        let replaced = lab.plugin("replaced", "stay", &declares);
+        let says = [first, second, clash, invalid].join("\n") + "\n";
+        std::fs::write(replaced.join("say"), says).expect("write say");
+        let ticked = || grant("stay", &[], PANES);
+        let (host, seen) = lab.host(cx, [("replaced", ticked())]);
+
+        open(&host, cx, 1);
+        wait_until(cx, "two dropped `set_settings`", |cx| {
+            log(&host, cx, "replaced").len() >= 2
+        });
+        wait_for_events(cx, &replaced, 1);
+        settle(cx);
+        let expected = [
+            field("socket", "Socket", FieldKind::Text),
+            field("host", "Host", FieldKind::Text),
+            field("tls", "TLS", FieldKind::Bool),
+            field(
+                "level",
+                "Level",
+                FieldKind::Choice(vec!["low".into(), "high".into()]),
+            ),
+        ];
+        assert_eq!(tab_entry(&host, cx, "replaced").fields, expected);
+        let said = log(&host, cx, "replaced");
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(said[0].contains("set_settings"), "{said:?}");
+        assert!(actions(&seen).is_empty(), "{:?}", actions(&seen));
+        assert_eq!(notices(&seen), [""; 0]);
+    }
+
+    /// Flow 6: Restart on the Plugins tab gives a crashed plugin its events
+    /// again and sends `start` to one that hears it; a running one is
+    /// ended first and started anew. A disabled plugin isn't started by
+    /// it.
+    #[gpui::test]
+    fn restart_on_the_tab_starts_a_stopped_or_running_plugin_anew(cx: &mut TestAppContext) {
+        let lab = Lab::new("tab-restart");
+        let crasher = lab.plugin("crasher", "crash", HEARS_PANES);
+        let stayer = lab.plugin("stayer", "stay", "events: [start]\n");
+        let off = lab.plugin("off", "stay", "events: [start]\n");
+        let start = || grant("stay", &[], &[Subscription::Start]);
+        let (host, seen) = lab.host(
+            cx,
+            [
+                ("crasher", grant("crash", &[], PANES)),
+                ("stayer", start()),
+                (
+                    "off",
+                    PluginSettings {
+                        enabled: false,
+                        ..start()
+                    },
+                ),
+            ],
+        );
+
+        open(&host, cx, 1);
+        wait_until(cx, "the crash", |cx| {
+            state(&host, cx, "crasher") == Some(State::Stopped)
+        });
+        let old = first_pid(cx, &stayer);
+        assert_eq!(names(&wait_for_events(cx, &stayer, 1)), ["start"]);
+
+        host.update(cx, |host, cx| {
+            host.restart_plugin("crasher", cx);
+            host.restart_plugin("stayer", cx);
+            host.restart_plugin("off", cx);
+        });
+        assert_eq!(state(&host, cx, "crasher"), Some(State::Idle));
+        open(&host, cx, 2);
+        assert_eq!(panes(&wait_for_events(cx, &crasher, 2)), [1, 2]);
+        assert_eq!(pids(&crasher).len(), 2);
+
+        wait_gone(&old, "the restarted plugin");
+        assert_eq!(names(&wait_for_events(cx, &stayer, 2)), ["start", "start"]);
+        assert_eq!(pids(&stayer).len(), 2);
+
+        settle(cx);
+        assert_eq!(pids(&off), [""; 0], "Restart started a disabled plugin");
+        assert_eq!(state(&host, cx, "off"), Some(State::Disabled));
+        // The second crash is a notice of its own.
+        assert_eq!(notices(&seen).len(), 2, "{:?}", notices(&seen));
+    }
 }

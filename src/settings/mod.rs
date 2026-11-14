@@ -1013,6 +1013,15 @@ mod tests {
         config: Config,
         cx: &mut TestAppContext,
     ) -> Screen<'_> {
+        open_screen_on(config, None, cx)
+    }
+
+    /// [`open_screen_with`], with `plugins` as the plugin host.
+    pub(in crate::settings) fn open_screen_on(
+        config: Config,
+        plugins: Option<Entity<crate::plugins::Host>>,
+        cx: &mut TestAppContext,
+    ) -> Screen<'_> {
         cx.update(|cx| {
             crate::layout::init(cx);
             crate::settings::init(cx);
@@ -1027,7 +1036,7 @@ mod tests {
             let (closed, changes, opened) = (closed.clone(), changes.clone(), opened.clone());
             move |window, cx| {
                 let host = cx.new(|cx| {
-                    let view = cx.new(|cx| SettingsView::new(config, None, window, cx));
+                    let view = cx.new(|cx| SettingsView::new(config, plugins, window, cx));
                     let events = cx.subscribe(&view, move |_, _, event, _| match event {
                         SettingsEvent::Close => closed.set(closed.get() + 1),
                         SettingsEvent::Change(change) => changes.borrow_mut().push(change.clone()),

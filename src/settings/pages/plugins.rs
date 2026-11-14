@@ -575,3 +575,189 @@ fn setting_text(setting: &Setting) -> String {
         Setting::Text(text) => text.clone(),
     }
 }
+
+/// The Plugins tab against a real plugin host (spec 0016, Model, flow 2,
+/// AC1; spec 0009, Plugins tab). The element tree has no text to query,
+/// so what a row shows is checked through what the search finds, and the
+/// enable switch, which has no selector, is stood in for by the
+/// confirmation it opens.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::plugins::Host;
+    use crate::plugins::tests::{Lab, pids, run, settle, wait_until};
+    use crate::settings::matches;
+    use crate::settings::tests::{Screen, open_screen_on};
+    use gpui::TestAppContext;
+    use std::collections::BTreeMap;
+
+    /// A host that found `lab`'s plugins, none of them in the config.
+    fn found(lab: &Lab, cx: &mut TestAppContext) -> Entity<Host> {
+        lab.ends_with(cx);
+        let host = cx.new(|cx| Host::new(Some(lab.root()), BTreeMap::new(), cx));
+        host.update(cx, |host, cx| host.discover(cx));
+        wait_until(cx, "the plugins to be found", |cx| {
+            host.read_with(cx, |host, _| !host.plugins().is_empty())
+        });
+        host
+    }
+
+    /// The screen's Plugins rows: (label, what a search looks through).
+    fn rows(screen: &mut Screen) -> Vec<(String, String)> {
+        screen.view.update(screen.cx, |view, cx| {
+            let rows = view.plugin_rows(cx);
+            rows.into_iter()
+                .map(|row| {
+                    assert_eq!(row.page, Page::Plugins);
+                    let haystack = format!(
+                        "{} {} {} {}",
+                        row.label,
+                        row.group,
+                        row.page.title(),
+                        row.keywords
+                    );
+                    (row.label.to_string(), haystack)
+                })
+                .collect()
+        })
+    }
+
+    /// Opens the enable confirmation for `id`, as the switch does.
+    fn ask_to_enable(screen: &mut Screen, id: &str) {
+        screen.view.update_in(screen.cx, |view, window, cx| {
+            let listed = view.listed_plugins(cx);
+            let plugin = listed
+                .iter()
+                .find(|plugin| plugin.id == id)
+                .expect("the plugin is listed");
+            view.confirm_enable(plugin, window, cx);
+        });
+        draw(screen);
+    }
+
+    fn draw(screen: &mut Screen) {
+        screen.cx.update(|window, cx| window.draw(cx).clear(cx));
+        screen.cx.run_until_parked();
+    }
+
+    /// Clicks Enable, the last answer: the bottom-right button inside the
+    /// dialog's 16 px padding. The test window never asks for the frame
+    /// that gives the safe answer the keyboard, so Right can't reach it.
+    fn click_enable(screen: &mut Screen) {
+        let dialog = screen.cx.debug_bounds("dialog-0").expect("a dialog");
+        let corner = dialog.bottom_right() - gpui::point(px(16. + 6.), px(16. + 6.));
+        screen.cx.simulate_click(corner, gpui::Modifiers::none());
+        draw(screen);
+    }
+
+    fn dialog_open(screen: &mut Screen) -> bool {
+        screen.cx.update(|window, cx| window.has_active_dialog(cx))
+    }
+
+    /// Spec 0016, Trusted sources only and Open plugins folder: the tab
+    /// opens with the warning row, which a search for the plugins folder
+    /// finds. A found, disabled plugin is listed under its name, and a
+    /// search for its command line finds it. Listing it starts nothing.
+    #[gpui::test]
+    fn the_tab_warns_first_and_lists_a_found_plugin_by_its_command_line(cx: &mut TestAppContext) {
+        let lab = Lab::new("settings-tab-rows");
+        let docker = lab.plugin("docker", "stay", "events: [start]\n");
+        let host = found(&lab, cx);
+        let mut screen = open_screen_on(Config::default(), Some(host), cx);
+
+        let rows = rows(&mut screen);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0].0, "Trusted sources only");
+        for query in ["open plugins folder", "trust"] {
+            assert!(matches(query, &rows[0].1), "{query}: {}", rows[0].1);
+        }
+        assert_eq!(rows[1].0, "Name of docker");
+        let command = run("stay").join(" ");
+        assert!(rows[1].1.contains(&command), "{}", rows[1].1);
+        assert!(matches("stay", &rows[1].1), "{}", rows[1].1);
+
+        settle(screen.cx);
+        assert_eq!(pids(&docker), [""; 0], "the tab started a plugin");
+        assert!(screen.changes.borrow().is_empty());
+    }
+
+    /// With no plugin found yet the tab still has the warning first.
+    #[gpui::test]
+    fn the_tab_warns_with_no_plugins_found(cx: &mut TestAppContext) {
+        let mut screen = open_screen_on(Config::default(), None, cx);
+        let rows = rows(&mut screen);
+        assert_eq!(rows[0].0, "Trusted sources only");
+        assert!(rows.len() == 2 && rows[1].0 == "None", "{rows:?}");
+    }
+
+    /// AC1, flow 2: enabling asks first and writes nothing until it is
+    /// answered; Cancel, which Enter means, writes nothing and starts
+    /// nothing.
+    #[gpui::test]
+    fn cancelling_the_enable_confirmation_writes_nothing(cx: &mut TestAppContext) {
+        let lab = Lab::new("settings-tab-cancel");
+        let docker = lab.plugin("docker", "stay", "events: [start]\n");
+        let host = found(&lab, cx);
+        let mut screen = open_screen_on(Config::default(), Some(host), cx);
+
+        ask_to_enable(&mut screen, "docker");
+        assert!(dialog_open(&mut screen), "enabling didn't ask");
+        assert!(screen.changes.borrow().is_empty(), "written before asked");
+
+        screen.cx.simulate_keystrokes("enter");
+        draw(&mut screen);
+        assert!(!dialog_open(&mut screen), "Enter left the question open");
+        assert!(screen.changes.borrow().is_empty(), "Cancel wrote");
+
+        ask_to_enable(&mut screen, "docker");
+        screen.cx.simulate_keystrokes("escape");
+        draw(&mut screen);
+        assert!(!dialog_open(&mut screen), "Esc left the question open");
+        assert!(screen.changes.borrow().is_empty(), "Esc wrote");
+        settle(screen.cx);
+        assert_eq!(pids(&docker), [""; 0]);
+    }
+
+    /// Flow 2, §Model: Enable writes the plugin's whole entry, enabled and
+    /// with the manifest's command line, keeping what the file already
+    /// ticked and set for it.
+    #[gpui::test]
+    fn enable_writes_enabled_and_the_manifests_command_line(cx: &mut TestAppContext) {
+        use crate::config::PluginSettings;
+        use crate::plugins::{Right, Subscription};
+        let lab = Lab::new("settings-tab-enable");
+        lab.plugin(
+            "docker",
+            "stay",
+            "rights: [pane_info]\nevents: [pane_opened]\n",
+        );
+        let host = found(&lab, cx);
+        let before = PluginSettings {
+            enabled: false,
+            run: vec!["./old-command".into()],
+            rights: vec![Right::PaneInfo],
+            events: vec![Subscription::PaneOpened],
+            settings: BTreeMap::from([("socket".to_owned(), Setting::Text("/run/x".into()))]),
+        };
+        let mut config = Config::default();
+        config.plugins.insert("docker".into(), before.clone());
+        let mut screen = open_screen_on(config, Some(host), cx);
+
+        ask_to_enable(&mut screen, "docker");
+        click_enable(&mut screen);
+        assert!(!dialog_open(&mut screen));
+        let changes = screen.changes.borrow();
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        let Change::Plugin { id, entry } = &changes[0] else {
+            panic!("not a plugin's entry: {:?}", changes[0]);
+        };
+        assert_eq!(id, "docker");
+        let expected = PluginSettings {
+            enabled: true,
+            run: run("stay"),
+            ..before
+        };
+        assert_eq!(*entry, expected);
+    }
+}

@@ -850,6 +850,147 @@ font:
         assert_eq!(ProfileForm::of(&elsewhere, Some(&home)).cwd, "/srv/www");
     }
 
+    /// An enabled plugin entry with every kind of setting, including texts
+    /// that a careless writer would let YAML read as something else.
+    fn plugin_entry() -> PluginSettings {
+        use crate::plugins::{Right, Subscription};
+        let settings = [
+            ("debug", Setting::Bool(true)),
+            ("quiet", Setting::Bool(false)),
+            ("port", Setting::Number(8080.0)),
+            ("ratio", Setting::Number(0.25)),
+            ("offset", Setting::Number(-3.5)),
+            ("version", Setting::Text("8080".into())),
+            ("float_text", Setting::Text("1.5".into())),
+            ("bool_text", Setting::Text("true".into())),
+            ("empty", Setting::Text(String::new())),
+            ("greeting", Setting::Text("say \"hi\" to C:\\Users".into())),
+            ("socket", Setting::Text("unix: /var/run/docker.sock".into())),
+            ("hash", Setting::Text("a # not a comment".into())),
+        ];
+        PluginSettings {
+            enabled: true,
+            run: vec!["./tern-docker".into(), "--verbose".into(), "a b".into()],
+            rights: vec![Right::PaneInfo, Right::TerminalWrite],
+            events: vec![Subscription::Start, Subscription::PaneClosed],
+            settings: settings
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value))
+                .collect(),
+        }
+    }
+
+    fn plugin(id: &str, entry: PluginSettings) -> Change {
+        Change::Plugin {
+            id: id.into(),
+            entry,
+        }
+    }
+
+    /// The `plugins:` entry of `id` in `text`, which must load cleanly.
+    fn loaded_plugin(text: &str, id: &str) -> Option<PluginSettings> {
+        let loaded = parse(text);
+        assert!(loaded.notices.is_empty(), "{:?}\n{text}", loaded.notices);
+        loaded.config.plugins.get(id).cloned()
+    }
+
+    /// Spec 0016 flows 2 and 8, spec 0009 in-place edits: a plugin's entry
+    /// written into an empty file reads back as the same entry, every
+    /// setting with its type.
+    #[test]
+    fn a_plugin_entry_written_into_an_empty_file_reads_back_the_same() {
+        let entry = plugin_entry();
+        let edited = plugin("docker", entry.clone()).edited("").unwrap();
+        assert_eq!(loaded_plugin(&edited, "docker"), Some(entry), "{edited}");
+    }
+
+    /// A disabled entry with nothing ticked or set is written too, and
+    /// reads back as such.
+    #[test]
+    fn an_empty_plugin_entry_reads_back_the_same() {
+        let edited = plugin("bare", PluginSettings::default())
+            .edited(TEMPLATE)
+            .unwrap();
+        assert_eq!(
+            loaded_plugin(&edited, "bare"),
+            Some(PluginSettings::default())
+        );
+    }
+
+    /// Spec 0009 in-place edits: writing one plugin into a file that has
+    /// others and comments adds its lines and keeps every other line.
+    #[test]
+    fn writing_a_plugin_keeps_the_other_plugins_and_comments() {
+        let before = "\
+# my setup
+plugins:
+  # the one I use daily
+  aaa:
+    enabled: true # yes
+    run: [./aaa]
+    rights: [pane_info]
+    events: []
+    settings: { level: 3 }
+  zzz:
+    enabled: false
+font:
+  size: 13 # pt
+";
+        let entry = plugin_entry();
+        let edited = plugin("docker", entry.clone()).edited(before).unwrap();
+        let (gone, _) = changed(before, &edited);
+        assert!(gone.is_empty(), "lines lost: {gone:?}\n{edited}");
+        for line in before.lines() {
+            assert!(edited.contains(line), "`{line}` lost:\n{edited}");
+        }
+        assert_eq!(loaded_plugin(&edited, "docker"), Some(entry));
+        let before_config = parse(before).config;
+        let after_config = parse(&edited).config;
+        for id in ["aaa", "zzz"] {
+            assert_eq!(after_config.plugins.get(id), before_config.plugins.get(id));
+        }
+        assert_eq!(after_config.font.size, 13.0);
+    }
+
+    /// Flows 2 and 8: a plugin's entry is written whole, replacing what
+    /// the file had for it (a right unticked, an event added, a setting
+    /// gone) and leaving its neighbours alone.
+    #[test]
+    fn writing_a_plugin_replaces_its_existing_entry_whole() {
+        let before = "\
+plugins:
+  docker:
+    enabled: false
+    run: [./old]
+    rights: [open_tab, terminal_read]
+    events: [pane_opened]
+    settings: { stale: gone, port: 1 }
+  other:
+    enabled: true
+    run: [./other]
+theme:
+  default: dark
+";
+        let entry = plugin_entry();
+        let edited = plugin("docker", entry.clone()).edited(before).unwrap();
+        assert_eq!(loaded_plugin(&edited, "docker"), Some(entry), "{edited}");
+        assert!(!edited.contains("stale"), "{edited}");
+        assert!(!edited.contains("./old"), "{edited}");
+        assert_eq!(
+            parse(&edited).config.plugins.get("other"),
+            parse(before).config.plugins.get("other")
+        );
+        assert!(edited.ends_with("theme:\n  default: dark\n"), "{edited}");
+
+        // Disabling writes `enabled: false` and keeps the rest of the entry.
+        let disabled = PluginSettings {
+            enabled: false,
+            ..plugin_entry()
+        };
+        let edited = plugin("docker", disabled.clone()).edited(&edited).unwrap();
+        assert_eq!(loaded_plugin(&edited, "docker"), Some(disabled));
+    }
+
     /// Spec 0009, criterion 9: a pick under home on Windows is written
     /// with `/` after the `~`, not `~/.ssh\id_ed25519`.
     #[cfg(windows)]

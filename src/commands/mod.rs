@@ -457,6 +457,29 @@ mod tests {
         assert!(bound.is_empty(), "bound to {bound:?} by default");
     }
 
+    /// Spec 0016, Open plugins folder and AC1: "Open plugins folder" is in
+    /// the palette, bindable as `plugins.openFolder`, runs its action, and
+    /// has no default key.
+    #[test]
+    fn opening_the_plugins_folder_is_in_the_palette_bindable_and_unbound_by_default() {
+        let command =
+            by_id("plugins.openFolder").expect("no command has the ID `plugins.openFolder`");
+        assert_eq!(command.title, Some("Open plugins folder"));
+        let action = (command.action)();
+        assert!(
+            action.partial_eq(&OpenPluginsFolder),
+            "runs {}",
+            action.name()
+        );
+        let bound: Vec<String> = [crate::config::NewTab::Ask, crate::config::NewTab::Default]
+            .into_iter()
+            .flat_map(keymap::defaults_for)
+            .filter(|(_, command)| *command == "plugins.openFolder")
+            .map(|(key, _)| key)
+            .collect();
+        assert!(bound.is_empty(), "bound to {bound:?} by default");
+    }
+
     /// Spec 0018, Module surface and AC4: `sftp.toggle` left the palette.
     /// It is no command of its own any more, and nothing the palette lists
     /// is titled after the SFTP sidebar.
