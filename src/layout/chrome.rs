@@ -136,6 +136,22 @@ impl Workspace {
         self.show_active(window, cx);
     }
 
+    /// A middle click on tab `ix` closes it as its close button does
+    /// (spec 0003, flow 2). GPUI fires it on release over the tab the press
+    /// began on, and only left clicks activate a tab, so it never does.
+    fn middle_click_tab(
+        &mut self,
+        event: &ClickEvent,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.is_middle_click() {
+            cx.stop_propagation();
+            self.ask_close_tab(ix, window, cx);
+        }
+    }
+
     pub(super) fn render_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> TabBar {
         let renaming = self.rename.as_ref().map(|rename| rename.tab);
         let settings = Self::settings_button("settings-button", cx);
@@ -162,11 +178,14 @@ impl Workspace {
                 .icon(IconName::Close)
                 .ghost()
                 .xsmall()
+                // Where a test clicks; a no-op outside test builds.
+                .debug_selector(move || format!("tab-close-{ix}"))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
                     this.ask_close_tab(ix, window, cx);
                 }));
             Tab::new()
+                .debug_selector(move || format!("tab-{ix}"))
                 .child(label)
                 .suffix(close)
                 .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
@@ -175,6 +194,9 @@ impl Workspace {
                     } else {
                         this.switch_tab(|tabs| tabs.activate(ix), window, cx);
                     }
+                }))
+                .on_aux_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    this.middle_click_tab(event, ix, window, cx);
                 }))
                 // The whole tab is the drag handle, except while its rename
                 // field needs the mouse for selecting text.
@@ -220,6 +242,7 @@ impl Workspace {
         let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. })
             && self.config.tab_bar == TabBarSide::Top;
         let new_tab = Button::new("new-tab")
+            .debug_selector(|| "new-tab".into())
             .icon(IconName::Plus)
             .ghost()
             .small()
@@ -287,6 +310,7 @@ impl Workspace {
                 }));
             div()
                 .id(("side-tab", tab.id))
+                .debug_selector(move || format!("side-tab-{ix}"))
                 .flex()
                 .items_center()
                 .gap(px(4.))
@@ -308,6 +332,9 @@ impl Workspace {
                     } else {
                         this.switch_tab(|tabs| tabs.activate(ix), window, cx);
                     }
+                }))
+                .on_aux_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    this.middle_click_tab(event, ix, window, cx);
                 }))
                 .when(!is_renaming, |row| {
                     let dragged = DraggedTab {
@@ -491,5 +518,103 @@ impl Workspace {
                     // would go (spec 0008, flow 3).
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(CloseWindow), cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::TabBarSide;
+    use crate::layout::sidebar::tests::{Rig, boot, local_and_two_hosts, rig, two_hosts};
+    use crate::layout::tests::open_workspace;
+    use crate::layout::tree::LeafId;
+    use gpui::{Modifiers, MouseButton, Pixels, Point, TestAppContext, point, px};
+
+    impl Rig<'_> {
+        /// Each tab by its pane (1 shell, 2 prod, 3 stage), and the shown
+        /// one's.
+        fn tabs(&mut self) -> (Vec<LeafId>, LeafId) {
+            self.workspace.read_with(self.cx, |workspace, _| {
+                let tabs = workspace.tabs.tabs().iter().map(|tab| tab.focused);
+                (tabs.collect(), workspace.tabs.active().focused)
+            })
+        }
+
+        /// Where `selector` was last drawn, in its middle.
+        fn center_of(&mut self, selector: &'static str) -> Point<Pixels> {
+            self.draw();
+            let bounds = self.cx.debug_bounds(selector);
+            bounds
+                .unwrap_or_else(|| panic!("{selector} isn't drawn"))
+                .center()
+        }
+
+        /// Presses the middle button at `down` and lets go at `up`.
+        fn middle_drag(&mut self, down: Point<Pixels>, up: Point<Pixels>) {
+            let none = Modifiers::none();
+            self.cx.simulate_mouse_down(down, MouseButton::Middle, none);
+            self.cx.simulate_mouse_move(up, MouseButton::Middle, none);
+            self.cx.simulate_mouse_up(up, MouseButton::Middle, none);
+            self.draw();
+        }
+
+        fn middle_click(&mut self, at: Point<Pixels>) {
+            self.middle_drag(at, at);
+        }
+    }
+
+    /// AC14 (spec 0003), flow 2: a middle click on an inactive tab in the
+    /// bar closes it without showing it first: the tab shown before stays
+    /// shown and keeps the keyboard.
+    #[gpui::test]
+    fn a_middle_click_on_an_inactive_tab_closes_it_and_keeps_the_shown_tab(
+        cx: &mut TestAppContext,
+    ) {
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        let prod = rig.center_of("tab-1");
+        rig.middle_click(prod);
+        assert_eq!(rig.tabs(), (vec![1, 3], 1));
+        assert!(rig.pane_has_the_keyboard(1));
+    }
+
+    /// AC14 (spec 0003), flow 2: the side list's tabs close on a middle
+    /// click the same way.
+    #[gpui::test]
+    fn a_middle_click_on_a_side_tab_closes_it_and_keeps_the_shown_tab(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let mut config = two_hosts();
+        config.tab_bar = TabBarSide::Left;
+        let (workspace, cx) = open_workspace(boot(&local_and_two_hosts()), config, cx);
+        let mut rig = Rig { workspace, cx };
+        let prod = rig.center_of("side-tab-1");
+        rig.middle_click(prod);
+        assert_eq!(rig.tabs(), (vec![1, 3], 1));
+        assert!(rig.pane_has_the_keyboard(1));
+    }
+
+    /// AC14 (spec 0003), flow 2: a middle press on one tab let go over
+    /// another closes neither.
+    #[gpui::test]
+    fn a_middle_press_released_over_another_tab_closes_nothing(cx: &mut TestAppContext) {
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        let (prod, stage) = (rig.center_of("tab-1"), rig.center_of("tab-2"));
+        rig.middle_drag(prod, stage);
+        assert_eq!(rig.tabs(), (vec![1, 2, 3], 1));
+    }
+
+    /// AC14 (spec 0003), flow 2: a middle click on the bar's empty area,
+    /// the new-tab button or a pane closes no tab (and opens none).
+    #[gpui::test]
+    fn a_middle_click_off_the_tabs_closes_nothing(cx: &mut TestAppContext) {
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        let last_tab = rig.center_of("tab-2");
+        let bounds = rig.cx.debug_bounds("tab-2").expect("drawn");
+        let empty = point(bounds.right() + px(30.), last_tab.y);
+        let new_tab = rig.center_of("new-tab");
+        let size = rig.cx.update(|window, _| window.viewport_size());
+        let pane = point(size.width / 2., size.height / 2.);
+        for at in [empty, new_tab, pane] {
+            rig.middle_click(at);
+            assert_eq!(rig.tabs(), (vec![1, 2, 3], 1), "at {at:?}");
+        }
     }
 }
