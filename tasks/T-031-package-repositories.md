@@ -40,9 +40,12 @@ each Release (and by hand) and publishes through
 Checked in containers with a throwaway key and the v0.9.0 packages: the
 site built on Ubuntu 24.04, and `dnf install tern` on Fedora 45 and
 `apt install tern` on Debian 13 installed from it with signatures checked.
-Left: the owner runs `packaging/linux/setup-repositories.sh` (key, backup,
-`TERN_SIGNING_KEY`, Pages source, first run); then README's install
-section, and the update check on Fedora, openSUSE, Debian 13 and Ubuntu
-24.04 with the next tag.
+
+**Live (2026-11-14):** the owner ran the setup script; the site is at
+https://thezedrem.github.io/tern/ and README's Install section has the
+commands. With them, v0.9.0 installed from the live site on Fedora 45,
+openSUSE Tumbleweed, Debian 13 and Ubuntu 24.04 (containers), signatures
+checked. Left: with the next tag, check that each system's update picks
+up the newer version.
 
 Spec: ../spec/architecture.md

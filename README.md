@@ -69,7 +69,24 @@ earlier Tauri version took 1.07 s to start and was dropped.
 
 **Linux:** `.deb`, `.rpm` and AppImage packages are on the
 [releases page](https://github.com/TheZedrem/tern/releases/latest). They
-need glibc 2.39 or newer and a Wayland session.
+need glibc 2.39 or newer and a Wayland session. To get updates with the
+rest of your system, add Tern's signed repository instead:
+
+```sh
+# Fedora
+sudo curl -fsSL https://thezedrem.github.io/tern/rpm/tern.repo -o /etc/yum.repos.d/tern.repo
+sudo dnf install tern
+
+# openSUSE
+sudo zypper addrepo https://thezedrem.github.io/tern/rpm/tern.repo
+sudo zypper install tern
+
+# Debian 13, Ubuntu 24.04
+sudo install -d /etc/apt/keyrings
+sudo curl -fsSL https://thezedrem.github.io/tern/tern.asc -o /etc/apt/keyrings/tern.asc
+sudo curl -fsSL https://thezedrem.github.io/tern/deb/tern.sources -o /etc/apt/sources.list.d/tern.sources
+sudo apt update && sudo apt install tern
+```
 
 **Windows 11:** releases after 0.4.0 carry `tern-<version>-x64.msi`.
 It installs for your user only, so it needs no admin rights, and a newer
