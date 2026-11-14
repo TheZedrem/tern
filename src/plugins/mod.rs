@@ -691,13 +691,18 @@ esac
         "plugin.ps1",
         r##"param([string]$mode)
 $dir = $PSScriptRoot
+# The protocol is UTF-8; [Console]::In and Out would use the OEM code page.
+$utf8 = New-Object System.Text.UTF8Encoding $false
+$stdin = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), $utf8)
+$stdout = New-Object System.IO.StreamWriter([Console]::OpenStandardOutput(), $utf8)
+$stdout.AutoFlush = $true
 function Note([string]$file, [string]$text) {
     [System.IO.File]::AppendAllText((Join-Path $dir $file), $text + "`n")
 }
 function Has([string]$file) { Test-Path (Join-Path $dir $file) }
-function Take { [Console]::In.ReadLine() }
+function Take { $stdin.ReadLine() }
 function Say([string]$file) {
-    [Console]::Out.Write([System.IO.File]::ReadAllText((Join-Path $dir $file)))
+    $stdout.Write([System.IO.File]::ReadAllText((Join-Path $dir $file)))
 }
 Note 'pids' "$PID"
 if (Has 'err') { [Console]::Error.Write([System.IO.File]::ReadAllText((Join-Path $dir 'err'))) }
@@ -725,7 +730,7 @@ switch ($mode) {
                 while (-not (Has 'go')) { Start-Sleep -Milliseconds 50 }
                 Remove-Item (Join-Path $dir 'go')
             }
-            [Console]::Out.WriteLine('{"action":"ready"}')
+            $stdout.WriteLine('{"action":"ready"}')
         }
         Note 'eof' 'eof'
         exit 0
@@ -733,8 +738,8 @@ switch ($mode) {
     'flag' {
         $line = Take
         if ($null -ne $line) { Note 'events.log' $line }
-        [Console]::Out.WriteLine('{"action":"ready"}')
-        [Console]::Out.WriteLine('{"action":"ready"}')
+        $stdout.WriteLine('{"action":"ready"}')
+        $stdout.WriteLine('{"action":"ready"}')
         while ($null -ne ($line = Take)) { Note 'events.log' $line }
         exit 0
     }
