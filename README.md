@@ -53,7 +53,7 @@ earlier Tauri version took 1.07 s to start and was dropped.
 - Your SSH hosts in the same sidebar, filtered as you type, opened with a double click, and edited or deleted from a right click
 - Edit remote files in your own editor; saves are uploaded on a click, on save or on focus
 - A files pane that shows the local disk or any saved host as a tree next to your terminals
-- Port forwards (local, remote and SOCKS) from the sidebar, listening on 127.0.0.1 unless you allow the network; never saved
+- Port forwards (local, remote and SOCKS) from the sidebar, listening on 127.0.0.1 unless you allow the network; never saved, and stopped when Tern quits, even if it crashes
 
 **Plugins**
 
@@ -152,12 +152,10 @@ local only for this machine and an existing directory.
 **Next**
 
 - In the file browser: fuzzy filter, path suggestions, permissions, deleting to the trash, dragging files out ([tasks](tasks/))
-- Signed apt and dnf repositories ([T-031](tasks/T-031-package-repositories.md))
 
 **Toward 1.0** ([roadmap](spec/architecture.md#roadmap))
 
 - **Plugins:** file-browser targets from plugins, an author guide with examples, themes as plugins, and plugin registries you browse in the app
-- SSH port forwarding (local, remote and SOCKS) from the SFTP sidebar, in a few clicks ([spec 0017](spec/0017-port-forwarding.md))
 - Suggestions from your command history as you type
 - A theme editor with a live preview
 - Profiles that run a command (a coding agent, say) in the current folder or a folder you pick
