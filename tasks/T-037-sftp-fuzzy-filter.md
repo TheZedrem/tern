@@ -1,6 +1,6 @@
 ---
-status: later
-blocked-by: [T-023]
+status: now
+blocked-by: []
 ---
 # T-037: Fuzzy filter in the file browser
 

@@ -1,6 +1,6 @@
 ---
-status: later
-blocked-by: [T-041]
+status: now
+blocked-by: []
 ---
 # T-044: Local delete moves to the trash
 

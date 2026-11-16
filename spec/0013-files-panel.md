@@ -1,8 +1,8 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 2
-tasks: [T-042, T-033, T-041, T-043, T-044, T-045, T-037, T-038, T-048, T-049]
-related: [spec 0008, spec 0007, spec 0006, spec 0003, spec 0002, spec 0009, T-022, OQ-026 ✅, OQ-027, OQ-028, threat model 0003]
+tasks: [T-042, T-033, T-041, T-043, T-044, T-045, T-037, T-038, T-048, T-049, T-027, T-092]
+related: [spec 0008, spec 0007, spec 0006, spec 0004, spec 0003, spec 0002, spec 0009, T-022, OQ-019 ✅, OQ-026 ✅, OQ-027, OQ-028, threat model 0003]
 ---
 
 # Spec: File browser
@@ -51,12 +51,21 @@ SFTP sidebar alike, because both are the same browser.
   confirmation (T-041) **[new]**
 - On an SSH target, everything spec 0008 offers: edit, download, upload,
   drops, rename, delete, new folder **[carry-over]**
+- A fuzzy filter over the loaded tree, best matches first with the
+  matched characters highlighted (T-037) **[new]**
+- Suggestions in the path field: matching folders as the user types,
+  fuzzy-matched like the filter (T-038) **[new]**
+- A local delete moves to the OS's trash (T-044) **[new]**
+- Permissions: a file's mode, owner and group where the target has them;
+  on a Windows disk the read-only flag and Explorer's Properties (T-048)
+  **[new]**
+- Dragging files that are already on this disk (Local rows, edit copies)
+  out to the file manager, on Wayland (T-027; Windows is T-092) **[new]**
 
 **Out of scope:**
 
 - *Later*: copying between targets: dragging from a Local row onto a
   remote folder uploads, the other way downloads
-- *Later (planned)*: a local delete moves to the OS's trash (the freedesktop trash, the Recycle Bin) instead of deleting for good, so a slip can be undone; needs the `trash` crate (T-044)
 - *Later (considered)*: a watcher that refreshes a Local folder when the
   disk changes; until then, F5
 - *Later*: S3, SMB and other targets from plugins (architecture §Roadmap,
@@ -64,10 +73,11 @@ SFTP sidebar alike, because both are the same browser.
 - Detaching the SFTP sidebar into a files pane with its session: T-032
   in spec 0008, which now targets this pane
 - Folder transfers, sync: as spec 0008
-- *Later (planned)*: a fuzzy filter over the loaded tree, best matches first with the matched characters highlighted; no recursive search on disk or on the server (T-037)
+- A recursive search on disk or on the server: the filter sees only what's
+  loaded
+- Editing Windows ACLs in Tern: Explorer's Properties does that
+- Dragging a remote file out before it's downloaded (OQ-019 ✅)
 - *Later (planned)*: an `editor` setting that overrides the OS's default app for edit copies and Edit-chosen files (T-056)
-- *Later (planned)*: suggestions in the path field: a dropdown of matching folders as the user types, fuzzy-matched like the filter, with Tab to complete (T-038)
-- *Later (planned)*: permissions: view and change a file's mode, owner and group, on every target that supports them; a Windows disk has ACLs instead, and what it offers is decided when this is specified (T-048)
 - The sidebar's Files panel on a local pane, showing the Local target from the folder the pane's shell is in: pinned in [spec 0018](0018-app-sidebar.md), Files panel (T-049)
 - Local file operations beyond rename, delete and new folder (copy, move,
   properties): the OS's file manager does those
@@ -137,6 +147,38 @@ SFTP sidebar alike, because both are the same browser.
   disconnected with a Connect button, like an SSH leaf, so a restore
   makes no connection. A profile that no longer exists restores as Local
   at home with a notice.
+- **Filter [load-bearing]:** a field under the path field. It matches entry
+  names with the palette's matcher (spec 0004) over what the tree shows
+  unfiltered: the root and its expanded folders, nothing collapsed or not
+  yet listed. A row stays if its name matches or it's a folder with a
+  match below it; in each folder, those rows rank best first (a folder
+  kept for a match below it ranks by its best one), ties in listing order.
+  Matched characters are highlighted. A listing that arrives re-applies
+  it. A new root clears it; it's not saved.
+- **Suggestions:** while the path field has the keyboard and the user has
+  typed in it, a dropdown under it lists up to 10 folders (links to
+  folders too) of the typed path's folder, the text up to its last
+  separator resolved as the path field resolves it, whose names match the
+  rest with the filter's matcher, best first. That folder is listed once
+  when it differs from the last one asked, not per keystroke; suggestion
+  listings never change the tree. A folder that can't be listed shows no
+  dropdown.
+- **Trash [load-bearing]:** a Local delete moves the file, link (never its
+  target) or folder, with everything in it, to the OS's trash, on the
+  disk's thread. An SFTP delete stays permanent, as spec 0008 says.
+- **Permissions:** a target says what it has. SFTP and a Linux disk: the
+  mode bits, owner and group. A Windows disk: the read-only flag, and a
+  Properties button that opens Explorer's properties dialog for the
+  entry, where ACLs and the owner live. A link has none of its own: the
+  browser doesn't offer permissions on a link. Owner and group names come
+  from the listing: SFTP's long names (the `ls -l` columns servers send),
+  the system's user database on Linux; an ID without a name shows as its
+  number.
+- **Drag out:** a Local row, or an SFTP edit's copy, dragged out of the
+  window hands the OS that path as a file drag. Remote rows never drag
+  (OQ-019 ✅). Inside Tern the drag drops nowhere. Wayland only, until
+  GPUI has a drag source on Windows (T-092): the owner's call
+  (2026-11-16), against the every-platform rule for this one feature.
 
 ### Flows
 
@@ -177,11 +219,12 @@ SFTP sidebar alike, because both are the same browser.
    the OS refuses shows the OS's reason. Renaming onto an existing name,
    on Local and on SFTP alike, asks first: the browser looks for the
    target before renaming, and the gap between that look and the rename
-   is accepted. Delete asks for a confirmation naming what goes, the same
-   confirmation as on SFTP, saying it can't be undone. Delete is
-   permanent (OQ-026 ✅; the trash is T-044). It removes files, links
-   (never followed) and empty folders; a folder with anything in it isn't
-   deleted, as on SFTP.
+   is accepted. Delete asks for a confirmation naming what goes, "Move
+   <name> to the trash?", and moves it there (Model, Trash). When the OS
+   can't (no trash on that drive, a network share), a second question says
+   why and offers "Delete for good", which says it can't be undone and
+   removes files, links (never followed) and empty folders only, as on
+   SFTP; declining leaves everything as it was.
 6. **Move and close:** dragging the pane by its handle, dropping a tab or
    pane on its side, zooming and closing follow specs 0003 and 0007;
    nothing that moves reconnects or re-lists. Closing a files pane (or
@@ -189,6 +232,37 @@ SFTP sidebar alike, because both are the same browser.
    SSH pane does, naming them, and ends every session's ssh.
 7. **SFTP target:** spec 0008's flows 2–7, with the tree's rules for
    browsing.
+8. **Filter:** a printable character typed on the tree, or Ctrl+F, puts
+   the keyboard in the filter field (the character with it). Each
+   keystroke filters at once and selects the best match. In the field,
+   Up and Down move the tree's selection and Enter does what Enter on the
+   tree does; Esc clears the filter and goes back to the tree. A filter
+   that matches nothing shows "No matches". Right, Left and the chevrons
+   expand and collapse as unfiltered; a folder expanded while filtering
+   shows its matches once listed.
+9. **Path suggestions:** typing in the path field opens the dropdown
+   (Model). Up and Down move a highlight, which starts on none; Tab
+   completes the field to the highlighted folder, or the best one, plus a
+   separator, which lists that folder for the next suggestions; Enter
+   opens the highlighted folder, or what's typed with none; a click opens
+   the one clicked. Esc closes the dropdown, and a second Esc goes back to
+   the tree. On Windows, Local takes `/` and `\` and completes with `\`.
+10. **Permissions:** "Permissions…" (Ctrl+P, or the entry's context menu)
+    opens a panel over the tree naming the entry and the target, as the
+    name field does. SFTP and Linux: the mode in octal (3 or 4 digits,
+    with its `rwxr-xr-x` form beside it as typed), the owner and the
+    group, each a name or a number. Enter applies what changed and
+    nothing else: SFTP with one `setstat` (numeric owner and group; a
+    name no loaded listing maps to a number is refused, asking for the
+    number), Linux with `chmod` and `chown` (names through the user
+    database). Windows: a Read-only checkbox, applied on Enter, and
+    Properties…, which opens Explorer's dialog and closes the panel. Esc
+    cancels. A change re-lists the entry's folder; a refusal (not the
+    owner, not root) shows the target's reason and changes nothing.
+11. **Drag out:** pressing on a Local row, or an edit row, and dragging
+    out of the window starts the OS's file drag with that path; dropping
+    it in the file manager copies or moves it as the file manager does.
+    On Windows, nothing leaves the window (T-092).
 
 ### Keys
 
@@ -209,6 +283,9 @@ key context, so no terminal is under them:
 | Ctrl+U | SFTP: upload files… |
 | Ctrl+L, Esc | To the path field, and back to the tree |
 | Ctrl+Enter | The selected entry's context menu, as a right click opens it |
+| Ctrl+F, a printable character | To the filter field (flow 8) |
+| Ctrl+P | Permissions… (flow 10) |
+| Up, Down, Tab, Enter, Esc in the path field | Pick, complete, open, close a suggestion (flow 9) |
 | Tab, Shift+Tab | Through the tree, the header, the path field, a question, edits and transfers; Enter or Space presses a button |
 | `Ctrl+Shift+O` (`files.switchTarget`) | The target switcher in the palette: Local, a host, Disconnect |
 
@@ -223,6 +300,8 @@ the first frame, as a terminal leaf draws before its first bytes; the
 Local listing starts on its thread after the first frame, and an SSH
 target starts nothing. Nothing else runs before the user opens a pane.
 T-043 reports the TTFP with a restored files pane in the active tab.
+The filter, suggestions, trash, permissions and drag out add nothing:
+each runs when the user uses it.
 
 ### Settings
 
@@ -249,8 +328,16 @@ the file is the command. Deleting a symlink to a folder on Windows is a
 reparse point, and `remove_file` refuses it); on Linux it is a
 `remove_file`; neither touches the target. Rename on Linux replaces an
 existing target silently and on Windows fails, which is why the browser
-looks first (flow 5). SFTP targets need nothing beyond spec 0008. No new
-crates.
+looks first (flow 5). SFTP targets need nothing beyond spec 0008.
+
+The trash is the `trash` crate (the owner's OK, 2026-11-16): the
+freedesktop trash on Linux (home trash, or a volume's `.Trash-<uid>`),
+the Recycle Bin on Windows. Permissions on Linux are `std`'s
+`set_permissions` and `chown`, names through `libc`'s
+`getpwuid_r`/`getgrgid_r` and back; on Windows the read-only attribute
+through `set_permissions`, and Properties through `SHObjectProperties`
+(`windows-sys`, one more feature). macOS builds the Linux path. Drag out
+is GPUI's `external_drag_payload`, which 0.3.11 starts only on Wayland.
 
 ### Admin area
 
@@ -291,7 +378,14 @@ Trust boundaries:
   every delete and overwrite confirmation names the target, as threat
   model 0003's TM-sftp-01 asks of the sidebar.
 - **Writes are the user's:** delete always asks; rename never replaces an
-  existing name without a confirmation, on either target.
+  existing name without a confirmation, on either target; a delete for
+  good after a failed trash asks again; permissions change only on Enter
+  in their panel, which names the entry and the target.
+- **The trash keeps what was deleted:** a trashed file stays on disk in
+  the OS's trash until the user empties it, as a file manager's delete
+  does.
+- **Dragging out hands over a path, nothing else:** only files already on
+  this disk, so no download starts and no remote file leaves early.
 - Threat model 0003 covers the SFTP target; the local target crosses
   only TB4 (opening and running) and TB5 (confirmations), under the
   rules above.
@@ -307,12 +401,23 @@ Trust boundaries:
 7. On Local, new folder and rename work; a name with `/` (or `\` on Windows), `.` or `..` is refused; renaming onto an existing name, on Local and on an SFTP target, and every delete ask first, and declining changes nothing.
 8. A files pane dragged by its handle to the tab bar becomes a tab of its own, and an SSH tab dropped on its side splits beside it; neither reconnects or re-lists, and the files pane keeps its minimum size when the divider is dragged.
 9. A relaunch with a files pane on Local in the active tab and host A as another target brings the pane back in its place with Local listed at its folder, A gone from the pane and only reachable through the header, no connection made, and the TTFP unchanged (spec 0001); a tab whose files pane showed A comes back disconnected with a Connect button.
-10. On Windows 11, Local lists `C:\`, the path field opens `D:\`, `run.bat` runs through `cmd /c` in a new pane, deleting a symlink to a folder removes the link and not its target, and an SFTP target works through `ssh.exe`.
+10. On Windows 11, Local lists `C:\`, the path field opens `D:\`, `run.bat` runs through `cmd /c` in a new pane, deleting a symlink to a folder moves the link to the Recycle Bin and leaves its target, and an SFTP target works through `ssh.exe`.
+
+Added with T-037, T-038, T-044, T-048 and T-027 (2026-11-16):
+
+11. Typing `rdme` on a tree with `README.md` at the root and `docs/readme.txt` in an expanded `docs` shows only `docs`, `docs/readme.txt` and `README.md`, the matched letters highlighted; Esc brings back every row; a collapsed folder's `readme` is not shown.
+12. Typing in the filter over an expanded folder of 50,000 entries keeps up with the keys, and a match is selected after each one.
+13. Typing `~/do` in the path field lists `Documents` and `Downloads` from home; Tab completes to the first plus a separator and lists its folders; Down then Enter opens the highlighted one; the tree doesn't change until Enter.
+14. On Local, deleting a file, a folder with files in it, and a link to a folder each ask "Move … to the trash?" and land in the file manager's trash (the link's target stays); on a drive without a trash, a second question offers to delete for good.
+15. On SFTP and on Linux Local, Ctrl+P on `run.sh` shows `644`, its owner and group by name; typing `755` and Enter makes it runnable and the row's folder re-lists; on a file of another user the server's refusal shows and nothing changes; on a link, Permissions isn't offered.
+16. On Windows Local, Ctrl+P shows Read-only; ticking it and Enter makes the file read-only in Explorer; Properties… opens Explorer's dialog for that file.
+17. On Wayland, dragging a Local file and an edit copy out to the file manager copies them there; a remote row doesn't start a drag.
 
 ## Open questions
 
-- OQ-026 is resolved: a local delete is permanent, after the same
-  confirmation as on SFTP; the trash is planned (T-044).
+- OQ-026 is resolved: a local delete was permanent until the trash
+  (T-044), which now replaces it; delete for good remains when the trash
+  fails.
 - OQ-027: how Edit finds the `.txt` app on Windows (a new crate);
   Notepad until then.
 - OQ-028: local names that aren't UTF-8; left out until then.
