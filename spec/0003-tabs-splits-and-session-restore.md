@@ -1,7 +1,7 @@
 ---
-status: implemented    # draft | approved | implemented
+status: approved       # draft | approved | implemented
 phase: 1
-tasks: [T-003, T-006, T-011, T-062, T-046, T-079, T-086, T-087]
+tasks: [T-003, T-006, T-011, T-062, T-046, T-079, T-086, T-087, T-095]
 related: [spec 0001, spec 0002, spec 0005]
 ---
 
@@ -62,7 +62,16 @@ Leaf IDs are stable across restarts;
 **`PaneId` is per run and never written to `session.json`** **[load-bearing]**.
 
 A tab's title is the user's rename if set, else the focused pane's OSC
-title, else the profile's display name.
+title, else the profile's display name. An OSC title that is only the
+path of a program doesn't count **[load-bearing]**: on Windows, ConPTY
+sets the console title to the started program's path
+(`C:\WINDOWS\System32\OpenSSH\ssh.exe`, `…\pwsh.exe`) before the shell
+or the server sets one, and that path names neither the profile nor the
+host. Such a title is an absolute path (a drive letter or `\\`) whose
+file name ends in `.exe`, `.com`, `.bat` or `.cmd`, on every platform. An
+SSH tab therefore shows its profile's name until the remote shell sets a
+title of its own (T-095). A restored tab's saved title follows the same
+rule.
 
 ### Persistence
 
@@ -195,6 +204,8 @@ frame themselves. Windows 11 always draws its own frame.
 13. With `open_new_tab: true` and saved tabs [local shell in `/tmp`, SSH, local shell in `~/src`, split of two local shells], relaunch shows the same 4 tabs, the third one active in `~/src`, and exactly one shell running. Quitting and relaunching 5 times leaves 4 tabs.
 14. A middle click on an inactive tab closes it and leaves the active tab shown and focused; on a tab with an unsent SFTP edit it asks first; pressing the middle button on a tab and releasing it on another closes neither; a middle click on the tab bar's empty area, the new-tab button or a pane closes nothing (Linux and Windows) (T-086).
 15. With `close_last_tab: new_tab`, closing the only tab by its close button, by Ctrl+Shift+W and by `exit` in its shell each leaves the window open with one new tab of `default_profile`, focused, and one shell running; closing the window's own close button still quits; with the default `quit`, closing the only tab quits as before (Linux and Windows) (T-087).
+
+16. On Windows, a new PowerShell tab and a new tab of an SSH profile named `pep` show the profile's display names, never `…\pwsh.exe` or `…\ssh.exe`; once the remote shell sets `root@pep: ~` via OSC 2, the SSH tab shows that; a session saved with an `.exe` path as a title restores showing the profile's name (T-095).
 
 ## Open questions
 
