@@ -2,9 +2,10 @@
 //! 0013, Keys).
 
 use super::{
-    Browser, DeleteSelected, DownloadSelected, DownloadSelectedTo, EditSelected, OpenSelected,
-    RenameSelected,
+    Browser, DeleteSelected, DownloadSelected, DownloadSelectedTo, EditPermissions, EditSelected,
+    OpenSelected, RenameSelected,
 };
+use crate::files::Entry;
 use gpui::{Context, DismissEvent, Entity, FocusHandle, Focusable, Subscription, Window};
 use gpui_component::menu::PopupMenu;
 
@@ -16,6 +17,12 @@ pub(super) struct KeyMenu {
     _dismissed: Subscription,
 }
 
+/// Whether the browser offers Permissions… on `entry`: its target said
+/// what it has, and it isn't a link, which has none of its own.
+pub(super) fn has_permissions(entry: &Entry) -> bool {
+    !entry.link && (entry.perms.mode.is_some() || entry.perms.readonly.is_some())
+}
+
 impl Browser {
     /// The selected entry's menu: what can be done with it on this
     /// target, each as the action its key runs, so the menu shows the key.
@@ -24,6 +31,7 @@ impl Browser {
         focus: FocusHandle,
         folder: bool,
         local: bool,
+        permissions: bool,
     ) -> PopupMenu {
         let menu = menu.action_context(focus);
         let menu = if folder || local {
@@ -33,22 +41,28 @@ impl Browser {
                 .menu("Download", Box::new(DownloadSelected))
                 .menu("Download to…", Box::new(DownloadSelectedTo))
         };
-        menu.menu("Rename", Box::new(RenameSelected))
-            .menu("Delete", Box::new(DeleteSelected))
+        let menu = menu
+            .menu("Rename", Box::new(RenameSelected))
+            .menu("Delete", Box::new(DeleteSelected));
+        if permissions {
+            menu.menu("Permissions…", Box::new(EditPermissions))
+        } else {
+            menu
+        }
     }
 
     /// Ctrl+Enter: the selected entry's context menu, at its row, with the
     /// keyboard in it. Its actions go to the browser, as a right click's.
     pub(super) fn show_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((ix, folder)) = self
-            .selected
-            .and_then(|ix| Some((ix, self.entry(ix)?.0.is_folder())))
-        else {
+        let Some((ix, folder, permissions)) = self.selected.and_then(|ix| {
+            let (entry, _) = self.entry(ix)?;
+            Some((ix, entry.is_folder(), has_permissions(entry)))
+        }) else {
             return;
         };
         let (focus, local) = (self.focus.clone(), self.is_local());
         let menu = PopupMenu::build(window, cx, move |menu, _, _| {
-            Self::entry_menu(menu, focus, folder, local)
+            Self::entry_menu(menu, focus, folder, local, permissions)
         });
         let dismissed =
             cx.subscribe_in(&menu, window, |this, menu, _: &DismissEvent, window, cx| {

@@ -53,6 +53,7 @@ earlier Tauri version took 1.07 s to start and was dropped.
 - Your SSH hosts in the same sidebar, filtered as you type, opened with a double click, and edited or deleted from a right click
 - Edit remote files in your own editor; saves are uploaded on a click, on save or on focus
 - A files pane that shows the local disk or any saved host as a tree next to your terminals
+- In the sidebar and the files pane alike: a fuzzy filter as you type (`Ctrl+F`), folder suggestions in the path field, permissions (`Ctrl+P`: mode, owner and group, or on Windows the read-only flag and Explorer's Properties), local deletes that go to the trash, and dragging local files out to your file manager (Wayland only for now)
 - Port forwards (local, remote and SOCKS) from the sidebar, listening on 127.0.0.1 unless you allow the network; never saved, and stopped when Tern quits, even if it crashes
 
 **Plugins**
@@ -151,7 +152,7 @@ local only for this machine and an existing directory.
 
 **Next**
 
-- In the file browser: fuzzy filter, path suggestions, permissions, deleting to the trash, dragging files out ([tasks](tasks/))
+- Dragging files out of the file browser on Windows, once GPUI can start that drag there ([T-092](tasks/T-092-drag-out-on-windows.md))
 
 **Toward 1.0** ([roadmap](spec/architecture.md#roadmap))
 

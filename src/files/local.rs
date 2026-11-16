@@ -6,6 +6,7 @@
 //! and what opening a local file does (§Security: a click never runs a
 //! program).
 
+use super::permissions::{Change, Perms};
 use super::{Entry, Event, Kind, Listing, MAX_ENTRIES};
 use crate::terminal::pty::Command;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -23,9 +24,20 @@ enum Request {
         to: String,
         replace: bool,
     },
-    /// Remove a file, a link (never followed) or an empty folder.
+    /// Move a file, a link (never followed) or a folder with all it holds
+    /// to the OS's trash.
+    Trash(String),
+    /// Remove a file, a link (never followed) or an empty folder for good.
     Delete(String),
     MakeFolder(String),
+    /// Apply the permissions panel's change (spec 0013, flow 10).
+    SetPerms {
+        path: String,
+        change: Change,
+    },
+    /// Open Explorer's properties dialog (Windows).
+    #[cfg(windows)]
+    Properties(String),
 }
 
 /// The browser's end of the disk's thread, which ends when this drops.
@@ -60,12 +72,29 @@ impl Worker {
         let _ = self.requests.send(Request::Rename { from, to, replace });
     }
 
+    /// Moves `path` to the trash; when the OS can't, [`Event::TrashFailed`]
+    /// says why and nothing changed (spec 0013, flow 5).
+    pub fn trash(&self, path: String) {
+        let _ = self.requests.send(Request::Trash(path));
+    }
+
     pub fn delete(&self, path: String) {
         let _ = self.requests.send(Request::Delete(path));
     }
 
     pub fn make_folder(&self, path: String) {
         let _ = self.requests.send(Request::MakeFolder(path));
+    }
+
+    pub fn set_perms(&self, path: String, change: Change) {
+        let _ = self.requests.send(Request::SetPerms { path, change });
+    }
+
+    /// Opens Explorer's properties dialog for `path`; only a failure
+    /// reports.
+    #[cfg(windows)]
+    pub fn properties(&self, path: String) {
+        let _ = self.requests.send(Request::Properties(path));
     }
 }
 
@@ -90,8 +119,23 @@ fn serve(requests: &mpsc::Receiver<Request>, events: &UnboundedSender<Event>) {
                     changed(fs::rename(&from, &to), &to)
                 }
             }
+            Request::Trash(path) => match trash::delete(&path) {
+                Ok(()) => Event::Changed {
+                    folder: parent(&path),
+                },
+                Err(error) => Event::TrashFailed {
+                    path,
+                    error: trash_error(error),
+                },
+            },
             Request::Delete(path) => changed(delete(Path::new(&path)), &path),
             Request::MakeFolder(path) => changed(fs::create_dir(&path), &path),
+            Request::SetPerms { path, change } => changed(set_perms(&path, change), &path),
+            #[cfg(windows)]
+            Request::Properties(path) => match super::permissions::show_properties(&path) {
+                Ok(()) => continue,
+                Err(error) => Event::Failed(error),
+            },
         };
         if events.unbounded_send(event).is_err() {
             return;
@@ -109,6 +153,21 @@ fn changed(done: io::Result<()>, path: &str) -> Event {
     }
 }
 
+/// Why the trash refused, in words: the crate's own messages are its
+/// debug output.
+fn trash_error(error: trash::Error) -> String {
+    match error {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        trash::Error::FileSystem { source, .. } => source.to_string(),
+        trash::Error::Os { description, .. } | trash::Error::Unknown { description } => description,
+        trash::Error::TargetedRoot => "a root folder can't go to the trash".into(),
+        trash::Error::CouldNotAccess { .. } | trash::Error::CanonicalizePath { .. } => {
+            "it can't be reached".into()
+        }
+        other => format!("{other:?}"),
+    }
+}
+
 /// The user's home folder, else the root.
 fn home() -> String {
     dirs::home_dir()
@@ -122,6 +181,7 @@ fn home() -> String {
 // would act on the wrong file.
 fn list(path: &str) -> io::Result<Listing> {
     let mut entries = Vec::new();
+    let mut names = Names::default();
     let mut truncated = false;
     for dir_entry in fs::read_dir(path)? {
         let Ok(dir_entry) = dir_entry else {
@@ -137,7 +197,7 @@ fn list(path: &str) -> io::Result<Listing> {
             truncated = true;
             break;
         }
-        entries.push(entry(&dir_entry, name));
+        entries.push(entry(&dir_entry, name, &mut names));
     }
     super::sort(&mut entries);
     Ok(Listing {
@@ -149,7 +209,7 @@ fn list(path: &str) -> io::Result<Listing> {
 
 /// A directory entry as the listing shows it; a link shows what it
 /// points to, and a broken one is `Other`.
-fn entry(dir_entry: &fs::DirEntry, name: String) -> Entry {
+fn entry(dir_entry: &fs::DirEntry, name: String, names: &mut Names) -> Entry {
     let link = dir_entry.file_type().is_ok_and(|kind| kind.is_symlink());
     // Follows a link, so its target decides the kind.
     let metadata = fs::metadata(dir_entry.path()).ok();
@@ -163,13 +223,119 @@ fn entry(dir_entry: &fs::DirEntry, name: String) -> Entry {
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map(|since| u32::try_from(since.as_secs()).unwrap_or(u32::MAX));
+    // A link has no permissions of its own to change (spec 0013), so its
+    // target's are never shown as its.
+    let perms = match &metadata {
+        Some(metadata) if !link => names.perms(metadata),
+        _ => Perms::default(),
+    };
     Entry {
         name,
         kind,
         link,
         size: metadata.as_ref().map(fs::Metadata::len),
         modified,
+        perms,
     }
+}
+
+/// Owner and group names, looked up once per listing: a folder's entries
+/// rarely have more than a few owners between them.
+#[derive(Default)]
+struct Names {
+    #[cfg(unix)]
+    users: std::collections::HashMap<u32, Option<String>>,
+    #[cfg(unix)]
+    groups: std::collections::HashMap<u32, Option<String>>,
+}
+
+impl Names {
+    #[cfg(unix)]
+    fn perms(&mut self, metadata: &fs::Metadata) -> Perms {
+        use super::permissions::{Id, users};
+        use std::os::unix::fs::MetadataExt;
+        let (uid, gid) = (metadata.uid(), metadata.gid());
+        let owner = self
+            .users
+            .entry(uid)
+            .or_insert_with(|| users::user_name(uid));
+        let owner = Id {
+            id: uid,
+            name: owner.clone(),
+        };
+        let group = self
+            .groups
+            .entry(gid)
+            .or_insert_with(|| users::group_name(gid));
+        let group = Id {
+            id: gid,
+            name: group.clone(),
+        };
+        Perms {
+            mode: Some(metadata.mode() & 0o7777),
+            owner: Some(owner),
+            group: Some(group),
+            readonly: None,
+        }
+    }
+
+    #[cfg(windows)]
+    fn perms(&mut self, metadata: &fs::Metadata) -> Perms {
+        Perms {
+            readonly: Some(metadata.permissions().readonly()),
+            ..Perms::default()
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn perms(&mut self, _: &fs::Metadata) -> Perms {
+        Perms::default()
+    }
+}
+
+/// Applies the permissions panel's `change` to `path` (spec 0013, flow
+/// 10): the mode, then the owner and group, by name through the user
+/// database or by number.
+#[cfg(unix)]
+fn set_perms(path: &str, change: Change) -> io::Result<()> {
+    use super::permissions::{Who, users};
+    use std::os::unix::fs::PermissionsExt;
+    if let Some(mode) = change.mode {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+    }
+    let id = |who: Option<Who>, lookup: fn(&str) -> Option<u32>, what: &str| match who {
+        None => Ok(None),
+        Some(Who::Number(id)) => Ok(Some(id)),
+        Some(Who::Name(name)) => lookup(&name)
+            .map(Some)
+            .ok_or_else(|| io::Error::other(format!("There's no {what} named {name}"))),
+    };
+    let owner = id(change.owner, users::user_id, "user")?;
+    let group = id(change.group, users::group_id, "group")?;
+    if owner.is_some() || group.is_some() {
+        std::os::unix::fs::chown(path, owner, group)?;
+    }
+    Ok(())
+}
+
+/// Applies the read-only flag, the one permission a Windows disk shows
+/// (spec 0013, Permissions).
+#[cfg(windows)]
+fn set_perms(path: &str, change: Change) -> io::Result<()> {
+    if let Some(readonly) = change.readonly {
+        let mut permissions = fs::metadata(path)?.permissions();
+        // On Windows this clears the read-only attribute and nothing else;
+        // the lint is about Unix, where it would make a file world-writable.
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(readonly);
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn set_perms(_: &str, _: Change) -> io::Result<()> {
+    Err(io::Error::other("Permissions aren't supported here"))
 }
 
 /// Removes what's at `path` without following a link (flow 5): a link
@@ -802,6 +968,202 @@ mod tests {
                 Event::Failed(reason) => assert!(!reason.is_empty()),
                 other => panic!("expected Failed, got {other:?}"),
             }
+        }
+
+        /// The entry named `name` in the next event, a listing of `dir`.
+        fn listed_entry(events: &mut UnboundedReceiver<Event>, dir: &TempDir, name: &str) -> Entry {
+            match next(events) {
+                Event::Listed(listing) => {
+                    assert_eq!(listing.path, folder(dir));
+                    listing
+                        .entries
+                        .into_iter()
+                        .find(|entry| entry.name == name)
+                        .unwrap_or_else(|| panic!("{name} isn't listed"))
+                }
+                other => panic!("expected Listed, got {other:?}"),
+            }
+        }
+
+        /// Spec 0013 flow 5: when the OS can't move something to the
+        /// trash, the browser hears why and which path, so it can offer
+        /// to delete for good. A path that isn't there can't go, and
+        /// nothing reaches the real trash.
+        #[test]
+        fn what_cant_go_to_the_trash_reports_why_and_changes_nothing() {
+            let dir = TempDir::new("local-worker-trash-missing");
+            std::fs::write(dir.path().join("kept.txt"), b"x").expect("write kept");
+            let (worker, mut events) = started();
+            let missing = at(&dir, "not-there");
+            worker.trash(missing.clone());
+            match next(&mut events) {
+                Event::TrashFailed { path, error } => {
+                    assert_eq!(path, missing);
+                    assert!(!error.is_empty());
+                }
+                other => panic!("expected TrashFailed, got {other:?}"),
+            }
+            assert!(dir.path().join("kept.txt").exists());
+        }
+
+        /// Spec 0013 AC14: a file, a folder with files in it and a link to
+        /// a folder each go to the trash and report their folder changed;
+        /// the link's target stays. Ignored by default: it puts real items
+        /// into the user's trash (Recycle Bin), which a test must not do
+        /// unasked. Run it with `cargo test -- --ignored` and empty the
+        /// trash afterwards.
+        #[test]
+        #[ignore = "moves temp files into the user's real trash or Recycle Bin"]
+        fn a_file_a_full_folder_and_a_link_go_to_the_trash() {
+            let dir = TempDir::new("local-worker-trash");
+            std::fs::write(dir.path().join("tern-trash-test.txt"), b"x").expect("write");
+            std::fs::create_dir(dir.path().join("tern-trash-full")).expect("create full");
+            std::fs::write(dir.path().join("tern-trash-full/inside.txt"), b"x").expect("write");
+            let target = dir.path().join("target");
+            std::fs::create_dir(&target).expect("create target");
+            std::fs::write(target.join("kept.txt"), b"x").expect("write kept");
+            #[cfg(unix)]
+            let linked = std::os::unix::fs::symlink(&target, dir.path().join("tern-trash-link"));
+            // Needs Developer Mode or elevation; without it the link part
+            // is skipped.
+            #[cfg(windows)]
+            let linked =
+                std::os::windows::fs::symlink_dir(&target, dir.path().join("tern-trash-link"));
+            let (worker, mut events) = started();
+            for name in ["tern-trash-test.txt", "tern-trash-full"] {
+                worker.trash(at(&dir, name));
+                assert_changed(next(&mut events), &folder(&dir));
+                assert!(!dir.path().join(name).exists(), "{name} is still there");
+            }
+            if linked.is_ok() {
+                worker.trash(at(&dir, "tern-trash-link"));
+                assert_changed(next(&mut events), &folder(&dir));
+                assert!(
+                    std::fs::symlink_metadata(dir.path().join("tern-trash-link")).is_err(),
+                    "the link is still there"
+                );
+                assert!(target.join("kept.txt").exists(), "the link's target went");
+            }
+        }
+
+        /// Spec 0013 AC16: on Windows, ticking Read-only and applying it
+        /// makes the file read-only, the folder re-lists, and the next
+        /// listing shows it; unticking undoes it. Windows shows no mode,
+        /// owner or group.
+        #[cfg(windows)]
+        #[test]
+        fn read_only_goes_on_and_off_and_the_listing_shows_it() {
+            use crate::files::permissions::Change;
+            let dir = TempDir::new("local-worker-readonly");
+            let file = dir.path().join("notes.txt");
+            std::fs::write(&file, b"x").expect("write");
+            let (worker, mut events) = started();
+            worker.list(folder(&dir));
+            let before = listed_entry(&mut events, &dir, "notes.txt");
+            assert_eq!(before.perms.readonly, Some(false));
+            assert_eq!(before.perms.mode, None);
+            assert_eq!(before.perms.owner, None);
+
+            for readonly in [true, false] {
+                let change = Change {
+                    readonly: Some(readonly),
+                    ..Change::default()
+                };
+                worker.set_perms(at(&dir, "notes.txt"), change);
+                assert_changed(next(&mut events), &folder(&dir));
+                let on_disk = std::fs::metadata(&file).expect("metadata");
+                assert_eq!(on_disk.permissions().readonly(), readonly);
+                worker.list(folder(&dir));
+                let entry = listed_entry(&mut events, &dir, "notes.txt");
+                assert_eq!(entry.perms.readonly, Some(readonly));
+            }
+        }
+
+        /// Spec 0013 flow 10: Enter applies what changed and nothing else;
+        /// a change that names nothing leaves the file as it was.
+        #[cfg(windows)]
+        #[test]
+        fn an_empty_change_leaves_the_file_as_it_was() {
+            use crate::files::permissions::Change;
+            let dir = TempDir::new("local-worker-perms-empty");
+            let file = dir.path().join("notes.txt");
+            std::fs::write(&file, b"x").expect("write");
+            let (worker, mut events) = started();
+            worker.set_perms(at(&dir, "notes.txt"), Change::default());
+            assert_changed(next(&mut events), &folder(&dir));
+            assert!(
+                !std::fs::metadata(&file)
+                    .expect("metadata")
+                    .permissions()
+                    .readonly()
+            );
+        }
+
+        /// Spec 0013 AC15: on Linux, `755` applied to a `644` file makes it
+        /// runnable, the folder re-lists, and the listing shows the new
+        /// mode with the owner's and group's numbers. A link has no
+        /// permissions of its own.
+        #[cfg(unix)]
+        #[test]
+        fn a_mode_applies_and_the_listing_shows_it_but_a_link_has_none() {
+            use crate::files::permissions::{Change, Perms};
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let dir = TempDir::new("local-worker-mode");
+            let file = dir.path().join("run.sh");
+            std::fs::write(&file, b"#!/bin/sh\n").expect("write");
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644))
+                .expect("chmod 644");
+            std::os::unix::fs::symlink(&file, dir.path().join("link")).expect("link");
+            let (worker, mut events) = started();
+            worker.list(folder(&dir));
+            assert_eq!(
+                listed_entry(&mut events, &dir, "run.sh").perms.mode,
+                Some(0o644)
+            );
+
+            let change = Change {
+                mode: Some(0o755),
+                ..Change::default()
+            };
+            worker.set_perms(at(&dir, "run.sh"), change);
+            assert_changed(next(&mut events), &folder(&dir));
+            let on_disk = std::fs::metadata(&file).expect("metadata");
+            assert_eq!(on_disk.mode() & 0o7777, 0o755);
+
+            worker.list(folder(&dir));
+            let entry = listed_entry(&mut events, &dir, "run.sh");
+            assert_eq!(entry.perms.mode, Some(0o755));
+            assert_eq!(entry.perms.owner.map(|owner| owner.id), Some(on_disk.uid()));
+            assert_eq!(entry.perms.group.map(|group| group.id), Some(on_disk.gid()));
+            assert_eq!(entry.perms.readonly, None);
+
+            worker.list(folder(&dir));
+            let link = listed_entry(&mut events, &dir, "link");
+            assert!(link.link);
+            assert_eq!(link.perms, Perms::default());
+        }
+
+        /// Spec 0013 flow 5 and AC10: on Windows, deleting a link to a
+        /// folder for good removes the link, never its target. Creating
+        /// the link needs Developer Mode or elevation; without either the
+        /// test has nothing to check and says so.
+        #[cfg(windows)]
+        #[test]
+        fn deleting_a_link_to_a_folder_for_good_keeps_its_target_on_windows() {
+            let dir = TempDir::new("local-worker-delete-link");
+            let target = dir.path().join("target");
+            std::fs::create_dir(&target).expect("create target");
+            std::fs::write(target.join("kept.txt"), b"x").expect("write kept");
+            let link = dir.path().join("link");
+            if let Err(error) = std::os::windows::fs::symlink_dir(&target, &link) {
+                eprintln!("skipped: can't create a symlink here ({error})");
+                return;
+            }
+            let (worker, mut events) = started();
+            worker.delete(at(&dir, "link"));
+            assert_changed(next(&mut events), &folder(&dir));
+            assert!(std::fs::symlink_metadata(&link).is_err(), "the link stays");
+            assert!(target.join("kept.txt").exists(), "the target went");
         }
     }
 }

@@ -9,7 +9,10 @@ use crate::config::UploadMode;
 use crate::sftp::client::{Download, RemoteStat, Upload};
 use crate::sftp::{copies, local_name, local_path, runs_when_opened};
 use crate::terminal::clean_title;
-use gpui::{Context, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    Context, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, div, px,
+};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::progress::Progress;
@@ -518,7 +521,14 @@ impl Browser {
                     .value(percent.unwrap_or_default())
                     .loading(percent.is_none())
             });
+            // The copy is on this disk once fetched: it drags out to the
+            // file manager (spec 0013, flow 11).
+            let copy = (edit.state != State::Opening).then(|| edit.copy.clone());
             div()
+                .id(("files-edit", id))
+                .when_some(copy, |row, copy| {
+                    super::drag::drag_out(row, copy, false, &edit.name)
+                })
                 .flex()
                 .flex_col()
                 .gap(px(2.))

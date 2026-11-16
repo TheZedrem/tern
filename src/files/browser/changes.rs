@@ -54,6 +54,11 @@ impl Browser {
                     link.delete(path, folder);
                 }
             }
+            (Ask::DeleteForGood { path, .. }, true) => {
+                if let Some(link) = &self.link {
+                    link.delete_for_good(path);
+                }
+            }
             (Ask::Rename { from, to }, true) => {
                 if let Some(link) = &self.link {
                     link.rename(from, to, true);
@@ -201,6 +206,19 @@ impl Browser {
                     clean_title(&crate::sftp::join(folder, name))
                 ),
                 "Replace",
+            ),
+            Ask::Delete { path, .. } if self.is_local() => (
+                format!("Move {} to the trash?", clean_title(path)),
+                "Move to trash",
+            ),
+            Ask::DeleteForGood { path, error } => (
+                format!(
+                    "Couldn't move {} to the trash: {}. Delete it for good? Only an empty \
+                     folder can be deleted. This can't be undone.",
+                    clean_title(path),
+                    clean_title(error)
+                ),
+                "Delete for good",
             ),
             Ask::Delete { path, folder } => {
                 let what = clean_title(path);

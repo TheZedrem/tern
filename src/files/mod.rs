@@ -8,7 +8,10 @@
 pub mod browser;
 pub mod local;
 pub mod pane;
+pub mod permissions;
 pub mod tree;
+
+use permissions::Perms;
 
 use std::cmp::Ordering;
 
@@ -39,6 +42,8 @@ pub struct Entry {
     pub size: Option<u64>,
     /// Seconds since the Unix epoch, if known.
     pub modified: Option<u32>,
+    /// What the target says of its permissions; a link's are its own.
+    pub perms: Perms,
 }
 
 /// What an entry is, or what its link points to.
@@ -167,6 +172,13 @@ pub enum Event {
     Changed {
         folder: String,
     },
+    /// The OS couldn't move `path` to the trash, and why; nothing changed.
+    /// Asking whether to delete it for good is the browser's (spec 0013,
+    /// flow 5).
+    TrashFailed {
+        path: String,
+        error: String,
+    },
     /// A rename, delete or new folder failed.
     Failed(String),
     /// The session is over, and why.
@@ -203,6 +215,7 @@ mod tests {
             link: false,
             size: None,
             modified: None,
+            perms: Default::default(),
         }
     }
 

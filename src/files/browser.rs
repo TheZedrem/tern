@@ -6,10 +6,14 @@
 //! reports and never waits on the network or the disk itself.
 
 mod changes;
+mod drag;
 mod edits;
+mod filter;
 mod menu;
 mod navigate;
+mod permissions;
 mod render;
+mod suggest;
 mod transfers;
 
 use super::local;
@@ -39,6 +43,8 @@ const NAME_CONTEXT: &str = "FileBrowserName";
 const PATH_CONTEXT: &str = "FileBrowserPath";
 /// The key context of an open question's buttons.
 const ASK_CONTEXT: &str = "FileBrowserAsk";
+/// The key context of the permissions panel.
+const PERMS_CONTEXT: &str = "FileBrowserPermissions";
 /// The height of a row, in logical pixels.
 const ROW_HEIGHT: f32 = 24.0;
 /// How far each level of the tree is indented, in logical pixels.
@@ -69,7 +75,9 @@ actions!(
         PreviousAnswer,
         ShowMenu,
         CancelName,
-        Dismiss
+        Dismiss,
+        FocusFilter,
+        EditPermissions
     ]
 );
 
@@ -98,6 +106,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-n", NewFolder, Some(CONTEXT)),
         KeyBinding::new("ctrl-l", FocusPath, Some(CONTEXT)),
         KeyBinding::new("ctrl-enter", ShowMenu, Some(CONTEXT)),
+        KeyBinding::new("ctrl-f", FocusFilter, Some(CONTEXT)),
+        KeyBinding::new("ctrl-p", EditPermissions, Some(CONTEXT)),
         KeyBinding::new("escape", LeavePath, Some(PATH_CONTEXT)),
         // The widget library binds Tab nowhere: here it walks the tree, the
         // header's buttons, the path field, a question, edits and
@@ -108,6 +118,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-tab", FocusPreviousControl, Some(CONTEXT)),
         KeyBinding::new("escape", CancelName, Some(NAME_CONTEXT)),
     ]);
+    cx.bind_keys(permissions::bindings());
 }
 
 /// What the browser asks of whoever draws it.
@@ -182,12 +193,19 @@ impl Link {
         }
     }
 
-    /// Removes `path`; on SFTP a `folder` must be empty, and the disk
-    /// looks for itself.
+    /// Deletes `path`: the disk moves it to the trash, SFTP removes it for
+    /// good, and then a `folder` must be empty.
     fn delete(&self, path: String, folder: bool) {
         match self {
-            Link::Local(worker) => worker.delete(path),
+            Link::Local(worker) => worker.trash(path),
             Link::Sftp(client) => client.delete(path, folder),
+        }
+    }
+
+    /// Removes a local `path` for good, after the trash failed.
+    fn delete_for_good(&self, path: String) {
+        if let Link::Local(worker) = self {
+            worker.delete(path);
         }
     }
 
@@ -249,8 +267,11 @@ struct Transfer {
 enum Ask {
     /// The transfer's target exists.
     Replace(Job),
-    /// Remove the file or link at `path`; a `folder` must be empty.
+    /// Remove the file or link at `path`: to the trash on Local, for good
+    /// on SFTP, where a `folder` must be empty.
     Delete { path: String, folder: bool },
+    /// The trash refused `path`, for `error`: remove it for good?
+    DeleteForGood { path: String, error: String },
     /// A rename's new name exists: replace it?
     Rename { from: String, to: String },
     /// A runnable local file: run it, open it as text, or neither.
@@ -281,6 +302,8 @@ pub struct Browser {
     /// The row Enter acts on.
     selected: Option<usize>,
     path: Entity<InputState>,
+    filter: filter::Filter,
+    suggest: suggest::Suggest,
     scroll: UniformListScrollHandle,
     _path_events: Subscription,
     transfers: Vec<Transfer>,
@@ -296,6 +319,8 @@ pub struct Browser {
     /// The `asks_answered` whose question has the keyboard.
     ask_focused: Option<u64>,
     naming: Option<Naming>,
+    /// The permissions panel, while it's open.
+    perms: Option<permissions::PermsPanel>,
     settings: BrowserSettings,
     /// Where this session's edit copies go; made on its first edit. SFTP
     /// only.
@@ -334,12 +359,13 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> Self {
         let path = cx.new(|cx| InputState::new(window, cx).placeholder("Path"));
-        let path_events = cx.subscribe_in(&path, window, |this, input, event, window, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                let typed = input.read(cx).value().to_string();
-                this.go(&typed, window, cx);
-            }
-        });
+        let path_events =
+            cx.subscribe_in(&path, window, |this, _, event, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.path_entered(window, cx),
+                InputEvent::Change => this.path_typed(cx),
+                InputEvent::Blur => this.close_suggestions(cx),
+                InputEvent::Focus => {}
+            });
         let (target, join, copies): (String, fn(&str, &str) -> String, _) = match &source {
             Source::Local => ("Local".into(), local::join, None),
             Source::Pane(pane) => {
@@ -382,6 +408,8 @@ impl Browser {
             error: None,
             selected: None,
             path,
+            filter: filter::Filter::new(window, cx),
+            suggest: suggest::Suggest::default(),
             scroll: UniformListScrollHandle::new(),
             _path_events: path_events,
             transfers: Vec::new(),
@@ -391,6 +419,7 @@ impl Browser {
             asks_answered: 0,
             ask_focused: None,
             naming: None,
+            perms: None,
             settings,
             copies,
             edits: Vec::new(),

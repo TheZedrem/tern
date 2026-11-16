@@ -3,34 +3,38 @@
 
 use super::{
     Browser, BrowserEvent, CONTEXT, Collapse, Connection, DeleteSelected, Dismiss,
-    DownloadSelected, DownloadSelectedTo, EditSelected, Expand, FocusNextControl, FocusPath,
-    FocusPreviousControl, GoUp, INDENT, LeavePath, NewFolder, OpenSelected, PATH_CONTEXT,
-    ROW_HEIGHT, Refresh, RenameSelected, SelectNext, SelectPrevious, ShowMenu, UploadFiles,
+    DownloadSelected, DownloadSelectedTo, EditPermissions, EditSelected, Expand, FocusFilter,
+    FocusNextControl, FocusPath, FocusPreviousControl, GoUp, INDENT, LeavePath, NewFolder,
+    OpenSelected, PATH_CONTEXT, ROW_HEIGHT, Refresh, RenameSelected, SelectNext, SelectPrevious,
+    ShowMenu, UploadFiles, drag, menu,
 };
 use crate::files::MAX_ENTRIES;
 use crate::files::tree::Row;
 use crate::terminal::clean_title;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, ClickEvent, Context, ExternalPaths, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, anchored,
-    deferred, div, px, uniform_list,
+    AnyElement, ClickEvent, Context, ExternalPaths, FontWeight, HighlightStyle, Hsla,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, StyledText, Window, anchored, deferred, div, px,
+    uniform_list,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::Input;
 use gpui_component::menu::{ContextMenuExt, DropdownMenu};
 use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 impl Browser {
     fn render_row(&self, ix: usize, row: &Row, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let (muted, danger, selected_bg, hover, drop) = (
+        let (muted, danger, selected_bg, hover, drop, accent) = (
             theme.muted_foreground,
             theme.danger,
             theme.list_active,
             theme.list_hover,
             theme.drag_border,
+            theme.primary,
         );
         let indent = px(8. + INDENT * row.depth() as f32);
         let line = |id: &'static str| {
@@ -98,6 +102,7 @@ impl Browser {
         };
         let focus = self.focus.clone();
         let (local, sftp) = (self.is_local(), !self.is_local());
+        let permissions = menu::has_permissions(entry);
         div()
             .id(("files-entry", ix))
             .h(px(ROW_HEIGHT))
@@ -148,7 +153,7 @@ impl Browser {
                     .min_w_0()
                     .truncate()
                     .when(entry.link, |name| name.italic())
-                    .child(clean_title(&entry.name)),
+                    .child(name_text(&entry.name, self.tree.hits(ix), accent)),
             )
             .child(detail)
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
@@ -167,6 +172,11 @@ impl Browser {
                     cx.notify();
                 }),
             )
+            // A Local entry drags out to the file manager (spec 0013, flow
+            // 11); a remote one never does (OQ-019).
+            .when_some(local.then(|| PathBuf::from(&path)), |row, file| {
+                drag::drag_out(row, file, folder, &entry.name)
+            })
             // Files dropped on a remote folder row go into that folder
             // (spec 0008, flow 5).
             .when(folder && sftp, |row| {
@@ -176,7 +186,9 @@ impl Browser {
                         this.upload(paths.paths().to_vec(), path.clone(), cx);
                     }))
             })
-            .context_menu(move |menu, _, _| Self::entry_menu(menu, focus.clone(), folder, local))
+            .context_menu(move |menu, _, _| {
+                Self::entry_menu(menu, focus.clone(), folder, local, permissions)
+            })
             .into_any_element()
     }
 
@@ -264,6 +276,26 @@ impl Browser {
     }
 }
 
+/// A name as its row shows it, by the title rules, with the characters a
+/// filter matched (`hits`, by character) in `accent`. A name the title
+/// rules changed shows without them, as its indices no longer line up.
+pub(super) fn name_text(name: &str, hits: Option<&[usize]>, accent: Hsla) -> StyledText {
+    let shown = clean_title(name);
+    let hits = hits.filter(|_| shown == name).unwrap_or_default();
+    let style = HighlightStyle {
+        color: Some(accent),
+        font_weight: Some(FontWeight::BOLD),
+        ..Default::default()
+    };
+    let highlights: Vec<_> = name
+        .char_indices()
+        .enumerate()
+        .filter(|(ix, _)| hits.contains(ix))
+        .map(|(_, (at, c))| (at..at + c.len_utf8(), style))
+        .collect();
+    StyledText::new(shown).with_highlights(highlights)
+}
+
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.follow_asks(window, cx);
@@ -326,24 +358,29 @@ impl Render for Browser {
                     .on_click(cx.listener(|this, _, _, cx| this.go_up(cx))),
             )
             .child(
-                div()
+                self.suggestion_keys(div(), cx)
                     .flex_1()
                     .min_w_0()
                     .key_context(PATH_CONTEXT)
                     .on_action(cx.listener(|this, _: &LeavePath, window, cx| {
                         window.focus(&this.focus, cx);
                     }))
-                    .child(Input::new(&self.path).xsmall()),
+                    .child(Input::new(&self.path).xsmall())
+                    .children(self.render_suggestions(cx)),
             );
         let rows = self.tree.rows().len();
-        let list = match self.tree.root_listing() {
-            Some(listing) if listing.entries.is_empty() => div()
+        let note = |text: &'static str| {
+            div()
                 .px(px(8.))
                 .py(px(4.))
                 .text_xs()
                 .text_color(muted)
-                .child("Empty folder")
-                .into_any_element(),
+                .child(text)
+                .into_any_element()
+        };
+        let list = match self.tree.root_listing() {
+            Some(listing) if listing.entries.is_empty() => note("Empty folder"),
+            Some(_) if rows == 0 && self.tree.is_filtered() => note("No matches"),
             Some(_) => uniform_list(
                 "files-rows",
                 rows,
@@ -448,6 +485,15 @@ impl Render for Browser {
             .on_action(cx.listener(|this, _: &ShowMenu, window, cx| {
                 this.show_menu(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
+                this.focus_filter(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &EditPermissions, window, cx| {
+                this.open_permissions(window, cx);
+            }))
+            .on_key_down(cx.listener(|this, event, window, cx| {
+                this.type_to_filter(event, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &FocusPath, window, cx| {
                 this.path.update(cx, |input, cx| {
                     input.focus(window, cx);
@@ -481,9 +527,11 @@ impl Render for Browser {
             .text_sm()
             .child(header)
             .child(path_row)
+            .child(self.render_filter(cx))
             .children(self.render_status(cx))
             .children(self.render_ask(cx))
             .children(self.render_naming(cx))
+            .children(self.render_permissions(cx))
             .child(list)
             .children(self.render_edits(cx))
             .children(self.render_transfers(cx))

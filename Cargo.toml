@@ -37,6 +37,9 @@ tokio = { version = "1", features = ["rt", "process", "io-util", "sync", "time",
 # OSC 7 cwd tracking wraps alacritty_terminal's PTY, whose traits name
 # polling's types; pinned to the version alacritty_terminal builds (OQ-018).
 polling = "=3.11.0"
+# A Local delete goes to the freedesktop trash or the Recycle Bin (spec
+# 0013, T-044), on the files thread; nothing on the boot path.
+trash = "5.3"
 
 [target.'cfg(unix)'.dependencies]
 # killpg, to end a plugin's whole process group (spec 0016, OQ-035), and
@@ -66,15 +69,18 @@ widestring = "1"
 # for PuTTY's and WinSCP's sessions (spec 0015, OQ-029); Job objects, to
 # end a plugin's whole process tree (spec 0016, OQ-035) and port forwards
 # with Tern (TM-fwd-13), whose types need
-# the Security and Threading features.
+# the Security and Threading features. Com and UI_Shell open Explorer's
+# properties of a file (spec 0013, flow 10).
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
 ] }
 
 [target.'cfg(windows)'.build-dependencies]

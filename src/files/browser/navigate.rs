@@ -79,6 +79,7 @@ impl Browser {
                 self.list_root(first);
             }
             Event::Listed(listing) => {
+                self.suggest_listed(&listing);
                 let keep = self.selected_path();
                 if self.loading.as_deref() == Some(listing.path.as_str()) {
                     self.loading = None;
@@ -90,6 +91,10 @@ impl Browser {
                     let new_root = self.tree.root() != Some(listing.path.as_str());
                     if new_root {
                         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+                        // The tree drops its filter with its root.
+                        self.filter
+                            .input
+                            .update(cx, |input, cx| input.set_value("", window, cx));
                     }
                     self.tree.set_root(listing);
                     self.reselect(keep.filter(|_| !new_root));
@@ -98,6 +103,7 @@ impl Browser {
                 }
             }
             Event::ListFailed { path, error } => {
+                self.suggest_failed(&path);
                 if self.loading.as_deref() == Some(path.as_str()) {
                     self.loading = None;
                     // A start folder that's gone shows home instead (spec
@@ -156,6 +162,9 @@ impl Browser {
                 }
             }
             Event::RenameExists { from, to } => self.asks.push_back(Ask::Rename { from, to }),
+            Event::TrashFailed { path, error } => {
+                self.asks.push_back(Ask::DeleteForGood { path, error });
+            }
             Event::Changed { folder } => {
                 if self.tree.root() == Some(folder.as_str()) {
                     self.list_root(folder);
@@ -188,13 +197,13 @@ impl Browser {
     }
 
     /// The path of the entry on the selected row.
-    fn selected_path(&self) -> Option<String> {
+    pub(super) fn selected_path(&self) -> Option<String> {
         self.tree.entry(self.selected?).map(|(_, path)| path)
     }
 
     /// Selects the row of `path` after the rows changed, else keeps the
     /// row number if it's still there, else the first row.
-    fn reselect(&mut self, path: Option<String>) {
+    pub(super) fn reselect(&mut self, path: Option<String>) {
         let count = self.tree.rows().len();
         self.selected = path
             .and_then(|path| self.tree.row_of(&path))
@@ -203,7 +212,7 @@ impl Browser {
     }
 
     /// Where `typed` in the path field goes on this target.
-    fn resolve(&self, home: &str, typed: &str) -> String {
+    pub(super) fn resolve(&self, home: &str, typed: &str) -> String {
         if self.is_local() {
             local::resolve(home, typed)
         } else {

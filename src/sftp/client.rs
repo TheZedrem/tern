@@ -6,6 +6,7 @@
 
 use super::transfer;
 pub use crate::files::Event;
+use crate::files::permissions::{Id, Perms, long_name_owners};
 use crate::files::{Entry, Kind, Listing, MAX_ENTRIES};
 use crate::terminal::clean_prompt;
 use crate::terminal::pty::Command;
@@ -58,6 +59,13 @@ enum Request {
         folder: bool,
     },
     MakeFolder(String),
+    /// Set `path`'s permission bits and its owner and group, by number,
+    /// as far as given (spec 0013, flow 10).
+    SetPerms {
+        path: String,
+        mode: Option<u32>,
+        ids: Option<(u32, u32)>,
+    },
 }
 
 /// A download of remote file `remote` to local `target`, written to
@@ -172,6 +180,12 @@ impl Client {
 
     pub fn make_folder(&self, path: String) {
         self.send(Request::MakeFolder(path));
+    }
+
+    /// Sets `path`'s `mode` bits and its owner and group `ids` with one
+    /// `setstat`. Both IDs go together: SFTP v3 sets them as a pair.
+    pub fn set_perms(&self, path: String, mode: Option<u32>, ids: Option<(u32, u32)>) {
+        self.send(Request::SetPerms { path, mode, ids });
     }
 
     fn send(&self, request: Request) {
@@ -315,6 +329,16 @@ async fn serve(
                 let done = sftp.mkdir(path.as_str(), FileAttributes::empty()).await;
                 changed(done.map(drop), &super::parent(&path))
             }
+            Request::SetPerms { path, mode, ids } => {
+                let attrs = FileAttributes {
+                    permissions: mode,
+                    uid: ids.map(|(uid, _)| uid),
+                    gid: ids.map(|(_, gid)| gid),
+                    ..FileAttributes::empty()
+                };
+                let done = sftp.setstat(path.as_str(), attrs).await;
+                changed(done.map(drop), &super::parent(&path))
+            }
         };
         if events.unbounded_send(event).is_err() {
             return Ok(());
@@ -385,7 +409,22 @@ async fn list(sftp: &RawSftpSession, path: &str) -> Result<Listing, Error> {
 /// An entry as `readdir` describes it, which for a link is the link.
 fn entry(file: File) -> Entry {
     let kind = file.attrs.file_type();
+    let (owner, group) = long_name_owners(&file.longname);
+    let id = |id: Option<u32>, name: Option<String>| {
+        id.map(|id| Id {
+            id,
+            // A server without names puts the number in the column.
+            name: name.filter(|name| *name != id.to_string()),
+        })
+    };
+    let perms = Perms {
+        mode: file.attrs.permissions.map(|mode| mode & 0o7777),
+        owner: id(file.attrs.uid, owner),
+        group: id(file.attrs.gid, group),
+        readonly: None,
+    };
     Entry {
+        perms,
         kind: if kind.is_dir() {
             Kind::Folder
         } else if kind.is_file() || kind.is_symlink() {
@@ -572,6 +611,70 @@ mod tests {
         let cleaned = clean_reason(&said);
         assert!(cleaned.len() <= 1024, "{} bytes", cleaned.len());
         assert!(cleaned.ends_with("ssh: the last words"), "{cleaned:?}");
+    }
+
+    /// A `readdir` entry as a server sends it.
+    fn file(name: &str, long_name: &str, attrs: FileAttributes) -> File {
+        File {
+            filename: name.into(),
+            longname: long_name.into(),
+            attrs,
+        }
+    }
+
+    /// Spec 0013 AC15 and §Permissions: an SFTP entry shows its mode bits
+    /// (not its file type), and its owner and group by number with the
+    /// names from the long name's `ls -l` columns.
+    #[test]
+    fn an_sftp_entry_has_its_mode_and_owners_by_name() {
+        let attrs = FileAttributes {
+            permissions: Some(0o100644),
+            uid: Some(1000),
+            gid: Some(50),
+            ..FileAttributes::empty()
+        };
+        let line = "-rw-r--r--    1 alice    staff        10 Jan  1 12:00 run.sh";
+        let entry = entry(file("run.sh", line, attrs));
+        assert_eq!(entry.perms.mode, Some(0o644));
+        assert_eq!(
+            entry.perms.owner,
+            Some(Id {
+                id: 1000,
+                name: Some("alice".into())
+            })
+        );
+        assert_eq!(
+            entry.perms.group,
+            Some(Id {
+                id: 50,
+                name: Some("staff".into())
+            })
+        );
+        assert_eq!(entry.perms.readonly, None);
+    }
+
+    /// Spec 0013 §Permissions: an ID the server has no name for (its
+    /// number in the column, or no long name at all) shows as its number.
+    #[test]
+    fn an_sftp_owner_without_a_name_shows_as_its_number() {
+        let attrs = || FileAttributes {
+            permissions: Some(0o40755),
+            uid: Some(1001),
+            gid: Some(1001),
+            ..FileAttributes::empty()
+        };
+        let numeric = entry(file(
+            "site",
+            "drwxr-xr-x 2 1001 1001 4096 Nov 16 09:00 site",
+            attrs(),
+        ));
+        assert_eq!(numeric.perms.mode, Some(0o755));
+        let owner = numeric.perms.owner.expect("an owner");
+        assert_eq!((owner.id, owner.label()), (1001, "1001".to_owned()));
+        assert_eq!(numeric.perms.group.expect("a group").name, None);
+
+        let bare = entry(file("site", "site", attrs()));
+        assert_eq!(bare.perms.owner.expect("an owner").label(), "1001");
     }
 
     /// Runs against OpenSSH's `sftp-server` speaking SFTP on its stdio, as
