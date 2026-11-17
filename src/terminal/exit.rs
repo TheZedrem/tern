@@ -26,6 +26,32 @@ pub fn clean_title(title: &str) -> String {
         .collect()
 }
 
+/// A pane's title from what its program set, or `None` when it doesn't
+/// count: empty once cleaned, or only a program's path, which ConPTY sets
+/// on Windows before the shell or server sets a real one (spec 0003).
+pub fn pane_title(raw: &str) -> Option<String> {
+    Some(clean_title(raw)).filter(|title| !title.is_empty() && !is_program_path(title))
+}
+
+/// An absolute path (a drive letter or `\\`) whose file name ends in
+/// `.exe`, `.com`, `.bat` or `.cmd`.
+fn is_program_path(title: &str) -> bool {
+    let bytes = title.as_bytes();
+    let absolute = title.starts_with(r"\\")
+        || (bytes.len() > 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'));
+    let name = title.rsplit(['\\', '/']).next().unwrap_or(title);
+    let program = name.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty()
+            && ["exe", "com", "bat", "cmd"]
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+    });
+    absolute && program
+}
+
 /// ssh's prompt as a dialog shows it (spec 0006, flow 4): the title rules,
 /// but with line breaks kept and tabs as spaces, capped at 4 KiB.
 /// Host-key questions span several lines.
@@ -354,6 +380,57 @@ mod tests {
         for title in [technologist, persian, both.as_str()] {
             assert_eq!(clean_title(title), title);
         }
+    }
+
+    /// Spec 0003, AC16: the path ConPTY sets as the console title names
+    /// neither the profile nor the host, so the tab falls back to the
+    /// profile's name. The rule holds on every platform.
+    #[test]
+    fn a_title_that_is_only_a_programs_path_does_not_count() {
+        for path in [
+            r"C:\WINDOWS\System32\OpenSSH\ssh.exe",
+            r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.4.6.0_x64__8wekyb3d8bbwe\pwsh.exe",
+            r"\\server\share\x.cmd",
+            "C:/Program Files/Git/bin/bash.exe",
+            r"c:\tools\Build.EXE",
+            r"D:\tools\run.Cmd",
+            r"C:\WINDOWS\system32\more.com",
+            r"C:\scripts\deploy.bat",
+        ] {
+            assert_eq!(pane_title(path), None, "{path:?} counted as a title");
+        }
+    }
+
+    #[test]
+    fn a_program_path_padded_with_control_characters_still_does_not_count() {
+        assert_eq!(
+            pane_title("\x07C:\\WINDOWS\\System32\\OpenSSH\\ssh.exe\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn titles_that_are_more_than_a_programs_path_count() {
+        for title in [
+            "root@pep: ~",
+            r"vim C:\x.exe",
+            "ssh.exe",
+            r"C:\Users\me",
+            "/usr/bin/ssh",
+            "~/build.sh",
+            r"Administrator: C:\Windows\system32\cmd.exe",
+        ] {
+            assert_eq!(pane_title(title).as_deref(), Some(title), "{title:?}");
+        }
+    }
+
+    #[test]
+    fn a_counting_title_is_cleaned_and_an_empty_one_does_not_count() {
+        assert_eq!(
+            pane_title("root@pep:\x07 ~").as_deref(),
+            Some("root@pep: ~")
+        );
+        assert_eq!(pane_title(" \x07\t"), None);
     }
 
     /// Spec 0006, flow 4: ssh's host-key question spans several lines, and

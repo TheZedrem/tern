@@ -1,5 +1,5 @@
 ---
-status: next
+status: resolved
 blocked-by: []
 type: bug
 ---

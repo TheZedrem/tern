@@ -197,9 +197,8 @@ impl Boot {
             .map(|leaf| {
                 // Shown in the tab bar until it starts: the title rules
                 // apply to a saved title too.
-                let title = leaf.title.as_deref().map(crate::terminal::clean_title);
                 let leaf = SavedLeaf {
-                    title: title.filter(|title| !title.is_empty()),
+                    title: leaf.title.as_deref().and_then(crate::terminal::pane_title),
                     ..leaf.clone()
                 };
                 (leaf.id, leaf)
@@ -934,6 +933,35 @@ mod tests {
             .map(|saved| (saved.id, saved.clone()))
             .collect();
         assert_eq!(boot.pending, waiting);
+    }
+
+    /// AC16 (spec 0003): a session saved with a program's path as a pane's
+    /// title restores that pane without it, so its tab shows the profile's
+    /// name; a real saved title is kept.
+    #[test]
+    fn a_saved_program_path_title_restores_as_no_title() {
+        let ssh = r"C:\WINDOWS\System32\OpenSSH\ssh.exe";
+        let session = Session::new(
+            None,
+            vec![
+                tab(leaf(1, "shell", None, None), 1),
+                tab(
+                    split(
+                        Axis::Row,
+                        0.5,
+                        leaf(2, "ssh:pep", None, Some(ssh)),
+                        leaf(3, "ssh:pep", None, Some("root@pep: ~")),
+                    ),
+                    2,
+                ),
+            ],
+            0,
+        );
+        let boot = Boot::restore(&session, (1200.0, 800.0), |saved, _| idle_pane(saved))
+            .expect("a session with tabs");
+        let title = |id: LeafId| boot.pending[&id].title.clone();
+        assert_eq!(title(2), None);
+        assert_eq!(title(3).as_deref(), Some("root@pep: ~"));
     }
 
     /// AC11 (spec 0003), flow 6, `open_new_tab: true`: three saved tabs

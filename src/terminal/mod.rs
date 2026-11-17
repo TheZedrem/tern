@@ -42,7 +42,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 pub use answers::{PromptHost, PromptNotice, answer_prompts};
-pub use exit::{clean_prompt, clean_title, is_invisible_format};
+pub use exit::{clean_prompt, clean_title, is_invisible_format, pane_title};
 pub use font::{DEFAULT_FONT_FAMILY, FONT_SIZES, FontSettings};
 pub use launch::{Launch, Start, connect_prompt};
 use search::SearchBar;
@@ -360,7 +360,7 @@ impl TerminalPane {
     /// Shows `title`, by the title rules, until the program sets its own: a
     /// restored pane's last one (spec 0003).
     pub fn set_title(&mut self, title: Option<&str>) {
-        self.title = title.map(clean_title).filter(|title| !title.is_empty());
+        self.title = title.and_then(pane_title);
     }
 
     pub fn profile(&self) -> &PaneProfile {
@@ -430,7 +430,7 @@ impl TerminalPane {
                 cx.notify();
             }
             Event::Title(title) => {
-                self.title = Some(clean_title(&title)).filter(|title| !title.is_empty());
+                self.title = pane_title(&title);
                 cx.emit(PaneEvent::TitleChanged);
             }
             Event::ResetTitle => {
