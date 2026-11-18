@@ -11,3 +11,7 @@ link and not its target, and an SFTP target logs in through `ssh.exe`.
 Built on Linux only so far (T-041, T-043). Area: src.
 
 Spec: ../spec/0013-files-panel.md
+
+Windows 11, 2026-11-18: the owner reported that PowerShell did not
+execute. Still to identify: the file or profile selected, the action
+used, and what appeared. The batch-file check remains unverified.

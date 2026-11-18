@@ -1,5 +1,5 @@
 ---
-status: next
+status: resolved
 blocked-by: []
 type: bug
 ---
@@ -24,6 +24,5 @@ Spec: ../spec/0016-plugin-system.md
 Windows 11, 2026-11-18: fixed the settings body width and the Plugins
 and Import text columns. At 700 px, GPUI regression tests check the full
 trust warning and an enable command containing a long path. The Windows
-suite passes. Remaining live check: open Settings → Plugins at a narrow
-width, read through “from a source you trust”, then open an enable
-confirmation and check the warning and command before cancelling.
+suite passes. The owner confirmed the narrow-window Plugins page and
+enable confirmation work on Windows 11.
