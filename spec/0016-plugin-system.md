@@ -191,6 +191,9 @@ nothing touching a terminal before the user saw and approved it.
   to the plugin's log with its kind, target pane, outcome and time, never
   its text (TM-plug-03, -07, -09, -20).
 - **Command buttons [load-bearing].** A button in `set_panel` may carry
+  a target-bound `open_split` (argv, title, revision, using the open_tab right) or
+  `edit_file` (absolute path, revision, using the edit_file right). Both require
+  confirmation on the originating terminal. See spec 0019. Other buttons carry
   one `fill_command`, `run_command` or `open_tab`. Tern draws it as a
   command button: its label and, under it, all of the text or argv it
   carries, by the untrusted-text rules below, in the terminal's monospace
@@ -360,7 +363,7 @@ config paths. Opening the panel, changing target or clicking Refresh
 queries that machine. Errors and empty inventories are shown separately.
 A late response cannot replace a newer target. Opening Tern starts no
 Docker query. SSH uses noninteractive host-verified OpenSSH and fixed
-Docker list commands. No inventory is persisted.
+Docker commands with individually quoted arguments. Spec 0019 adds confirmed container and Compose actions. No inventory is persisted.
 
 ## Acceptance criteria
 

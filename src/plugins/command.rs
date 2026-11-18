@@ -29,6 +29,15 @@ pub enum Command {
     Run {
         text: String,
     },
+    OpenSplit {
+        argv: Vec<String>,
+        title: String,
+        revision: u64,
+    },
+    EditFile {
+        path: String,
+        revision: u64,
+    },
     OpenTab {
         argv: Vec<String>,
     },
@@ -40,6 +49,8 @@ impl Command {
         match self {
             Command::Fill { .. } => "fill_command",
             Command::Run { .. } => "run_command",
+            Self::OpenSplit { .. } => "open_split",
+            Self::EditFile { .. } => "edit_file",
             Command::OpenTab { .. } => "open_tab",
         }
     }
@@ -48,7 +59,8 @@ impl Command {
     pub fn right(&self) -> Right {
         match self {
             Command::Fill { .. } | Command::Run { .. } => Right::TerminalWrite,
-            Command::OpenTab { .. } => Right::OpenTab,
+            Self::EditFile { .. } => Right::EditFile,
+            Command::OpenTab { .. } | Self::OpenSplit { .. } => Right::OpenTab,
         }
     }
 
@@ -56,7 +68,8 @@ impl Command {
     pub fn parts(&self) -> &[String] {
         match self {
             Command::Fill { text } | Command::Run { text } => std::slice::from_ref(text),
-            Command::OpenTab { argv } => argv,
+            Self::EditFile { path, .. } => std::slice::from_ref(path),
+            Command::OpenTab { argv } | Self::OpenSplit { argv, .. } => argv,
         }
     }
 
@@ -72,7 +85,13 @@ impl Command {
             return Some("a command with a control or invisible character");
         }
         match self {
-            Command::OpenTab { argv } => match argv.first() {
+            Self::EditFile { path, .. } if path.is_empty() => Some("an empty file path"),
+            Self::OpenSplit { title, .. }
+                if title.is_empty() || title.len() > 256 || title.chars().any(hides) =>
+            {
+                Some("an invalid pane title")
+            }
+            Command::OpenTab { argv } | Self::OpenSplit { argv, .. } => match argv.first() {
                 None => Some("an `open_tab` without a program"),
                 Some(program) if program.is_empty() => Some("an `open_tab` without a program"),
                 Some(program) if cfg!(windows) && reparsed_on_windows(program) => {
@@ -160,7 +179,7 @@ pub fn shown(command: &Command, font: SharedString, cx: &App) -> impl IntoElemen
     };
     let parts = command.parts();
     let marked = parts.iter().any(|part| !part.is_ascii());
-    let separate = matches!(command, Command::OpenTab { .. });
+    let separate = matches!(command, Command::OpenTab { .. } | Command::OpenSplit { .. });
     let lines = parts.iter().map(move |part| {
         let ranges = non_ascii(part).into_iter().map(|range| (range, highlight));
         let text = StyledText::new(part.clone()).with_highlights(ranges);
@@ -345,5 +364,26 @@ mod tests {
         assert_eq!(fill("ls").right(), Right::TerminalWrite);
         assert_eq!(run("ls").right(), Right::TerminalWrite);
         assert_eq!(open(&["htop"]).right(), Right::OpenTab);
+    }
+
+    #[test]
+    fn split_and_edit_buttons_require_a_revision_and_visible_arguments() {
+        let commands = [
+            serde_json::json!({"action":"open_split","argv":["docker","ps"],"title":"Shell"}),
+            serde_json::json!({"action":"edit_file","path":"/srv/base.yml"}),
+        ];
+        for mut value in commands {
+            assert!(serde_json::from_value::<Command>(value.clone()).is_err());
+            value["revision"] = 27.into();
+            let command: Command = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(command.refusal(), None);
+            if value["action"] == "open_split" {
+                value["argv"][1] = "ps\n".into();
+            } else {
+                value["path"] = "/srv/over\u{202E}ride.yml".into();
+            }
+            let command: Command = serde_json::from_value(value).unwrap();
+            assert!(command.refusal().is_some());
+        }
     }
 }

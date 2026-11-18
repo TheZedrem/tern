@@ -1,11 +1,11 @@
 api: 1
 id: docker
 name: Docker
-version: "1.0"
+version: "1.1"
 run:
   windows: [python, -I, main.py]
   linux: [python3, -I, main.py]
   macos: [python3, -I, main.py]
-rights: [pane_info]
+rights: [pane_info, open_tab, edit_file]
 follow_pane: true
 panels: [{id: inventory, title: Docker, icon: container}]

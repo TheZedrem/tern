@@ -287,7 +287,12 @@ impl Browser {
 
     /// Opens a local file with the plain-text app, off the UI thread.
     pub(super) fn edit_local(&mut self, file: PathBuf, cx: &mut Context<Self>) {
-        let edited = cx.background_spawn(async move { local::edit(&file) });
+        let edited = cx.background_spawn(async move {
+            if !file.is_file() {
+                return Err(format!("File unavailable: {}", file.display()));
+            }
+            local::edit(&file)
+        });
         cx.spawn(async move |this, cx| {
             if let Err(error) = edited.await {
                 let _ = this.update(cx, |_, cx| cx.emit(BrowserEvent::Notice(error)));

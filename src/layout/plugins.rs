@@ -352,6 +352,11 @@ impl Workspace {
         });
     }
 
+    pub(super) fn matches_plugin_target(&self, plugin: &str, leaf: LeafId, revision: u64) -> bool {
+        self.plugins.as_ref().is_some_and(|state| state.revision == revision &&
+            matches!(&state.last_target, Some((PanelId::Plugin {plugin: owner, ..}, Some(target))) if owner == plugin && *target == leaf))
+    }
+
     fn plugin_restarted(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(plugins) = &mut self.plugins
             && matches!(&plugins.last_target, Some((PanelId::Plugin { plugin, .. }, _)) if plugin == id)
@@ -501,6 +506,59 @@ pub(super) mod tests {
             names(&wait_for_events(rig.cx, &follows, 5))[4],
             "panel_closed"
         );
+    }
+
+    #[gpui::test]
+    fn a_split_button_and_its_confirmation_keep_the_selected_target(cx: &mut TestAppContext) {
+        let lab = Lab::new("workspace-split-target");
+        let plugin = lab.plugin(
+            "actions",
+            "stay",
+            "panels: [{ id: main, title: Main }]\nrights: [pane_info, open_tab]\nfollow_pane: true\n",
+        );
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        let rights = [plugins::Right::PaneInfo, plugins::Right::OpenTab];
+        let _host = start(&mut rig, &lab, &[("actions", grant("stay", &rights, &[]))]);
+        rig.keys("ctrl-shift-s");
+        show(&mut rig, &panel("actions", "main"));
+        let local = wait_for_events(rig.cx, &plugin, 2)[1]["revision"]
+            .as_u64()
+            .unwrap();
+        rig.keys("alt-2");
+        let remote = wait_for_events(rig.cx, &plugin, 3)[2]["revision"]
+            .as_u64()
+            .unwrap();
+        let button = |rig: &mut Rig<'_>, revision| {
+            rig.workspace.update_in(rig.cx, |workspace, window, cx| {
+                workspace.plugin_button(
+                    "actions",
+                    crate::plugins::command::Command::OpenSplit {
+                        argv: vec!["docker".into(), "version".into()],
+                        title: "Engine".into(),
+                        revision,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        };
+        let pending = |rig: &mut Rig<'_>| {
+            rig.workspace.read_with(rig.cx, |workspace, _| {
+                workspace.plugins.as_ref().unwrap().requests.len()
+            })
+        };
+        button(&mut rig, local);
+        assert_eq!(pending(&mut rig), 0, "a stale local button targeted SSH");
+        button(&mut rig, remote);
+        assert_eq!(pending(&mut rig), 1);
+        rig.keys("alt-1");
+        // Deny has no click guard. Answering on the wrong host must leave
+        // the original confirmation alone.
+        rig.run(crate::commands::DenyPluginRequest);
+        assert_eq!(pending(&mut rig), 1);
+        rig.keys("alt-2");
+        rig.run(crate::commands::DenyPluginRequest);
+        assert_eq!(pending(&mut rig), 0);
     }
 
     #[gpui::test]

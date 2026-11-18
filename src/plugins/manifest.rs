@@ -25,6 +25,7 @@ pub enum Right {
     TerminalWrite,
     TerminalRead,
     OpenTab,
+    EditFile,
 }
 
 impl Right {
@@ -35,6 +36,7 @@ impl Right {
             Right::TerminalWrite => "terminal_write",
             Right::TerminalRead => "terminal_read",
             Right::OpenTab => "open_tab",
+            Right::EditFile => "edit_file",
         }
     }
 }

@@ -58,8 +58,8 @@ a corner.
 - **The store only goes online when the user asks.** Browsing and
   installing are user-started; update checks are opt-in. Downloads are
   verified against a hash in the registry index.
-- **Docker / Compose (phase 5).** An optional read-only plugin follows the
-  active terminal in the sidebar (specs 0016 and 0018).
+- **Docker / Compose (phase 5).** An optional plugin follows the active terminal in the
+  sidebar and offers container shells, inspection, logs and Compose editing (spec 0019).
 
 **Considered.** Ideas that aren't committed to a phase yet. They get no
 specs or tasks until they're promoted to one.

@@ -85,7 +85,7 @@ theme:
 # plugins:
 #   docker:
 #     enabled: true
-#     run: [./tern-docker]                # the command line you agreed to
-#     rights: [pane_info, terminal_write] # of pane_info, terminal_write, terminal_read, open_tab
+#     run: [python, -I, main.py]                # the command line you agreed to
+#     rights: [pane_info, open_tab, edit_file] # also available: terminal_write, terminal_read
 #     events: [pane_opened, pane_closed]  # of start, pane_opened, pane_closed
 #     settings: { socket: /var/run/docker.sock } # plain text: no place for secrets

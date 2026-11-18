@@ -5,7 +5,10 @@ import shlex
 import subprocess
 import threading
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from queue import Empty, Queue
+from time import monotonic
 from unittest.mock import patch
 
 
@@ -127,6 +130,159 @@ class DockerPanelTests(unittest.TestCase):
         self.assertFalse(any("obsolete-local" in json.dumps(action) for action in actions))
         self.assertTrue(any(action.get("panel") == "inventory" and "current-remote" in
                             json.dumps(action.get("items")) for action in actions))
+
+
+@contextmanager
+def open_panel(target, docker):
+    events, frames = Queue(), Queue()
+
+    class Sink(io.StringIO):
+        def write(self, line):
+            message = json.loads(line)
+            if message["action"] == "set_panel":
+                frames.put(message)
+            return len(line)
+
+    def send(name, **fields):
+        events.put(json.dumps({"api": 1, "panel": "inventory", "event": name, **fields}))
+
+    def view(containing):
+        deadline = monotonic() + 5
+        last = []
+        while monotonic() < deadline:
+            try:
+                frame = frames.get(timeout=max(0, deadline - monotonic()))
+            except Empty:
+                break
+            last = frame["items"]
+            if containing.casefold() in json.dumps(last).casefold():
+                return frame
+        raise AssertionError(f"Panel never showed {containing!r}. Last items: {last}")
+
+    with patch.object(plugin, "docker", side_effect=docker):
+        worker = threading.Thread(target=plugin.serve, args=(iter(events.get, None), Sink()))
+        worker.start()
+        try:
+            send("panel_opened")
+            send("panel_target", target=target, revision=41)
+            yield send, view
+        finally:
+            events.put(None)
+            worker.join(5)
+
+
+class DockerActionTests(unittest.TestCase):
+    container_id = "cafebabe" * 8
+    paths = ["/srv/web stack/base.yml", "/srv/web stack/override.yml"]
+
+    def docker(self, target, args):
+        if "ps" in args:
+            return json.dumps({"ID": self.container_id, "Names": "api-one",
+                               "Image": "api:release", "Status": "Up"})
+        if "ls" in args:
+            return json.dumps([{"Name": "work-stack", "Status": "running(1)",
+                                "ConfigFiles": ",".join(self.paths)}])
+        if "inspect" in args:
+            self.assertIn(self.container_id, args)
+            return json.dumps([{"Id": self.container_id, "Name": "/api-one",
+                                "Platform": "linux",
+                                "Config": {"Image": "api:release", "Env": ["TOKEN=only-in-full-json"]},
+                                "State": {"Status": "running", "Health": {"Status": "healthy"}},
+                                "NetworkSettings": {"Ports": {"80/tcp": [{"HostIp": "127.0.0.1",
+                                                                        "HostPort": "18080"}]},
+                                                    "Networks": {"work-bridge": {}}},
+                                "Mounts": [{"Type": "bind", "Source": "/srv/assets",
+                                            "Destination": "/var/assets"}]}])
+        self.fail(f"Unexpected Docker call {args}")
+
+    def select(self, send, frame, text):
+        row = next(item for item in frame["items"] if item.get("text") == text)
+        send("panel_action", id=row["id"])
+
+    def click(self, send, frame, label):
+        buttons = [button for item in frame["items"] for button in [item, *item.get("buttons", [])]]
+        button = next(button for button in buttons if button.get("label") == label)
+        self.assertNotIn("command", button)
+        send("panel_action", id=button["id"])
+
+    def split_preview(self, frame, shell=False):
+        commands = [item["command"] for item in frame["items"] if "command" in item]
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0]["action"], "open_split")
+        self.assertEqual(any(item["type"] == "input" for item in frame["items"]), shell)
+        return commands[0]
+
+    def test_shell_and_logs_bind_the_container_id_and_pane_revision(self):
+        for target in [LOCAL, SSH]:
+            with self.subTest(target=target), open_panel(target, self.docker) as (send, view):
+                self.select(send, view("api-one"), "api-one")
+                summary = view("work-bridge")
+                self.assertFalse(any("command" in item or item["type"] == "input" for item in summary["items"]))
+                self.click(send, summary, "Shell")
+                shell = self.split_preview(view("open_split"), shell=True)
+                send("panel_input", text="/opt/custom/bin/fish")
+                changed = view("/opt/custom/bin/fish")
+                alternate = self.split_preview(changed, shell=True)
+                self.assertIn(self.container_id, " ".join(alternate["argv"]))
+                self.assertIn("/opt/custom/bin/fish", " ".join(alternate["argv"]))
+                self.click(send, changed, "Back")
+                self.click(send, view("work-bridge"), "Follow logs")
+                logs = self.split_preview(view("open_split"))
+                self.assertIn("exec", " ".join(shell["argv"]))
+                self.assertIn("logs", " ".join(logs["argv"]))
+                for cmd in [shell, logs]:
+                    self.assertEqual(cmd["revision"], 41)
+                    self.assertIn(self.container_id, " ".join(cmd["argv"]))
+                    self.assertTrue(cmd["title"])
+                self.assertNotEqual(shell["title"], logs["title"])
+                self.assertIn("--tail", " ".join(logs["argv"]))
+                self.assertIn("100", " ".join(logs["argv"]))
+                self.assertRegex(" ".join(logs["argv"]), r"(^| )(-f|--follow)( |$)")
+                if target == SSH:
+                    self.assertEqual(shell["argv"][0], "ssh")
+                    offset = shell["argv"].index("-l")
+                    self.assertEqual(shell["argv"][offset:offset + len(SSH["args"])], SSH["args"])
+
+    def test_inspection_summary_keeps_full_details_behind_a_click(self):
+        for target in [LOCAL, SSH]:
+            def query(actual_target, args):
+                self.assertEqual(actual_target, target)
+                return self.docker(actual_target, args)
+
+            with self.subTest(target=target), open_panel(target, query) as (send, view):
+                self.select(send, view("api-one"), "api-one")
+                summary = view("work-bridge")
+                rendered = json.dumps(summary)
+                for value in ["api:release", "running", "healthy", "18080", "/var/assets"]:
+                    self.assertIn(value, rendered)
+                self.assertNotIn("only-in-full-json", rendered)
+                self.click(send, summary, "Inspect full JSON")
+                full = self.split_preview(view("open_split"))
+                self.assertEqual(full["revision"], 41)
+                argv = " ".join(full["argv"])
+                self.assertIn("inspect", argv)
+                self.assertIn(self.container_id, argv)
+
+    def test_inspecting_a_disappeared_container_reports_the_error(self):
+        def query(target, args):
+            if "inspect" in args:
+                self.assertIn(self.container_id, args)
+                raise RuntimeError("No such object")
+            return self.docker(target, args)
+
+        with open_panel(SSH, query) as (send, view):
+            self.select(send, view("api-one"), "api-one")
+            error = view("No such object")
+            self.assertIn(SSH["host"], json.dumps(error))
+            self.assertFalse(any("command" in item for item in error["items"]))
+
+    def test_remote_project_offers_exact_paths_in_merge_order(self):
+        with open_panel(SSH, self.docker) as (send, view):
+            self.select(send, view("work-stack"), "work-stack")
+            edits = [item["command"] for item in view("edit_file")["items"]
+                     if item.get("command", {}).get("action") == "edit_file"]
+            self.assertEqual([cmd["path"] for cmd in edits], self.paths)
+            self.assertEqual([cmd["revision"] for cmd in edits], [41, 41])
 
 
 if __name__ == "__main__":

@@ -116,25 +116,44 @@ impl Workspace {
     /// `file` in its folder, so its output and exit show (spec 0013, flow
     /// 4). Without room, it says so and runs nothing.
     fn run_file(&mut self, leaf: LeafId, file: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.tabs.active().root.contains(leaf) {
-            return;
-        }
-        self.tabs.focus(leaf);
-        if !self.has_room(Axis::Row, window) {
-            show_notice(
-                "There's no room beside the files pane to run it".into(),
-                window,
-                cx,
-            );
-            return;
-        }
         let name = file.file_name().map_or_else(
             || file.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
         );
+        self.split_command(
+            leaf,
+            name,
+            local::run_command(file),
+            file.parent().map(Path::to_path_buf),
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn split_command(
+        &mut self,
+        leaf: LeafId,
+        name: String,
+        command: crate::terminal::pty::Command,
+        cwd: Option<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.tabs.active().root.contains(leaf) {
+            return false;
+        }
+        self.tabs.focus(leaf);
+        if !self.has_room(Axis::Row, window) {
+            show_notice(
+                "There's no room beside this pane for a terminal split".into(),
+                window,
+                cx,
+            );
+            return false;
+        }
         let launch = Launch {
-            command: local::run_command(file),
-            cwd: file.parent().map(Path::to_path_buf),
+            command,
+            cwd,
             timing: Arc::clone(&self.timing),
         };
         let theme = self.theme;
@@ -155,6 +174,7 @@ impl Workspace {
         let new = self.tabs.split(Axis::Row);
         self.add_pane(new, Start::Now(grid), launch, profile, theme, window, cx);
         self.show_active(window, cx);
+        true
     }
 
     /// Opens a files pane (spec 0013, flow 1): the tab's own if it has one;

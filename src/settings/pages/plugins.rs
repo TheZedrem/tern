@@ -447,7 +447,8 @@ impl SettingsView {
                     crate::plugins::Right::PaneInfo => "Read pane and SSH connection details",
                     crate::plugins::Right::TerminalRead => "Request terminal output",
                     crate::plugins::Right::TerminalWrite => "Request typing or running commands",
-                    crate::plugins::Right::OpenTab => "Request opening terminal tabs",
+                    crate::plugins::Right::OpenTab => "Request opening terminal tabs or splits",
+                    crate::plugins::Right::EditFile => "Request editing files on the selected host",
                 })
                 .checked(entry.rights.contains(&right))
                 .on_click(cx.listener(move |this, on: &bool, _, cx| {

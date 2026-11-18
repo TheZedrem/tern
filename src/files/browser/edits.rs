@@ -30,6 +30,7 @@ pub(super) struct Edit {
     id: u64,
     /// The remote file, and its folder and name to upload to.
     remote: String,
+    text_only: bool,
     folder: String,
     name: String,
     /// Its name, by the title rules.
@@ -128,12 +129,6 @@ impl Browser {
             return;
         };
         let name = entry.name.clone();
-        if let Some(edit) = self.edits.iter().find(|edit| edit.remote == remote) {
-            if edit.state != State::Opening {
-                cx.open_with_system(&edit.copy);
-            }
-            return;
-        }
         let windows = cfg!(windows);
         let pathext = std::env::var("PATHEXT").ok();
         if runs_when_opened(&local_name(&name, windows), windows, pathext.as_deref()) {
@@ -145,6 +140,50 @@ impl Browser {
             self.download(ix, None, cx);
             return;
         }
+        self.edit_remote_path(name, remote, false, cx);
+    }
+
+    pub(crate) fn edit_plugin_path(&mut self, path: &str, cx: &mut Context<Self>) {
+        if matches!(self.source, super::Source::Local) {
+            let file = PathBuf::from(path);
+            if file.is_absolute() {
+                self.edit_local(file, cx);
+            } else {
+                cx.emit(BrowserEvent::Notice(format!(
+                    "Unavailable local path: {path}"
+                )));
+            }
+            return;
+        }
+        let Some((_, name)) = path.rsplit_once('/') else {
+            cx.emit(BrowserEvent::Notice(format!(
+                "Expected an absolute remote path: {path}"
+            )));
+            return;
+        };
+        if !path.starts_with('/') || matches!(name, "" | "." | "..") || self.sftp().is_none() {
+            cx.emit(BrowserEvent::Notice(format!(
+                "Remote file unavailable: {path}"
+            )));
+            return;
+        }
+        self.edit_remote_path(name.to_owned(), path.to_owned(), true, cx);
+    }
+
+    fn edit_remote_path(
+        &mut self,
+        name: String,
+        remote: String,
+        text_only: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(edit) = self.edits.iter_mut().find(|edit| edit.remote == remote) {
+            edit.text_only |= text_only;
+            let id = edit.id;
+            self.reopen(id, cx);
+            return;
+        }
+        let windows = cfg!(windows);
         let Some(copies) = self.copies.clone() else {
             cx.emit(BrowserEvent::Notice(
                 "There's no data folder for edit copies".into(),
@@ -171,6 +210,7 @@ impl Browser {
         self.edits.push(Edit {
             id,
             remote,
+            text_only,
             folder,
             label: clean_title(&name).into(),
             name,
@@ -190,6 +230,20 @@ impl Browser {
         cx.notify();
     }
 
+    fn reopen(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(edit) = self
+            .edits
+            .iter()
+            .find(|edit| edit.id == id && edit.state != State::Opening)
+        {
+            if edit.text_only {
+                self.edit_local(edit.copy.clone(), cx);
+            } else {
+                cx.open_with_system(&edit.copy);
+            }
+        }
+    }
+
     /// A fetch or an upload of edit `id` is complete.
     pub(super) fn edit_done(&mut self, id: u64, stat: Option<RemoteStat>, cx: &mut Context<Self>) {
         let Some(edit) = self.edit_mut(id) else {
@@ -199,8 +253,7 @@ impl Browser {
             State::Opening => {
                 edit.fetched = stat;
                 edit.state = State::Clean;
-                let copy = edit.copy.clone();
-                cx.open_with_system(&copy);
+                self.reopen(id, cx);
             }
             State::Uploading => {
                 edit.fetched = stat;
@@ -224,7 +277,7 @@ impl Browser {
         };
         match edit.state {
             State::Opening => {
-                let notice = format!("Couldn't open {}: {error}", edit.label);
+                let notice = format!("Couldn't open {}: {error}", clean_title(&edit.remote));
                 self.remove_edit(id, cx);
                 cx.emit(BrowserEvent::Notice(notice));
             }
@@ -588,9 +641,7 @@ impl Browser {
                                 .tooltip("Open again")
                                 .disabled(edit.state == State::Opening)
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if let Some(edit) = this.edits.iter().find(|e| e.id == id) {
-                                        cx.open_with_system(&edit.copy);
-                                    }
+                                    this.reopen(id, cx);
                                 })),
                         )
                         .child(
@@ -659,6 +710,7 @@ mod tests {
     /// An edit in `state` whose fetch is done, nothing looked at yet.
     fn edit(state: State) -> Edit {
         Edit {
+            text_only: false,
             id: 1,
             remote: "/srv/app/.env".into(),
             folder: "/srv/app".into(),

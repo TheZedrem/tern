@@ -127,6 +127,16 @@ impl Workspace {
             );
             return;
         };
+        if let Command::OpenSplit { revision, .. } | Command::EditFile { revision, .. } = &command
+            && !self.matches_plugin_target(plugin, pane, *revision)
+        {
+            show_notice(
+                "The selected terminal has changed. Select the action again.".into(),
+                window,
+                cx,
+            );
+            return;
+        }
         if let Command::Fill { text } = &command {
             if let Some(why) = command.refusal() {
                 let why = format!("`{kind}` button was refused: {why}");
@@ -277,7 +287,13 @@ impl Workspace {
             false => request.asked.kind().to_owned(),
         };
         let id = request.id.clone().filter(|_| !request.button);
-        let enabled = host.read(cx).is_enabled(&request.plugin);
+        let enabled = host.read(cx).is_enabled(&request.plugin)
+            && match &request.asked {
+                Asked::Command(command) => host.read(cx).may(&request.plugin, command.right()),
+                Asked::Read(_) => host
+                    .read(cx)
+                    .may(&request.plugin, crate::plugins::Right::TerminalRead),
+            };
         let outcome = match (allow, enabled) {
             (false, _) => Outcome::Denied,
             (true, false) => Outcome::Refused,
@@ -315,6 +331,50 @@ impl Workspace {
                     true => Outcome::Allowed,
                     false => Outcome::NoPane,
                 }
+            }
+            Asked::Command(Command::OpenSplit { argv, title, .. }) => {
+                let Some((program, args)) = argv.split_first() else {
+                    return Outcome::Refused;
+                };
+                let command = crate::terminal::pty::Command {
+                    program: program.clone(),
+                    args: args.to_vec(),
+                    env: Default::default(),
+                };
+                if self.split_command(request.pane, title.clone(), command, None, window, cx) {
+                    Outcome::Allowed
+                } else {
+                    Outcome::Refused
+                }
+            }
+            Asked::Command(Command::EditFile { path, .. }) => {
+                let Some(pane) = pane else {
+                    return Outcome::NoPane;
+                };
+                if self
+                    .sftp
+                    .get(&request.pane)
+                    .is_none_or(|views| views.files.is_none())
+                {
+                    let files = self.sidebar_files(request.pane, &pane, window, cx);
+                    self.sftp.entry(request.pane).or_default().files = Some(files);
+                }
+                if let Some(files) = self
+                    .sftp
+                    .get(&request.pane)
+                    .and_then(|views| views.files.as_ref())
+                {
+                    files
+                        .view
+                        .update(cx, |browser, cx| browser.edit_plugin_path(path, cx));
+                }
+                if pane.read(cx).profile().ssh && self.tabs.active().root.contains(request.pane) {
+                    self.tabs.focus(request.pane);
+                    self.hosted(window, cx).sidebar.update(cx, |sidebar, cx| {
+                        sidebar.show(&crate::sidebar::PanelId::Files, cx)
+                    });
+                }
+                Outcome::Allowed
             }
             Asked::Command(Command::OpenTab { argv }) => {
                 let profile = Profile {
@@ -439,6 +499,8 @@ impl Workspace {
         let verb = match &request.asked {
             Asked::Command(Command::Fill { .. }) => "type into",
             Asked::Command(Command::Run { .. }) => "run in",
+            Asked::Command(Command::OpenSplit { .. }) => "open a terminal split beside",
+            Asked::Command(Command::EditFile { .. }) => "edit a file on",
             Asked::Command(Command::OpenTab { .. }) => "open a new tab from",
             Asked::Read(_) => "read from",
         };
