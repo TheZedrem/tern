@@ -19,7 +19,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::switch::Switch;
-use gpui_component::{ActiveTheme, Disableable, Selectable, Sizable, WindowExt};
+use gpui_component::{ActiveTheme, Selectable, Sizable, WindowExt};
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -260,6 +260,7 @@ impl SettingsView {
             let label: SharedString = plugin.name.clone().into();
             let card = self.plugin_card(ix, plugin, cx);
             rows.push(Row {
+                full_width: true,
                 page: Page::Plugins,
                 group: "Found plugins",
                 label,
@@ -274,14 +275,49 @@ impl SettingsView {
     /// decides about it.
     fn plugin_card(&self, ix: usize, plugin: ListedPlugin, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let small = |text: String| div().text_xs().text_color(muted).child(text);
-        let mono = |text: String| div().text_xs().font_family(MONOSPACE).child(text);
-        let mut card = div().flex().flex_col().gap(px(6.)).py(px(4.)).flex_1();
+        let mut header = div().flex().items_center().gap(px(8.)).child(
+            div()
+                .debug_selector(move || format!("plugin-name-{ix}"))
+                .min_w_0()
+                .text_base()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(plugin.name.clone()),
+        );
+        if !plugin.version.is_empty() {
+            header = header.child(
+                div()
+                    .debug_selector(move || format!("plugin-version-{ix}"))
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("v{}", plugin.version)),
+            );
+        }
+        let folder = labelled(
+            "Folder",
+            div()
+                .debug_selector(move || format!("plugin-folder-{ix}"))
+                .text_xs()
+                .text_color(muted)
+                .font_family(MONOSPACE)
+                .child(plugin.folder.display().to_string()),
+        );
+        let mut card = div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .p(px(12.))
+            .gap(px(8.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(cx.theme().border);
         let state = match &plugin.state {
             State::Unusable(why) => {
                 return card
+                    .child(header)
                     .child(div().text_sm().child(format!("Unusable: {why}")))
-                    .child(small(plugin.folder.display().to_string()))
+                    .child(folder)
                     .into_any_element();
             }
             State::Disabled => "Disabled",
@@ -291,10 +327,6 @@ impl SettingsView {
         };
         let entry = self.plugin_entry(&plugin.id);
         let enabled = entry.enabled && !plugin.run_changed;
-        let version = match plugin.version.is_empty() {
-            true => String::new(),
-            false => format!(" · version {}", plugin.version),
-        };
         let toggle = {
             let listed = plugin.clone();
             Switch::new(("plugin-enabled", ix))
@@ -312,10 +344,10 @@ impl SettingsView {
         let restart = {
             let id = plugin.id.clone();
             Button::new(("plugin-restart", ix))
+                .debug_selector(move || format!("plugin-restart-{ix}"))
                 .label("Restart")
                 .xsmall()
                 .ghost()
-                .disabled(!enabled)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(host) = &this.host {
                         host.update(cx, |host, cx| host.restart_plugin(&id, cx));
@@ -326,6 +358,7 @@ impl SettingsView {
         let show_log = {
             let id = plugin.id.clone();
             Button::new(("plugin-log", ix))
+                .debug_selector(move || format!("plugin-log-{ix}"))
                 .label(if log_open { "Hide log" } else { "Show log" })
                 .xsmall()
                 .ghost()
@@ -338,20 +371,16 @@ impl SettingsView {
         };
         card = card
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(toggle)
-                    .child(div().text_sm().child(format!("{state}{version}")))
-                    .child(restart)
-                    .child(show_log),
+                header.child(
+                    div()
+                        .debug_selector(move || format!("plugin-switch-{ix}"))
+                        .ml_auto()
+                        .flex_shrink_0()
+                        .child(toggle),
+                ),
             )
-            .child(mono(plugin.run.join(" ")))
-            .child(small(format!(
-                "Runs as you, from {}",
-                plugin.folder.display()
-            )));
+            .child(div().text_xs().text_color(muted).child(state))
+            .children(self.plugin_rights(ix, &plugin, &entry, cx));
         if plugin.run_changed {
             let listed = plugin.clone();
             card = card.child(
@@ -375,9 +404,25 @@ impl SettingsView {
             );
         }
         card = card
-            .children(self.plugin_rights(ix, &plugin, &entry, cx))
             .children(self.plugin_events(ix, &plugin, &entry, cx))
-            .children(self.plugin_settings(ix, &plugin, &entry, cx));
+            .children(self.plugin_settings(ix, &plugin, &entry, cx))
+            .child(labelled(
+                "Launch command",
+                div()
+                    .debug_selector(move || format!("plugin-command-{ix}"))
+                    .font_family(MONOSPACE)
+                    .text_xs()
+                    .child(plugin.run.join(" ")),
+            ))
+            .child(folder)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .when(enabled, |row| row.child(restart))
+                    .child(show_log),
+            );
         if log_open {
             card = card.child(self.plugin_log(ix, &plugin.id, cx));
         }
@@ -398,7 +443,12 @@ impl SettingsView {
         let boxes = plugin.rights.iter().enumerate().map(|(n, &right)| {
             let id = plugin.id.clone();
             Checkbox::new(("plugin-right", ix * 16 + n))
-                .label(right.name())
+                .label(match right {
+                    crate::plugins::Right::PaneInfo => "Read pane and SSH connection details",
+                    crate::plugins::Right::TerminalRead => "Request terminal output",
+                    crate::plugins::Right::TerminalWrite => "Request typing or running commands",
+                    crate::plugins::Right::OpenTab => "Request opening terminal tabs",
+                })
                 .checked(entry.rights.contains(&right))
                 .on_click(cx.listener(move |this, on: &bool, _, cx| {
                     let mut entry = this.plugin_entry(&id);
@@ -410,7 +460,7 @@ impl SettingsView {
                 }))
         });
         Some(labelled(
-            "Rights",
+            "Permissions",
             div().flex().flex_wrap().gap(px(10.)).children(boxes),
         ))
     }
@@ -713,6 +763,94 @@ mod tests {
         assert!(warning.right() <= viewport.width, "{warning:?}");
         assert!(WARNING.ends_with("install plugins only from a source you trust."));
         assert_wrapped_text_fits(&mut screen, warning, WARNING.into());
+    }
+
+    #[gpui::test]
+    fn plugin_header_and_wrapped_details_fit_the_page_and_search(cx: &mut TestAppContext) {
+        let lab = Lab::new("settings-plugin-card");
+        let path = format!("assets/{}.json", "a".repeat(140));
+        lab.folder(
+            "docker",
+            &format!("api: 1\nid: docker\nname: Docker\nversion: 1.0\nrights: [pane_info]\nrun: [docker, {path}]\n"),
+        );
+        let host = found(&lab, cx);
+        let mut screen = open_screen_on(Config::default(), Some(host), cx);
+        screen.click("settings-tab-Plugins");
+
+        for search in [false, true] {
+            if search {
+                screen.click("settings-tab-General");
+                let input = screen
+                    .cx
+                    .update(|_, cx| screen.view.read(cx).search.clone());
+                screen.focus(&input);
+                screen.cx.simulate_keystrokes("d o c k e r");
+            }
+            let mut wide_height = None;
+            for width in [1050., 575.] {
+                screen.cx.simulate_resize(gpui::size(px(width), px(850.)));
+                draw(&mut screen);
+                let mut bounds = |key| screen.cx.debug_bounds(key).expect(key);
+                let tab = bounds("settings-tab-Plugins");
+                let name = bounds("plugin-name-0");
+                let version = bounds("plugin-version-0");
+                let switch = bounds("plugin-switch-0");
+                let command = bounds("plugin-command-0");
+                let folder = bounds("plugin-folder-0");
+                assert!(name.left() >= tab.right() && name.left() < tab.right() + px(64.));
+                assert!(name.right() <= version.left() && version.right() <= switch.left());
+                assert!(name.top() < switch.bottom() && switch.top() < name.bottom());
+                assert!(switch.right() >= px(width - 64.) && switch.right() <= px(width));
+                for detail in [command, folder] {
+                    assert!(detail.top() >= name.bottom());
+                    assert!(detail.left() >= tab.right() && detail.left() < name.left() + px(32.));
+                    assert!(detail.right() <= px(width), "{detail:?}");
+                }
+                if let Some(wide_height) = wide_height {
+                    assert!(command.size.height > wide_height, "{command:?}");
+                }
+                wide_height = Some(command.size.height);
+                assert!(screen.cx.debug_bounds("plugin-restart-0").is_none());
+                assert!(screen.cx.debug_bounds("plugin-log-0").is_some());
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn running_and_stopped_plugins_offer_restart_and_their_own_log(cx: &mut TestAppContext) {
+        use crate::plugins::Subscription::Start;
+        use crate::plugins::tests::grant;
+
+        let lab = Lab::new("settings-plugin-actions");
+        let mut config = Config::default();
+        for (id, mode) in [("running", "stay"), ("stopped", "crash")] {
+            lab.plugin(id, mode, "events: [start]\n");
+            config.plugins.insert(id.into(), grant(mode, &[], &[Start]));
+        }
+        let host = found(&lab, cx);
+        host.update(cx, |host, cx| host.set_granted(config.plugins.clone(), cx));
+        wait_until(cx, "running and stopped plugin states", |cx| {
+            host.read_with(cx, |host, _| {
+                host.state("running") == Some(State::Running)
+                    && host.state("stopped") == Some(State::Stopped)
+            })
+        });
+        let mut screen = open_screen_on(config, Some(host), cx);
+        screen.cx.simulate_resize(gpui::size(px(700.), px(1100.)));
+        screen.click("settings-tab-Plugins");
+        for (restart, log, id) in [
+            ("plugin-restart-0", "plugin-log-0", "running"),
+            ("plugin-restart-1", "plugin-log-1", "stopped"),
+        ] {
+            draw(&mut screen);
+            assert!(screen.cx.debug_bounds(restart).is_some());
+            screen.click(log);
+            assert!(
+                screen
+                    .cx
+                    .update(|_, cx| screen.view.read(cx).plugins.logs.contains(id))
+            );
+        }
     }
 
     #[gpui::test]

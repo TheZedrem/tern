@@ -57,6 +57,8 @@ pub enum HostEvent {
     /// What [`Host::panels`] lists changed: plugins were found, one was
     /// enabled or disabled, or one stopped or was restarted.
     PanelsChanged,
+    /// Restart from Settings discards a running plugin's active panel target.
+    Restarted(String),
 }
 
 /// Where a found plugin is.
@@ -919,7 +921,7 @@ switch ($mode) {
                             Some(Said::Action(plugin.clone(), action.clone()))
                         }
                         HostEvent::Notice(notice) => Some(Said::Notice(notice.clone())),
-                        HostEvent::PanelsChanged => None,
+                        HostEvent::PanelsChanged | HostEvent::Restarted(_) => None,
                     });
                 })
                 .detach();

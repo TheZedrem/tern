@@ -343,6 +343,7 @@ impl SettingsView {
                             ),
                     );
                 Row {
+                    full_width: false,
                     page: Page::Import,
                     group: "Import SSH hosts",
                     label: title.into(),

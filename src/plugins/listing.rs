@@ -91,6 +91,7 @@ impl Host {
         plugin.stopped = false;
         self.log(ix, "restarted by the user".into(), cx);
         self.enabled_now(ix, cx);
+        cx.emit(HostEvent::Restarted(id.to_owned()));
         cx.emit(HostEvent::PanelsChanged);
         cx.notify();
     }

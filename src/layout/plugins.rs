@@ -79,6 +79,7 @@ impl Workspace {
         cx.subscribe_in(&host, window, |this, _, event, window, cx| match event {
             HostEvent::Notice(notice) => show_notice(notice.clone(), window, cx),
             HostEvent::PanelsChanged => this.sync_plugin_panels(window, cx),
+            HostEvent::Restarted(id) => this.plugin_restarted(id, cx),
             HostEvent::Action { plugin, action } => this.plugin_action(plugin, action, window, cx),
         })
         .detach();
@@ -350,6 +351,15 @@ impl Workspace {
             host.panel_target(plugin, panel, target, plugins.revision, cx)
         });
     }
+
+    fn plugin_restarted(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(plugins) = &mut self.plugins
+            && matches!(&plugins.last_target, Some((PanelId::Plugin { plugin, .. }, _)) if plugin == id)
+        {
+            plugins.last_target = None;
+            cx.notify();
+        }
+    }
 }
 
 /// Spec 0018, flows 5 and 6, AC9 and AC10; spec 0016, Events: the
@@ -398,6 +408,7 @@ pub(super) mod tests {
             cx.subscribe_in(&host, window, |this, _, event, window, cx| match event {
                 HostEvent::Notice(_) => {}
                 HostEvent::PanelsChanged => this.sync_plugin_panels(window, cx),
+                HostEvent::Restarted(id) => this.plugin_restarted(id, cx),
                 HostEvent::Action { plugin, action } => {
                     this.plugin_action(plugin, action, window, cx);
                 }
@@ -490,6 +501,35 @@ pub(super) mod tests {
             names(&wait_for_events(rig.cx, &follows, 5))[4],
             "panel_closed"
         );
+    }
+
+    #[gpui::test]
+    fn settings_restart_resends_the_visible_panels_target(cx: &mut TestAppContext) {
+        let lab = Lab::new("workspace-restart-panel-target");
+        let folder = lab.plugin(
+            "docker",
+            "stay",
+            "panels: [{ id: inventory, title: Inventory }]\nrights: [pane_info]\nfollow_pane: true\n",
+        );
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        let host = start(
+            &mut rig,
+            &lab,
+            &[("docker", grant("stay", &[plugins::Right::PaneInfo], &[]))],
+        );
+        rig.keys("alt-2");
+        rig.keys("ctrl-shift-s");
+        show(&mut rig, &panel("docker", "inventory"));
+        let before = wait_for_events(rig.cx, &folder, 2);
+        assert_eq!(before[1]["target"]["host"], "me@prod.example.com");
+
+        host.update(rig.cx, |host, cx| host.restart_plugin("docker", cx));
+        let after = wait_for_events(rig.cx, &folder, 3);
+        assert_eq!(pids(&folder).len(), 2);
+        assert_eq!(after[2]["event"], "panel_target");
+        assert_eq!(after[2]["panel"], "inventory");
+        assert_eq!(after[2]["target"], before[1]["target"]);
+        assert_ne!(after[2]["revision"], before[1]["revision"]);
     }
 
     /// The view of `plugin`'s `panel`.

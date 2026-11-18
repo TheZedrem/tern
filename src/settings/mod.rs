@@ -146,6 +146,7 @@ impl Page {
 /// One setting on the screen: its tab, the group heading it sits under,
 /// its label, the other words search finds it by, and its control.
 struct Row {
+    full_width: bool,
     page: Page,
     group: &'static str,
     label: SharedString,
@@ -163,6 +164,7 @@ impl Row {
         control: AnyElement,
     ) -> Self {
         Row {
+            full_width: false,
             page,
             group,
             label: label.into(),
@@ -606,7 +608,11 @@ impl Render for SettingsView {
                 body.push(Self::heading(heading.clone(), cx).into_any_element());
                 last_heading = Some(heading);
             }
-            body.push(Self::row(row.label, row.control).into_any_element());
+            body.push(if row.full_width {
+                row.control
+            } else {
+                Self::row(row.label, row.control).into_any_element()
+            });
         }
         if found_nothing {
             body.push(

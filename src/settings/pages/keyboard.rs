@@ -99,6 +99,7 @@ impl SettingsView {
                         )
                     });
                 Row {
+                    full_width: false,
                     page: Page::Keyboard,
                     group: "Keybindings",
                     label: title.into(),

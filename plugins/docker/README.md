@@ -10,7 +10,9 @@ query the same machine again.
    click **Open plugins folder**.
 2. Copy this whole `docker` folder there so the manifest is at
    `plugins/docker/plugin.yaml`. Restart Tern to discover it.
-3. Enable **Docker**, grant **pane_info**, and select **Docker** in the sidebar.
+3. Enable **Docker**, select **Read pane and SSH connection details**
+   (`pane_info`), and open **Docker** in the sidebar. **Refresh** is
+   beside the machine name.
 
 The plugin uses Python 3.8+ from PATH (`python` on Windows, `python3` on
 Linux). It needs only the standard library. Install the Docker CLI and

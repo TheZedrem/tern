@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 5
-tasks: [T-064, T-065, T-066, T-067, T-068, T-069, T-070, T-071, T-096, T-097]
+tasks: [T-064, T-065, T-066, T-067, T-068, T-069, T-070, T-071, T-096, T-097, T-098]
 related: [spec 0001, spec 0004, spec 0005, spec 0009, spec 0013, spec 0018, threat model 0005, OQ-031 ✅, OQ-032 ✅, OQ-035 ✅, OQ-037]
 ---
 
@@ -363,6 +363,16 @@ Docker query. SSH uses noninteractive host-verified OpenSSH and fixed
 Docker list commands. No inventory is persisted.
 
 ## Acceptance criteria
+
+**Plugin settings layout (T-098).** Each found
+plugin uses the page width. Its name heads the entry, with its version
+beside it and the enable switch at the end of the header. The state and
+permissions appear directly below. Permission labels describe access in
+plain language; for Docker, “Read pane and SSH connection details”.
+The launch command and folder are labeled, readable details. Long values
+wrap at narrow widths. Restart appears when available, and the log stays
+accessible for diagnosing failures. The enable confirmation continues
+to show the trusted-source warning, full command and folder.
 
 1. A folder with a valid manifest dropped into the plugins folder shows up on the Plugins tab as disabled, and its program has not run (a plugin that creates a file on start created none). Enabling it asks for confirmation with the trusted-source warning and its command line; cancelling leaves it disabled and not started. A manifest with `api: 2` is listed as unusable and never started. With no plugins folder yet, "Open plugins folder" on the Plugins tab, or `plugins.openFolder` from the palette, creates it and shows it in the file manager.
 2. With three plugins enabled that get `start`, no plugin process exists before the first-frame mark, and `--bench-startup 10` is within noise of a run with none. An enabled plugin without `start` has no process until its first event.

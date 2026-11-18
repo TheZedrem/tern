@@ -358,6 +358,7 @@ impl SettingsView {
                             })),
                     );
                 Row {
+                    full_width: false,
                     page: Page::Profiles,
                     group,
                     label: profile.display_name().to_owned().into(),

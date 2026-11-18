@@ -102,7 +102,8 @@ def serve(source, sink):
     def show(items):
         if target:
             title = target.get("host") or ("Docker Desktop" if os.name == "nt" else "Local Docker")
-            items = [text(title), {"type": "button", "id": "refresh", "label": "Refresh"}, *items]
+            items = [{"type": "row", "text": title,
+                      "buttons": [{"id": "refresh", "label": "Refresh"}]}, *items]
         send({"action": "set_panel", "panel": "inventory", "revision": revision, "items": items})
 
     def worker():
@@ -130,7 +131,7 @@ def serve(source, sink):
                     revision = event.get("revision")
                     generation += 1
                     if name == "panel_target":
-                        show([text("Loading…" if target else "Select a terminal and grant pane_info in Plugins settings.")])
+                        show([text("Loading…" if target else "Select a terminal and enable “Read pane and SSH connection details” in Plugins settings.")])
                     changed.notify()
                 elif name == "panel_action" and event.get("id") == "refresh" and target:
                     generation += 1
