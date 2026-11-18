@@ -269,6 +269,9 @@ impl Workspace {
             sidebar.shows(&PanelId::Files),
             sidebar.shows(&PanelId::Forwards),
         );
+        if sidebar.is_open() && matches!(sidebar.shown(), PanelId::Plugin { .. }) {
+            self.sync_plugin_target(&sidebar.shown().clone(), window, cx);
+        }
         if files {
             let body = self.files_body(ssh.as_ref(), window, cx);
             hosted

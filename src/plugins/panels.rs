@@ -27,6 +27,42 @@ pub struct ListedPanel {
 }
 
 impl Host {
+    fn following(&self, plugin: &str) -> Option<usize> {
+        let ix = self.index(plugin)?;
+        let entry = &self.plugins[ix];
+        (self.enabled(ix) && !entry.stopped && entry.manifest.as_ref().ok()?.follow_pane)
+            .then_some(ix)
+    }
+
+    /// None for ordinary panels; otherwise whether the active pane may be disclosed.
+    pub fn follows_pane(&self, plugin: &str) -> Option<bool> {
+        self.following(plugin)
+            .map(|ix| self.holds(ix, Right::PaneInfo))
+    }
+
+    pub fn panel_target(
+        &mut self,
+        plugin: &str,
+        panel: &str,
+        target: Option<super::PanelTarget>,
+        revision: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ix) = self.following(plugin) else {
+            return;
+        };
+        let granted = self.holds(ix, Right::PaneInfo);
+        // Reserve one slot for the latest visible target even when clicks fill the queue.
+        let queue = &mut self.plugins[ix].queue;
+        queue.retain(|event| !matches!(event, Event::PanelTarget { .. }));
+        queue.push_back(Event::PanelTarget {
+            panel: panel.into(),
+            revision,
+            target: target.filter(|_| granted),
+        });
+        self.pump(ix, cx);
+    }
+
     /// The panels of every enabled, usable plugin, each plugin's in its
     /// manifest's order.
     pub fn panels(&self) -> Vec<ListedPanel> {
@@ -65,6 +101,9 @@ impl Host {
 
     /// `panel` of `plugin` left the screen.
     pub fn panel_closed(&mut self, plugin: &str, panel: &str, cx: &mut Context<Self>) {
+        if let Some(ix) = self.index(plugin) {
+            self.plugins[ix].queue.retain(|event| !matches!(event, Event::PanelTarget { panel: pending, .. } if pending == panel));
+        }
         let panel = panel.to_owned();
         self.tell(plugin, Event::PanelClosed { panel }, cx);
     }

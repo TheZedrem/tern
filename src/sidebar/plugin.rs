@@ -95,6 +95,11 @@ pub struct PluginPanel {
 impl EventEmitter<PluginPanelEvent> for PluginPanel {}
 
 impl PluginPanel {
+    #[cfg(test)]
+    pub(crate) fn items(&self) -> &[Item] {
+        self.model.items()
+    }
+
     pub fn new(font: SharedString, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx));
         cx.subscribe_in(

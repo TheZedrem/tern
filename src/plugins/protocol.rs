@@ -16,16 +16,50 @@ const MAX_LOG_CHARS: usize = 1024;
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     Start,
-    Command { command: String },
-    PanelOpened { panel: String },
-    PanelClosed { panel: String },
-    PanelAction { panel: String, id: String },
-    PanelInput { panel: String, text: String },
-    PaneOpened { pane: Pane },
-    PaneClosed { pane: Pane },
+    Command {
+        command: String,
+    },
+    PanelOpened {
+        panel: String,
+    },
+    PanelTarget {
+        panel: String,
+        revision: u64,
+        target: Option<PanelTarget>,
+    },
+    PanelClosed {
+        panel: String,
+    },
+    PanelAction {
+        panel: String,
+        id: String,
+    },
+    PanelInput {
+        panel: String,
+        text: String,
+    },
+    PaneOpened {
+        pane: Pane,
+    },
+    PaneClosed {
+        pane: Pane,
+    },
     SettingsChanged,
-    ActionResult { id: Option<Id>, result: Outcome },
-    Output { id: Option<Id>, text: String },
+    ActionResult {
+        id: Option<Id>,
+        result: Outcome,
+    },
+    Output {
+        id: Option<Id>,
+        text: String,
+    },
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PanelTarget {
+    Local,
+    Ssh { host: String, args: Vec<String> },
 }
 
 /// A pane as a plugin sees it: an opaque ID, and its details only with
@@ -93,6 +127,7 @@ pub enum Action {
     Ready,
     SetPanel {
         panel: String,
+        revision: Option<u64>,
         #[serde(default)]
         items: Vec<Item>,
     },
@@ -152,8 +187,13 @@ impl Action {
             .to_owned()
         })?;
         match action {
-            Action::SetPanel { panel, items } => Ok(Action::SetPanel {
+            Action::SetPanel {
                 panel,
+                revision,
+                items,
+            } => Ok(Action::SetPanel {
+                panel,
+                revision,
                 items: panel::checked(items)?,
             }),
             action => Ok(action),
@@ -622,7 +662,7 @@ mod tests {
     /// The items Tern took from a `set_panel` with `items`.
     fn items_of(items: Value) -> Vec<Item> {
         match Action::parse(&set_panel(items.clone())) {
-            Ok(Action::SetPanel { panel, items }) => {
+            Ok(Action::SetPanel { panel, items, .. }) => {
                 assert_eq!(panel, "containers");
                 items
             }

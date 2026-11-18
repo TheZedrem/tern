@@ -156,6 +156,16 @@ impl TerminalPane {
             .then(|| ssh::target_label(&self.launch.command.args))
     }
 
+    pub fn plugin_target(&self) -> crate::plugins::PanelTarget {
+        match self.ssh_target() {
+            Some(host) => crate::plugins::PanelTarget::Ssh {
+                host,
+                args: self.launch.command.args.clone(),
+            },
+            None => crate::plugins::PanelTarget::Local,
+        }
+    }
+
     /// What starts a new SFTP connection to this SSH pane's host, with the
     /// same options as the pane (spec 0008, Model). It gets a token of its
     /// own, and its prompts open this pane's dialog, marked as the SFTP

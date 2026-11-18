@@ -17,6 +17,8 @@ use std::rc::Rc;
 /// moment its plugin is found enabled until it is disabled, whether or not
 /// the sidebar exists yet, so what a plugin sent is there when it's shown.
 pub(super) struct Plugins {
+    last_target: Option<(PanelId, Option<LeafId>)>,
+    revision: u64,
     pub(super) host: Entity<Host>,
     panels: Vec<(PanelId, Entity<PluginPanel>)>,
     /// Requests waiting on a pane's bar (spec 0016, Confirmation).
@@ -82,6 +84,8 @@ impl Workspace {
         .detach();
         host.update(cx, |host, cx| host.discover(cx));
         self.plugins = Some(Plugins {
+            last_target: None,
+            revision: 0,
             host,
             panels: Vec::new(),
             requests: Vec::new(),
@@ -201,11 +205,19 @@ impl Workspace {
         let host = plugins.host.clone();
         let view = |panel: &str| plugins.panel(plugin, panel).map(|(_, view)| view.clone());
         match action {
-            Action::SetPanel { panel, items } => {
-                if let Some(view) = view(panel) {
-                    let items = items.clone();
-                    view.update(cx, |view, cx| view.set_items(items, window, cx));
+            Action::SetPanel {
+                panel,
+                items,
+                revision,
+            } => {
+                let Some((id, view)) = plugins.panel(plugin, panel) else {
+                    return;
+                };
+                let active = plugins.last_target.as_ref().map(|(last, _)| last);
+                if revision.is_some_and(|r| r != plugins.revision || active != Some(id)) {
+                    return;
                 }
+                view.update(cx, |view, cx| view.set_items(items.clone(), window, cx));
             }
             Action::AppendLog { panel, text } => {
                 if let Some(view) = view(panel) {
@@ -271,6 +283,11 @@ impl Workspace {
         let Some(host) = self.plugin_host() else {
             return;
         };
+        if matches!(event, PluginPanelEvent::Restart)
+            && let Some(plugins) = &mut self.plugins
+        {
+            plugins.last_target = None;
+        }
         host.update(cx, |host, cx| match event {
             PluginPanelEvent::Action(id) | PluginPanelEvent::Command { id, .. } => {
                 host.panel_action(plugin, panel, id, cx)
@@ -286,15 +303,51 @@ impl Workspace {
     /// A plugin's panel came on screen (`shown`) or left it: its plugin is
     /// told (spec 0018, Module surface).
     pub(super) fn plugin_panel_shown(&mut self, id: &PanelId, shown: bool, cx: &mut Context<Self>) {
-        let (Some(plugins), PanelId::Plugin { plugin, panel }) = (&self.plugins, id) else {
+        let (Some(plugins), PanelId::Plugin { plugin, panel }) = (&mut self.plugins, id) else {
             return;
         };
+        plugins.last_target = None;
         plugins.host.update(cx, |host, cx| {
             if shown {
                 host.panel_opened(plugin, panel, cx);
             } else {
                 host.panel_closed(plugin, panel, cx);
             }
+        });
+    }
+
+    pub(super) fn sync_plugin_target(
+        &mut self,
+        id: &PanelId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(plugins), PanelId::Plugin { plugin, panel }) = (&mut self.plugins, id) else {
+            return;
+        };
+        let Some(granted) = plugins.host.read(cx).follows_pane(plugin) else {
+            plugins.last_target = None;
+            return;
+        };
+        let leaf = self.tabs.active().focused;
+        let leaf = (granted && self.panes.contains_key(&leaf)).then_some(leaf);
+        if plugins
+            .last_target
+            .as_ref()
+            .is_some_and(|(last, pane)| last == id && *pane == leaf)
+        {
+            return;
+        }
+        plugins.last_target = Some((id.clone(), leaf));
+        plugins.revision += 1;
+        if let Some((_, view)) = plugins.panel(plugin, panel) {
+            view.update(cx, |view, cx| view.set_items(Vec::new(), window, cx));
+        }
+        let target = leaf
+            .and_then(|leaf| self.panes.get(&leaf))
+            .map(|pane| pane.read(cx).plugin_target());
+        plugins.host.update(cx, |host, cx| {
+            host.panel_target(plugin, panel, target, plugins.revision, cx)
         });
     }
 }
@@ -352,6 +405,8 @@ pub(super) mod tests {
             .detach();
             host.update(cx, |host, cx| host.discover(cx));
             workspace.plugins = Some(Plugins {
+                last_target: None,
+                revision: 0,
                 host: host.clone(),
                 panels: Vec::new(),
                 requests: Vec::new(),
@@ -372,6 +427,69 @@ pub(super) mod tests {
             sidebar.update(cx, |sidebar, cx| sidebar.show(id, cx));
         });
         rig.draw();
+    }
+
+    #[gpui::test]
+    fn visible_plugin_panel_follows_the_selected_terminal(cx: &mut TestAppContext) {
+        let lab = Lab::new("workspace-panel-target");
+        let panel_spec = "panels: [{ id: inventory, title: Inventory }]\nrights: [pane_info]\n";
+        let ordinary = lab.plugin("ordinary", "stay", panel_spec);
+        let follows = lab.plugin(
+            "follows",
+            "stay",
+            &format!("{panel_spec}follow_pane: true\n"),
+        );
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        let allowed = || grant("stay", &[plugins::Right::PaneInfo], &[]);
+        let host = start(
+            &mut rig,
+            &lab,
+            &[("follows", allowed()), ("ordinary", allowed())],
+        );
+        rig.keys("ctrl-shift-s");
+        show(&mut rig, &panel("follows", "inventory"));
+        let got = wait_for_events(rig.cx, &follows, 2);
+        assert_eq!(names(&got), ["panel_opened", "panel_target"]);
+        assert_eq!(got[1]["target"], serde_json::json!({ "kind": "local" }));
+
+        rig.keys("alt-2");
+        let got = wait_for_events(rig.cx, &follows, 3);
+        assert_eq!(got[2]["target"]["kind"], "ssh");
+        assert_eq!(got[2]["target"]["host"], "me@prod.example.com");
+
+        let local = got[1]["revision"].as_u64().expect("local revision");
+        let ssh = got[2]["revision"].as_u64().expect("SSH revision");
+        assert_ne!(local, ssh);
+        let inventory = view(&mut rig, "follows", "inventory");
+        let row = |name: &str| Item::Text { text: name.into() };
+        let reply = |revision, name| Action::SetPanel {
+            panel: "inventory".into(),
+            revision: Some(revision),
+            items: vec![row(name)],
+        };
+        carry_out(&mut rig, "follows", reply(ssh, "on prod"));
+        inventory.read_with(rig.cx, |view, _| assert_eq!(view.items(), [row("on prod")]));
+        carry_out(&mut rig, "follows", reply(local, "old local result"));
+        inventory.read_with(rig.cx, |view, _| assert_eq!(view.items(), [row("on prod")]));
+
+        let revoked = granted(&[
+            ("follows", grant("stay", &[], &[])),
+            ("ordinary", allowed()),
+        ]);
+        host.update(rig.cx, |host, cx| host.set_granted(revoked, cx));
+        let got = wait_for_events(rig.cx, &follows, 4);
+        assert_eq!(got[3]["event"], "panel_target");
+        assert_eq!(got[3].get("target"), Some(&serde_json::Value::Null));
+
+        show(&mut rig, &panel("ordinary", "inventory"));
+        rig.keys("alt-3");
+        rig.keys("ctrl-shift-s");
+        let got = wait_for_events(rig.cx, &ordinary, 2);
+        assert_eq!(names(&got), ["panel_opened", "panel_closed"]);
+        assert_eq!(
+            names(&wait_for_events(rig.cx, &follows, 5))[4],
+            "panel_closed"
+        );
     }
 
     /// The view of `plugin`'s `panel`.
@@ -574,6 +692,7 @@ pub(super) mod tests {
             view(&mut rig, "docker", "logs"),
         );
         let fill = Action::SetPanel {
+            revision: None,
             panel: "logs".into(),
             items: vec![Item::Text {
                 text: "pulling".into(),

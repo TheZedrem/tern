@@ -1,7 +1,7 @@
 ---
 status: implemented  # draft | approved | implemented
 phase: 5
-tasks: [T-064, T-080, T-049, T-084, T-085, T-069]
+tasks: [T-064, T-080, T-049, T-084, T-085, T-069, T-097]
 related: [spec 0003, spec 0004, spec 0006, spec 0008, spec 0009, spec 0013, spec 0016, spec 0017, threat model 0003, threat model 0005, OQ-036, OQ-038, OQ-039]
 ---
 
@@ -249,8 +249,9 @@ meant for the shell.
    has one, the "Show files" button if it is an SSH pane without a
    session, Local in a local pane's folder otherwise. The sidebar stays
    open and on Files. Port forwards follows the active pane the same way
-   and leaves with it (flow 5); SSH hosts and plugins' panels don't
-   change at all. A pane's prompts still open that pane's
+   and leaves with it (flow 5). The SSH hosts panel stays unchanged.
+   Visible plugin panels follow the active terminal when their manifest
+   opts in under spec 0016. A pane's prompts still open that pane's
    dialog (spec 0008, flow 1).
 9. **No room:** in a window too narrow for 200 px beside the panes'
    minimum (spec 0003), the sidebar isn't drawn; its flag stays, and it

@@ -63,6 +63,7 @@ impl Subscription {
 /// A usable manifest: checked, its texts cleaned by the title rules.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Manifest {
+    pub follow_pane: bool,
     pub name: String,
     pub version: String,
     /// The command line on this OS, as written: what the user confirms.
@@ -203,6 +204,8 @@ struct Versioned {
 
 #[derive(Deserialize)]
 struct Raw {
+    #[serde(default)]
+    follow_pane: bool,
     id: String,
     name: Scalar,
     #[serde(default)]
@@ -324,6 +327,7 @@ pub fn parse(folder_name: &str, text: &str) -> Result<Manifest, String> {
         .ok_or("its `run` names no program for this system")?;
     check_program(&run[0])?;
     Ok(Manifest {
+        follow_pane: raw.follow_pane,
         name,
         version: shown(&raw.version.map(Scalar::text).unwrap_or_default(), 32),
         run,

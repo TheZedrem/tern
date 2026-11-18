@@ -18,7 +18,7 @@ mod requests;
 pub use listing::ListedPlugin;
 pub use manifest::{FieldKind, Right, Subscription};
 pub use panels::ListedPanel;
-pub use protocol::{Action, Id, Outcome, PaneInfo};
+pub use protocol::{Action, Id, Outcome, PaneInfo, PanelTarget};
 
 use crate::config::PluginSettings;
 use futures::StreamExt;
@@ -321,6 +321,7 @@ impl Host {
         if self.plugins[ix].running.is_none() {
             self.spawn(ix, cx);
         }
+        let pane_info = self.holds(ix, Right::PaneInfo);
         let plugin = &mut self.plugins[ix];
         let Some(running) = &mut plugin.running else {
             return;
@@ -328,9 +329,12 @@ impl Host {
         if running.stopping || !running.written || running.asked == 0 {
             return;
         }
-        let Some(event) = plugin.queue.pop_front() else {
+        let Some(mut event) = plugin.queue.pop_front() else {
             return;
         };
+        if !pane_info && let Event::PanelTarget { target, .. } = &mut event {
+            *target = None;
+        }
         let settings = self
             .granted
             .get(&plugin.id)
@@ -1950,6 +1954,54 @@ switch ($mode) {
 
     /// A manifest's panel `containers`.
     const ONE_PANEL: &str = "panels: [{ id: containers, title: Containers }]\n";
+
+    #[gpui::test]
+    fn a_panel_target_requires_opt_in_and_current_pane_info(cx: &mut TestAppContext) {
+        let lab = Lab::new("panel-target-rights");
+        let ordinary = format!("{ONE_PANEL}rights: [pane_info]\n");
+        let plain = lab.plugin("ordinary", "stay", &ordinary);
+        let follows = lab.plugin("follows", "stay", &format!("{ordinary}follow_pane: true\n"));
+        let ticked = || grant("stay", &[Right::PaneInfo], &[]);
+        let (host, _seen) = lab.host(cx, [("ordinary", ticked()), ("follows", ticked())]);
+        let target = || {
+            Some(PanelTarget::Ssh {
+                host: "ada@work".into(),
+                args: vec!["-l".into(), "ada".into(), "work".into()],
+            })
+        };
+        host.update(cx, |host, cx| {
+            for plugin in ["ordinary", "follows"] {
+                host.panel_opened(plugin, "containers", cx);
+                host.panel_target(plugin, "containers", target(), 1, cx);
+                host.panel_action(plugin, "containers", "refresh", cx);
+            }
+        });
+        let ordinary = wait_for_events(cx, &plain, 2);
+        assert_eq!(names(&ordinary), ["panel_opened", "panel_action"]);
+        let opted_in = wait_for_events(cx, &follows, 3);
+        assert_eq!(
+            names(&opted_in),
+            ["panel_opened", "panel_target", "panel_action"]
+        );
+        assert_eq!(
+            opted_in[1]["target"],
+            serde_json::json!({
+                "kind": "ssh", "host": "ada@work", "args": ["-l", "ada", "work"]
+            })
+        );
+
+        regrant(
+            &host,
+            cx,
+            [("ordinary", ticked()), ("follows", grant("stay", &[], &[]))],
+        );
+        host.update(cx, |host, cx| {
+            host.panel_target("follows", "containers", target(), 2, cx)
+        });
+        let after = wait_for_events(cx, &follows, 4);
+        assert_eq!(after[3]["event"], "panel_target");
+        assert_eq!(after[3].get("target"), Some(&Value::Null));
+    }
 
     /// What the host lists of plugin `id`'s panels.
     fn listed(host: &Entity<Host>, cx: &mut TestAppContext, id: &str) -> Vec<ListedPanel> {

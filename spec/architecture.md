@@ -58,6 +58,8 @@ a corner.
 - **The store only goes online when the user asks.** Browsing and
   installing are user-started; update checks are opt-in. Downloads are
   verified against a hash in the registry index.
+- **Docker / Compose (phase 5).** An optional read-only plugin follows the
+  active terminal in the sidebar (specs 0016 and 0018).
 
 **Considered.** Ideas that aren't committed to a phase yet. They get no
 specs or tasks until they're promoted to one.
@@ -72,9 +74,6 @@ specs or tasks until they're promoted to one.
   Tern runs no model and holds no API keys. Needs Phase 5. Terminal output
   carries secrets, so only what the user picks per request is handed to
   the harness.
-- **Docker / Compose plugin.** A plugin that shows running containers in a
-  sidebar, possibly with controls to attach, view logs and restart. Needs
-  Phase 5.
 - **S3 and SMB.** Browse and transfer files in S3 buckets and SMB shares
   as plugins that add a target to the file browser (spec 0013). Needs
   Phase 5.

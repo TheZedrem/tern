@@ -91,7 +91,7 @@ plugins (data read by the boot path), and the app sidebar's own layout
 |---|---|---|---|---|
 | Terminal output sent by `read_output` | Can be anything: Art. 4(1) personal data, Art. 9 special categories, secrets | Leaves Tern only per Allow, exactly as previewed; never logged, never kept (ground rule 4) | Memory, then the plugin's | Until delivered; the plugin's own after that |
 | Text typed by `fill_command` and `run_command` | Can be anything the plugin chose | Untrusted text (§Security 1); never logged | Memory | Until carried out or dropped |
-| Pane details (title, cwd, profile, host), with `pane_info` | Art. 4(1): names the user's accounts and hosts; a title can carry what the shell put there | Sent only with the right granted | Memory, then the plugin's | The plugin's |
+| Pane details (title, cwd, profile, host), with `pane_info` | Art. 4(1): names the user's accounts and hosts; a title can carry what the shell put there. A pane-following panel also receives the SSH alias, user, port and identity-file path. | Sent only with the right granted. Queued panel targets are checked again at delivery. | Memory, then the plugin's | The plugin's |
 | Plugin settings | Whatever the plugin asks for; Tern stores no secrets (spec 0016) | Plain text in `config.yaml`, which roams on Windows | `config.yaml` | Until the user changes it |
 | Panel contents, notices, plugin log (stderr) | Can be anything the plugin received or produced, terminal text included | Untrusted text; memory only, never written to disk | Memory | Until the plugin restarts or Tern quits |
 

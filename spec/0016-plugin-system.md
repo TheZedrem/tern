@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 5
-tasks: [T-064, T-065, T-066, T-067, T-068, T-069, T-070, T-071, T-096]
+tasks: [T-064, T-065, T-066, T-067, T-068, T-069, T-070, T-071, T-096, T-097]
 related: [spec 0001, spec 0004, spec 0005, spec 0009, spec 0013, spec 0018, threat model 0005, OQ-031 ✅, OQ-032 ✅, OQ-035 ✅, OQ-037]
 ---
 
@@ -343,6 +343,24 @@ after the first frame on a background thread. T-066 reports
 - STRIDE model: [threat model 0005](threat-model/0005-plugins.md). Its
   mitigations are in this spec; the owner signed off its residual risks
   in OQ-035.
+
+**Docker sidebar (T-097).** A manifest may set `follow_pane: true`. Its
+visible panel receives `panel_target` on opening, restarting, changing
+active terminals or changing the pane-info grant. The target is null
+without that grant or a terminal. Otherwise it identifies Local or SSH.
+SSH includes the target label and the connection arguments for host, user,
+port and identity-file path. It carries no key material or askpass state.
+Ordinary panels keep their existing events. A target event carries a
+revision. Echoing it on `set_panel` lets Tern discard an update that
+arrived after the user changed targets.
+
+The optional Docker plugin uses this event to show running container
+names, images and status, plus Compose project names, status and reported
+config paths. Opening the panel, changing target or clicking Refresh
+queries that machine. Errors and empty inventories are shown separately.
+A late response cannot replace a newer target. Opening Tern starts no
+Docker query. SSH uses noninteractive host-verified OpenSSH and fixed
+Docker list commands. No inventory is persisted.
 
 ## Acceptance criteria
 
