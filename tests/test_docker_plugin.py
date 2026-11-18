@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import shlex
 import subprocess
 import threading
 import unittest
@@ -34,14 +35,19 @@ class DockerPanelTests(unittest.TestCase):
                         self.assertIn("stricthostkeychecking=yes", options)
                         start = argv.index("-l")
                         self.assertEqual(list(argv[start:start + 3]), SSH["args"])
-                    command = " ".join(argv)
-                    if "compose ls" in command:
+                        shell, flag, script = shlex.split(argv[-1])
+                        self.assertEqual([shell, flag], ["sh", "-c"])
+                        command = shlex.split(script.rsplit("exec docker ", 1)[1])
+                    else:
+                        command = argv
+                    if "compose" in command:
                         self.assertIn("--all", command)
                         calls.append("projects")
                         output = json.dumps([project])
                     else:
-                        self.assertIn("ps", command.split())
-                        self.assertFalse({"-a", "--all"} & set(command.split()))
+                        self.assertIn("ps", command)
+                        self.assertEqual(command[command.index("--format") + 1], "{{json .}}")
+                        self.assertFalse({"-a", "--all"} & set(command))
                         calls.append("containers")
                         output = json.dumps(container)
                     return subprocess.CompletedProcess(argv, 0, stdout=output, stderr="")
@@ -73,6 +79,16 @@ class DockerPanelTests(unittest.TestCase):
         self.assertIn("no compose projects", empty)
         self.assertIn("daemon offline", failed)
         self.assertNotIn("no running containers", failed)
+
+    def test_malformed_container_list_reports_the_query_without_echoing_output(self):
+        output = "private-remote-output"
+        with patch.object(plugin, "docker", return_value=output), \
+             patch("sys.stderr", new_callable=io.StringIO) as stderr, \
+             patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            panel = json.dumps(plugin.inventory(SSH)).lower()
+        self.assertIn("container list", panel)
+        self.assertNotIn("docker unavailable", panel)
+        self.assertNotIn(output, panel + stderr.getvalue() + stdout.getvalue())
 
     def test_switching_targets_drops_the_inflight_result(self):
         local_started = threading.Event()

@@ -57,7 +57,7 @@ def text(value):
 def inventory(target):
     items = [text("Running containers")]
     try:
-        output = docker(target, ["ps", "--format", "json"])
+        output = docker(target, ["ps", "--format", "{{json .}}"])
         containers = [json.loads(line) for line in output.splitlines() if line.strip()]
         for entry in containers[:200]:
             items.append({"type": "row", "text": entry["Names"][:200],
@@ -66,8 +66,10 @@ def inventory(target):
             items.append(text("No running containers."))
         elif len(containers) > 200:
             items.append(text(f"Showing 200 of {len(containers)} containers."))
-    except (RuntimeError, ValueError, KeyError, TypeError) as error:
+    except RuntimeError as error:
         return [text(f"Docker unavailable: {error}")]
+    except (ValueError, KeyError, TypeError):
+        return [text("Could not read the container list returned by docker ps.")]
     items.append(text("Compose projects"))
     try:
         projects = json.loads(docker(target, ["compose", "ls", "--all", "--format", "json"]))
