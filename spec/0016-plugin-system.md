@@ -1,7 +1,7 @@
 ---
 status: approved     # draft | approved | implemented
 phase: 5
-tasks: [T-064, T-065, T-066, T-067, T-068, T-069, T-070, T-071]
+tasks: [T-064, T-065, T-066, T-067, T-068, T-069, T-070, T-071, T-096]
 related: [spec 0001, spec 0004, spec 0005, spec 0009, spec 0013, spec 0018, threat model 0005, OQ-031 ✅, OQ-032 ✅, OQ-035 ✅, OQ-037]
 ---
 
