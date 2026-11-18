@@ -308,6 +308,8 @@ impl SettingsView {
                 let control = div()
                     .flex()
                     .flex_col()
+                    .flex_1()
+                    .min_w_0()
                     .gap(px(4.))
                     .py(px(4.))
                     .children(lines.into_iter().map(|line| div().text_sm().child(line)))

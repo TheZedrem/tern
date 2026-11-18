@@ -723,6 +723,7 @@ impl Render for SettingsView {
                     div()
                         .id("settings-body")
                         .flex_1()
+                        .min_w_0()
                         .overflow_y_scroll()
                         .px(px(16.))
                         .pb(px(16.))

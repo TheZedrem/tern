@@ -192,12 +192,15 @@ impl SettingsView {
                 div()
                     .flex()
                     .flex_col()
+                    .w_full()
+                    .whitespace_normal()
                     .gap(px(6.))
                     .text_sm()
                     .child(WARNING)
                     .child("It runs this command line:")
                     .child(
                         div()
+                            .debug_selector(|| "plugins-enable-command".into())
                             .pl(px(8.))
                             .font_family(MONOSPACE)
                             .child(command.clone()),
@@ -212,8 +215,15 @@ impl SettingsView {
         let intro = div()
             .flex()
             .flex_col()
+            .flex_1()
+            .min_w_0()
             .gap(px(6.))
-            .child(div().text_sm().child(WARNING))
+            .child(
+                div()
+                    .debug_selector(|| "plugins-trust-warning".into())
+                    .text_sm()
+                    .child(WARNING),
+            )
             .child(
                 Button::new("plugins-open-folder")
                     .label("Open plugins folder")
@@ -689,6 +699,76 @@ mod tests {
         let rows = rows(&mut screen);
         assert_eq!(rows[0].0, "Trusted sources only");
         assert!(rows.len() == 2 && rows[1].0 == "None", "{rows:?}");
+    }
+
+    #[gpui::test]
+    fn the_full_trust_warning_fits_the_plugins_page(cx: &mut TestAppContext) {
+        let mut screen = open_screen_on(Config::default(), None, cx);
+        let viewport = gpui::size(px(700.), px(500.));
+        screen.cx.simulate_resize(viewport);
+        screen.click("settings-tab-Plugins");
+        draw(&mut screen);
+
+        let warning = screen.cx.debug_bounds("plugins-trust-warning").unwrap();
+        assert!(warning.right() <= viewport.width, "{warning:?}");
+        assert!(WARNING.ends_with("install plugins only from a source you trust."));
+        assert_wrapped_text_fits(&mut screen, warning, WARNING.into());
+    }
+
+    #[gpui::test]
+    fn the_enable_dialog_fits_a_command_with_a_long_path(cx: &mut TestAppContext) {
+        let lab = Lab::new("settings-tab-long-command");
+        let path = format!("assets/{}.json", "a".repeat(120));
+        lab.folder(
+            "example",
+            &format!(
+                "api: 1\nid: example\nname: Example\nrun: [example, --config, {path}, --verbose]\n"
+            ),
+        );
+        let host = found(&lab, cx);
+        let mut screen = open_screen_on(Config::default(), Some(host), cx);
+        let viewport = gpui::size(px(700.), px(500.));
+        screen.cx.simulate_resize(viewport);
+        ask_to_enable(&mut screen, "example");
+
+        let dialog = screen.cx.debug_bounds("dialog-0").unwrap();
+        let command = screen.cx.debug_bounds("plugins-enable-command").unwrap();
+        assert!(dialog.right() <= viewport.width, "{dialog:?}");
+        assert!(dialog.contains(&command.origin) && dialog.contains(&command.bottom_right()));
+        assert_wrapped_text_fits(
+            &mut screen,
+            command,
+            format!("example --config {path} --verbose").into(),
+        );
+    }
+
+    fn assert_wrapped_text_fits(
+        screen: &mut Screen,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        text: SharedString,
+    ) {
+        screen.cx.update(|window, _| {
+            let style = window.text_style();
+            let rem = window.rem_size();
+            let font_size = gpui::rems(0.875).to_pixels(rem);
+            let line_height = window.pixel_snap(style.line_height.to_pixels(font_size.into(), rem));
+            let lines = window
+                .text_system()
+                .shape_text(
+                    text.clone(),
+                    font_size,
+                    &[style.to_run(text.len())],
+                    Some(bounds.size.width),
+                    None,
+                )
+                .unwrap();
+            let full_height = lines[0].size(line_height).height;
+            assert!(full_height > line_height);
+            assert!(
+                bounds.size.height >= full_height,
+                "{bounds:?}, expected {full_height:?}"
+            );
+        });
     }
 
     /// AC1, flow 2: enabling asks first and writes nothing until it is
