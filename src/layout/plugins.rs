@@ -409,6 +409,8 @@ pub(super) mod tests {
         lab.ends_with(rig.cx);
         let (root, granted) = (lab.root(), granted(plugins));
         let host = rig.workspace.update_in(rig.cx, |workspace, window, cx| {
+            // Advancing the click guard must not let silent-boot startup replace the lab host.
+            workspace.booted = true;
             let host = cx.new(|cx| Host::new(Some(root), granted, cx));
             cx.subscribe_in(&host, window, |this, _, event, window, cx| match event {
                 HostEvent::Notice(_) => {}
@@ -518,7 +520,7 @@ pub(super) mod tests {
         );
         let mut rig = rig(&local_and_two_hosts(), cx);
         let rights = [plugins::Right::PaneInfo, plugins::Right::OpenTab];
-        let _host = start(&mut rig, &lab, &[("actions", grant("stay", &rights, &[]))]);
+        let host = start(&mut rig, &lab, &[("actions", grant("stay", &rights, &[]))]);
         rig.keys("ctrl-shift-s");
         show(&mut rig, &panel("actions", "main"));
         let local = wait_for_events(rig.cx, &plugin, 2)[1]["revision"]
@@ -528,14 +530,15 @@ pub(super) mod tests {
         let remote = wait_for_events(rig.cx, &plugin, 3)[2]["revision"]
             .as_u64()
             .unwrap();
-        let button = |rig: &mut Rig<'_>, revision| {
+        let button = |rig: &mut Rig<'_>, revision, confirm_on_click| {
             rig.workspace.update_in(rig.cx, |workspace, window, cx| {
                 workspace.plugin_button(
                     "actions",
                     crate::plugins::command::Command::OpenSplit {
-                        argv: vec!["docker".into(), "version".into()],
+                        argv: vec!["hostname".into()],
                         title: "Engine".into(),
                         revision,
+                        confirm_on_click,
                     },
                     window,
                     cx,
@@ -547,9 +550,9 @@ pub(super) mod tests {
                 workspace.plugins.as_ref().unwrap().requests.len()
             })
         };
-        button(&mut rig, local);
+        button(&mut rig, local, false);
         assert_eq!(pending(&mut rig), 0, "a stale local button targeted SSH");
-        button(&mut rig, remote);
+        button(&mut rig, remote, false);
         assert_eq!(pending(&mut rig), 1);
         rig.keys("alt-1");
         // Deny has no click guard. Answering on the wrong host must leave
@@ -559,6 +562,74 @@ pub(super) mod tests {
         rig.keys("alt-2");
         rig.run(crate::commands::DenyPluginRequest);
         assert_eq!(pending(&mut rig), 0);
+
+        button(&mut rig, local, true);
+        let revoked = granted(&[("actions", grant("stay", &[plugins::Right::PaneInfo], &[]))]);
+        host.update(rig.cx, |host, cx| host.set_granted(revoked, cx));
+        let current = rig.workspace.read_with(rig.cx, |workspace, _| {
+            workspace.plugins.as_ref().unwrap().revision
+        });
+        button(&mut rig, current, true);
+        assert_eq!(pending(&mut rig), 0);
+        rig.workspace.read_with(rig.cx, |workspace, _| {
+            assert_eq!(workspace.tabs.active().root.leaves(), [2]);
+        });
+    }
+
+    #[gpui::test]
+    fn enter_on_a_settled_shell_preview_opens_one_split(cx: &mut TestAppContext) {
+        let lab = Lab::new("workspace-shell-preview");
+        let plugin = lab.plugin(
+            "actions",
+            "stay",
+            "panels: [{ id: main, title: Main }]\nrights: [pane_info, open_tab]\nfollow_pane: true\n",
+        );
+        let mut rig = rig(&local_and_two_hosts(), cx);
+        let rights = [plugins::Right::PaneInfo, plugins::Right::OpenTab];
+        start(&mut rig, &lab, &[("actions", grant("stay", &rights, &[]))]);
+        rig.keys("ctrl-shift-s");
+        show(&mut rig, &panel("actions", "main"));
+        let revision = wait_for_events(rig.cx, &plugin, 2)[1]["revision"]
+            .as_u64()
+            .unwrap();
+        let preview = |argv: Vec<String>| Action::SetPanel {
+            panel: "main".into(),
+            revision: Some(revision),
+            items: vec![Item::Button {
+                id: "shell".into(),
+                label: "Shell".into(),
+                command: Some(crate::plugins::command::Command::OpenSplit {
+                    argv,
+                    title: "Preview".into(),
+                    revision,
+                    confirm_on_click: true,
+                }),
+            }],
+        };
+        let state = |rig: &mut Rig<'_>| {
+            rig.workspace.read_with(rig.cx, |workspace, _| {
+                (
+                    workspace.tabs.active().root.leaves().len(),
+                    workspace.plugins.as_ref().unwrap().requests.len(),
+                )
+            })
+        };
+        let guard = crate::sidebar::CLICK_GUARD;
+        carry_out(&mut rig, "actions", preview(vec!["whoami".into()]));
+        rig.cx.executor().advance_clock(guard);
+        carry_out(&mut rig, "actions", preview(vec!["hostname".into()]));
+        assert_eq!(state(&mut rig), (1, 0));
+        rig.run(FocusSidebar);
+        assert!(rig.sidebar_has_the_keyboard());
+        rig.keys("down enter");
+        assert_eq!(
+            state(&mut rig),
+            (1, 0),
+            "the changed command needs its guard"
+        );
+        rig.cx.executor().advance_clock(guard);
+        rig.keys("enter");
+        assert_eq!(state(&mut rig), (2, 0), "one activation confirms one split");
     }
 
     #[gpui::test]

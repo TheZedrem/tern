@@ -128,7 +128,8 @@ impl Workspace {
             return;
         };
         if let Command::OpenSplit { revision, .. } | Command::EditFile { revision, .. } = &command
-            && !self.matches_plugin_target(plugin, pane, *revision)
+            && (host.read(cx).follows_pane(plugin) != Some(true)
+                || !self.matches_plugin_target(plugin, pane, *revision))
         {
             show_notice(
                 "The selected terminal has changed. Select the action again.".into(),
@@ -137,44 +138,55 @@ impl Workspace {
             );
             return;
         }
-        if let Command::Fill { text } = &command {
-            if let Some(why) = command.refusal() {
-                let why = format!("`{kind}` button was refused: {why}");
-                host.update(cx, |host, cx| host.dropped(plugin, why, cx));
-                return;
-            }
-            let typed = self
-                .panes
-                .get(&pane)
-                .is_some_and(|view| view.read(cx).type_for_plugin(text, false));
-            let outcome = if typed {
-                Outcome::Allowed
-            } else {
-                Outcome::Refused
-            };
-            let label = self.pane_label(pane, cx);
+        if let Some(why) = command.refusal() {
             host.update(cx, |host, cx| {
-                host.answered(
-                    plugin,
-                    "fill_command button",
-                    &label,
-                    None,
-                    outcome,
-                    false,
-                    cx,
-                );
+                host.dropped(plugin, format!("`{kind}` button was refused: {why}"), cx)
             });
             return;
         }
-        self.ask(
-            plugin,
-            Asked::Command(command),
-            Some(pane),
-            None,
-            true,
-            window,
-            cx,
-        );
+        let outcome = match &command {
+            Command::Fill { text } => {
+                if self
+                    .panes
+                    .get(&pane)
+                    .is_some_and(|view| view.read(cx).type_for_plugin(text, false))
+                {
+                    Outcome::Allowed
+                } else {
+                    Outcome::Refused
+                }
+            }
+            Command::OpenSplit {
+                argv,
+                title,
+                confirm_on_click: true,
+                ..
+            } => self.open_plugin_split(pane, argv, title, window, cx),
+            _ => {
+                self.ask(
+                    plugin,
+                    Asked::Command(command),
+                    Some(pane),
+                    None,
+                    true,
+                    window,
+                    cx,
+                );
+                return;
+            }
+        };
+        let label = self.pane_label(pane, cx);
+        host.update(cx, |host, cx| {
+            host.answered(
+                plugin,
+                &format!("{kind} button"),
+                &label,
+                None,
+                outcome,
+                false,
+                cx,
+            );
+        });
     }
 
     /// Puts `asked` on `pane`'s bar, if the host lets it wait there.
@@ -316,6 +328,29 @@ impl Workspace {
         cx.notify();
     }
 
+    fn open_plugin_split(
+        &mut self,
+        pane: LeafId,
+        argv: &[String],
+        title: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Outcome {
+        let Some((program, args)) = argv.split_first() else {
+            return Outcome::Refused;
+        };
+        let command = crate::terminal::pty::Command {
+            program: program.clone(),
+            args: args.to_vec(),
+            env: Default::default(),
+        };
+        if self.split_command(pane, title.to_owned(), command, None, window, cx) {
+            Outcome::Allowed
+        } else {
+            Outcome::Refused
+        }
+    }
+
     /// Does what the user allowed.
     fn carry_out(
         &mut self,
@@ -333,19 +368,7 @@ impl Workspace {
                 }
             }
             Asked::Command(Command::OpenSplit { argv, title, .. }) => {
-                let Some((program, args)) = argv.split_first() else {
-                    return Outcome::Refused;
-                };
-                let command = crate::terminal::pty::Command {
-                    program: program.clone(),
-                    args: args.to_vec(),
-                    env: Default::default(),
-                };
-                if self.split_command(request.pane, title.clone(), command, None, window, cx) {
-                    Outcome::Allowed
-                } else {
-                    Outcome::Refused
-                }
+                self.open_plugin_split(request.pane, argv, title, window, cx)
             }
             Asked::Command(Command::EditFile { path, .. }) => {
                 let Some(pane) = pane else {

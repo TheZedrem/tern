@@ -23,7 +23,9 @@ Compose v2 on each machine whose inventory you want to see.
 ## Actions
 
 Select a container to inspect its state, health, image, ports, networks and mounts.
-**Shell** starts a separate process in the container. Submit another executable
+Select **Shell** to review the executable. Clicking **Shell** beside the displayed
+command confirms it and opens a split immediately in builds supporting spec 0020.
+Tern 0.10.0 asks for **Allow** on the source pane. Submit another executable
 in the shell field if the image lacks the default shell. **Follow logs** opens
 the latest 100 lines and streams new ones. **Inspect full JSON** opens complete
 inspection output, including any environment secrets. Each opens a confirmed

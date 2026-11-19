@@ -192,12 +192,15 @@ nothing touching a terminal before the user saw and approved it.
   its text (TM-plug-03, -07, -09, -20).
 - **Command buttons [load-bearing].** A button in `set_panel` may carry
   a target-bound `open_split` (argv, title, revision, using the open_tab right) or
-  `edit_file` (absolute path, revision, using the edit_file right). Both require
+  `edit_file` (absolute path, revision, using the edit_file right). By default both show
   confirmation on the originating terminal. See spec 0019. Other buttons carry
   one `fill_command`, `run_command` or `open_tab`. Tern draws it as a
   command button: its label and, under it, all of the text or argv it
   carries, by the untrusted-text rules below, in the terminal's monospace
-  font. Only a `fill_command` button is approved by its click: Tern
+  font. On an `open_split` preview with `confirm_on_click: true`, activation
+  confirms the displayed argv and opens the split immediately (spec 0020).
+  With the field omitted or false, the source pane shows the Allow bar.
+  A `fill_command` button is also approved by its click: Tern
   types the text without a bar, and Enter stays the user's. A click on a
   `run_command` or `open_tab` button raises the confirmation bar above,
   as if the plugin had sent that action then, and nothing runs before
@@ -338,7 +341,8 @@ after the first frame on a background thread. T-066 reports
 - **Trust boundaries:** a new one, Tern ↔ plugin process. Plugin output is
   untrusted input, like escape sequences (§Security 1): plain text only,
   and it never reaches a PTY or a command line without the user's
-  approval above: a bar, or for text that is only typed, a `fill_command` button (§Security 2). Terminal output crosses to a plugin only per
+  approval above: a bar, a `fill_command` button for typing, or the
+  guarded split preview in spec 0020 (§Security 2). Terminal output crosses to a plugin only per
   confirmed `read_output`.
 - **Ground rules:** Tern itself sends nothing. A plugin can, as soon as it
   starts after the first frame: enabling it, after the trusted-source

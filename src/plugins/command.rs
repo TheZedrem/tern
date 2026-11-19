@@ -32,6 +32,8 @@ pub enum Command {
     OpenSplit {
         argv: Vec<String>,
         title: String,
+        #[serde(default)]
+        confirm_on_click: bool,
         revision: u64,
     },
     EditFile {

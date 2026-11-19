@@ -160,7 +160,8 @@ def details(target, row, revision, shell, action, cache):
     elif action == "json":
         items.append(text("Full inspection includes environment variables."))
     items.append({"type": "button", "id": "confirm", "label": label, "command": {
-        "action": "open_split", "title": title, "revision": revision, "argv": argv}})
+        "action": "open_split", "title": title, "revision": revision, "argv": argv,
+        "confirm_on_click": action == "shell"}})
     return items
 
 

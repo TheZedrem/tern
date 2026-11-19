@@ -29,7 +29,8 @@ A container summary opens first. Selecting an action shows its command before co
 ### Flows
 
 1. Shell starts a new interactive process inside the selected container
-   in a new terminal split. Choose a shell appropriate to the container
+   in a new terminal split. The Shell button on the command preview confirms
+   the displayed command directly (spec 0020). Choose a shell appropriate to the container
    OS. Report a missing shell and allow another executable to be chosen.
 2. Inspect shows image, state, health when available, published ports,
    networks and mounts. Full inspection JSON opens on explicit request.

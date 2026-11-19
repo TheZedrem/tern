@@ -209,6 +209,7 @@ class DockerActionTests(unittest.TestCase):
         commands = [item["command"] for item in frame["items"] if "command" in item]
         self.assertEqual(len(commands), 1)
         self.assertEqual(commands[0]["action"], "open_split")
+        self.assertIs(commands[0].get("confirm_on_click", False), shell)
         self.assertEqual(any(item["type"] == "input" for item in frame["items"]), shell)
         return commands[0]
 
