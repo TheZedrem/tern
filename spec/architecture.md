@@ -19,7 +19,7 @@ local, single-user app: no accounts, no backend, no telemetry.
 |---|---|---|
 | 1 — Core terminal | Local shell and local profiles, tabs + splits, shortcuts, clipboard, scrollback, search, command palette, YAML config + themes, session restore | 0001–0005, 0007, 0009 |
 | 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, host import from MobaXterm, Tabby, PuTTY and WinSCP, connect via system `ssh` in a PTY, one file browser over the local disk or any host, drawn as a sidebar next to any pane or as a files pane (with file permissions: view and change mode, owner and group), secrets in the OS keychain; opt-in update check | 0006, 0008, 0010, 0011, 0013, 0014, 0015 |
-| 3 — Command history | Detect the commands the user runs and suggest past ones inline as they type, like Windows Terminal and Warp | — |
+| 3 — Command history | Detect the commands the user runs and suggest past ones inline as they type, like Windows Terminal and Warp; local shells only, through the opt-in snippets | 0021 |
 | 4 — Theming | Edit themes in the app with a live preview, saved as `themes/*.yaml` files (spec 0005) | — |
 | 5 — Plugins | A plugin system: runtime, API and per-plugin permissions; an extensible app sidebar with the SSH hosts as its first built-in panel and plugins adding their own; themes installable as plugins | 0016, 0018 |
 | 6 — Plugin store | Plugin registries the user configures; browse, install and update plugins in the app, with an opt-in update check like spec 0011's | — |
@@ -32,7 +32,7 @@ Only phases that have started get specs and tasks; later phases stay one
 row here. Phase 2 started before Phase 1 finished (owner's call,
 2026-11-04), so its tasks wait for the Phase 1 tasks they build on.
 Phase 7 started ahead of Phases 3–6 (owner's call, 2026-11-11); it builds
-only on Phase 2.
+only on Phase 2. Phase 3 started 2026-11-24.
 
 **Constraints for the plugin phases.** Their specs must settle these;
 until then they're recorded here so earlier work doesn't paint them into
@@ -134,7 +134,7 @@ machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
 One crate. `src/main.rs` is the boot path and does only what the first
 frame needs. Everything else is a module under `src/`:
 
-- `terminal/` — the pane: PTY lifecycle, terminal element, input mapping, search. `mod.rs` holds `TerminalPane` and its render; `launch.rs` starts and restarts the program, `exit.rs` titles and exit handling, `answers.rs` prompt answering, `mouse.rs` mouse, selection and clipboard, `font.rs` font settings, `input.rs` keys and IME, `search.rs` the search bar
+- `terminal/` — the pane: PTY lifecycle, terminal element, input mapping, search. `mod.rs` holds `TerminalPane` and its render; `launch.rs` starts and restarts the program, `exit.rs` titles and exit handling, `answers.rs` prompt answering, `mouse.rs` mouse, selection and clipboard, `font.rs` font settings, `input.rs` keys and IME, `search.rs` the search bar; `osc7.rs` scans the shell-integration reports (spec 0021 renames it `marks.rs` and adds `suggest.rs`, the inline history suggestion)
 - `layout/` — tabs, title bar, split tree, session restore. `mod.rs` holds `Workspace`, `Boot`, the action wiring and render; each feature it hosts has its own file: `session.rs`, `panes.rs`, `files.rs` (files panes and each SSH pane's views for the sidebar), `sidebar.rs` (the sidebar's wiring: commands, placement, saving), `plugins.rs` (the plugin host and its panels), `profiles.rs` (palette and profiles), `reload.rs` (config reload and the settings screen), `closing.rs`, `splits.rs` (splits and drag and drop), `chrome.rs` (tab bar and title bar)
 - `commands/` — actions, keymap, palette
 - `ssh/` — hosts, the ssh command, askpass (spec 0006)
@@ -145,6 +145,7 @@ frame needs. Everything else is a module under `src/`:
 - `settings/` — the settings screen (spec 0009): `mod.rs` the view and shared rows, one file per tab in `pages/`
 - `config/` (`mod.rs` the types, `load.rs` the lenient reader, `edit.rs` in-place edits, `watch.rs` the watcher), `theme.rs`, `session.rs` — files on disk
 - `secrets.rs` — the OS keychain
+- `history/` — command history (spec 0021): the store per shell kind, the never-stored rules and token patterns, matching, and `history.jsonl`
 - `update.rs` — the opt-in release check (spec 0011)
 - `timing.rs`, `bench.rs` — TTFP marks and the `--bench-startup` runner
 - `job.rs` — Windows Job objects, which end a plugin's process tree and every port forward when Tern is gone (OQ-035, TM-fwd-13)
@@ -225,6 +226,7 @@ All local, all plain files the user can read — nothing leaves the machine.
 | Session state | `<data_local_dir>/tern/session.json` | Window size, tab/split layout, each pane's profile, cwd and title; a files pane's target and folder (spec 0013); the sidebar's open flag, width and shown panel (spec 0018) | Overwritten on every save; never scrollback |
 | Update check | `<data_local_dir>/tern/update.json` | Time of the last check | Overwritten on each check (spec 0011) |
 | SFTP edit copies | `<data_local_dir>/tern/edit/<run>/…`, `<run>.lock` | Remote files the user opened for editing (`0600`), and each running Tern's lock | Until their SFTP session ends; a crashed run's after the next launch's first frame (spec 0008) |
+| Command history | `<data_local_dir>/tern/history.jsonl` | Commands local shells ran, by shell kind, minus what spec 0021's never-stored rules and token patterns catch; `0600` on Linux | Until the user clears it or sets `command_history` to `memory` or `off` (spec 0021) |
 | Secrets (Phase 2) | OS keychain | SSH passwords / key passphrases the user chose to remember | Until the user forgets or replaces it (spec 0006) |
 
 `<config_dir>`/`<data_local_dir>` come from the `dirs` crate (XDG on
@@ -271,7 +273,10 @@ disk — it can contain secrets the user typed or printed.
 4. **Self-contained binary.** The default font and icons are embedded.
    Nothing is fetched from a CDN.
 5. **Data minimization.** Session restore stores window size, layout and
-   cwd, not scrollback or command history.
+   cwd, not scrollback. Command history is stored only in its own file,
+   only for local shells, without commands that look like they hold a
+   secret, and the user can keep it in memory, turn it off or clear it
+   (spec 0021).
 
 ## Security (binding)
 

@@ -61,7 +61,7 @@ mapping from keys to bytes. Pane IDs are `u32`, unique per app run.
   vte doesn't parse, so Tern scans the PTY bytes for it itself, with a
   fallback to `/proc/<pid>/cwd` on Linux; unknown on Windows without OSC 7.
   The app ships opt-in shell-integration
-  snippets for bash, zsh and pwsh under `shell-integration/`, which the user
+  snippets for bash, zsh and pwsh under `shell-integration/` (spec 0021 adds command-history reports to them), which the user
   sources from their rc file (OQ-008). Nothing is injected automatically.
   The packages carry them at a fixed path: `/usr/share/tern/shell-integration/`
   in the `.deb` and `.rpm`, `$APPDIR/usr/share/tern/shell-integration/` in
