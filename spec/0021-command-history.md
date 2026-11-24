@@ -1,5 +1,5 @@
 ---
-status: draft        # draft | approved | implemented
+status: approved       # draft | approved | implemented
 phase: 3
 tasks: [T-105, T-106, T-107, T-108]
 related: [spec 0001, spec 0002, spec 0004, spec 0009, OQ-008, OQ-041, threat model 0002]
@@ -123,7 +123,7 @@ Rules:
   a few long hashes (a git SHA given in full, for example) go unrecorded.
   The patterns use the `regex` crate, already in the lockfile through
   `alacritty_terminal` and added as a direct dependency with the owner's
-  OK (asked while this spec is reviewed).
+  OK, given with this spec's approval (2026-11-24).
 
 ### Flows
 
