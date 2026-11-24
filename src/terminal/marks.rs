@@ -18,9 +18,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// Reports longer than this are ignored (TM-escape-10, -19).
 const MAX_REPORT: usize = 4096;
 
-/// The OSC number of Tern's history report, which the snippets in
+/// The OSC number of Tern's history reports, which the snippets in
 /// `shell-integration/` send: `command;<token>;<shell>;<history
-/// number>;<percent-encoded command>`.
+/// number>;<percent-encoded command>` for a command the shell ran, and
+/// `prompt;<token>;<shell>` as each prompt begins.
 const HISTORY_OSC: &[u8] = b"6973";
 
 /// Commands a pane holds until the app records them; more are dropped.
@@ -56,6 +57,8 @@ pub struct Reported {
     /// The history number of the last command report, so a prompt after
     /// a plain Enter isn't recorded again.
     last_number: Mutex<Option<String>>,
+    /// The shell began a prompt the pane hasn't looked at yet.
+    prompt: Mutex<Option<ShellKind>>,
 }
 
 impl Reported {
@@ -66,6 +69,7 @@ impl Reported {
             changed: AtomicBool::new(false),
             commands: Mutex::new(Vec::new()),
             last_number: Mutex::new(None),
+            prompt: Mutex::new(None),
         })
     }
 
@@ -104,6 +108,11 @@ impl Reported {
             .unwrap_or_default()
     }
 
+    /// The shell that began a prompt since the last call, if one did.
+    pub fn take_prompt(&self) -> Option<ShellKind> {
+        self.prompt.lock().ok()?.take()
+    }
+
     fn path(&self) -> Option<String> {
         self.path.lock().ok()?.clone()
     }
@@ -124,8 +133,15 @@ impl Reported {
         if self.remote {
             return;
         }
-        let Some((number, entry)) = parse_history(payload, history_token()) else {
-            return;
+        let (number, entry) = match parse_history(payload, history_token()) {
+            Some(Report::Command(number, entry)) => (number, entry),
+            Some(Report::Prompt(shell)) => {
+                if let Ok(mut prompt) = self.prompt.lock() {
+                    *prompt = Some(shell);
+                }
+                return;
+            }
+            None => return,
         };
         let Ok(mut last) = self.last_number.lock() else {
             return;
@@ -298,18 +314,32 @@ fn parse(payload: &[u8]) -> Option<(String, String)> {
     Some((host, path))
 }
 
-/// The history number and entry of a `command` report carrying `token`.
-/// `None` for another token, an unknown shell, or a command that isn't
-/// UTF-8.
-fn parse_history(payload: &[u8], token: &str) -> Option<(String, Entry)> {
+/// What a history report says.
+enum Report {
+    /// A command the shell ran, with its history number.
+    Command(String, Entry),
+    /// The shell begins a prompt.
+    Prompt(ShellKind),
+}
+
+/// What a history report carrying `token` says. `None` for another token,
+/// an unknown report or shell, or a command that isn't UTF-8.
+fn parse_history(payload: &[u8], token: &str) -> Option<Report> {
     let mut fields = payload.splitn(5, |&byte| byte == b';');
-    if fields.next()? != b"command" || fields.next()? != token.as_bytes() {
+    let report = fields.next()?;
+    if fields.next()? != token.as_bytes() {
         return None;
     }
     let shell = ShellKind::parse(std::str::from_utf8(fields.next()?).ok()?)?;
-    let number = String::from_utf8(fields.next()?.to_vec()).ok()?;
-    let command = String::from_utf8(decode(fields.next()?)?).ok()?;
-    Some((number, Entry { shell, command }))
+    match report {
+        b"command" => {
+            let number = String::from_utf8(fields.next()?.to_vec()).ok()?;
+            let command = String::from_utf8(decode(fields.next()?)?).ok()?;
+            Some(Report::Command(number, Entry { shell, command }))
+        }
+        b"prompt" => Some(Report::Prompt(shell)),
+        _ => None,
+    }
 }
 
 /// Percent-decodes `bytes`; `None` for a malformed escape or a NUL.
@@ -790,5 +820,151 @@ mod tests {
                 entry(ShellKind::Bash, "ls")
             ]
         );
+    }
+
+    /// A prompt report of `shell` with `token`, ended by BEL.
+    fn prompt_report(token: &str, shell: &str) -> Vec<u8> {
+        format!("\x1b]6973;prompt;{token};{shell}\x07").into_bytes()
+    }
+
+    /// Spec 0021, Reports: a prompt report with this run's token says a
+    /// prompt began and carries the shell kind; the pane takes it once.
+    #[test]
+    fn a_prompt_report_with_the_token_is_taken_once_with_its_shell_kind() {
+        for (name, shell) in [
+            ("bash", ShellKind::Bash),
+            ("zsh", ShellKind::Zsh),
+            ("pwsh", ShellKind::Pwsh),
+        ] {
+            let local = Reported::new(false);
+            assert_eq!(local.take_prompt(), None, "before any report");
+            feed(
+                &local,
+                &[b"output\r\n", &prompt_report(history_token(), name), b"$ "],
+            );
+            assert_eq!(local.take_prompt(), Some(shell));
+            assert_eq!(local.take_prompt(), None, "{name}: taking drains it");
+        }
+    }
+
+    #[test]
+    fn a_prompt_report_ended_by_st_is_taken_too() {
+        let local = Reported::new(false);
+        let report = format!("\x1b]6973;prompt;{};zsh\x1b\\", history_token());
+        feed(&local, &[report.as_bytes()]);
+        assert_eq!(local.take_prompt(), Some(ShellKind::Zsh));
+    }
+
+    /// Acceptance criterion 3 and TM-escape-18: "Prompt reports need the
+    /// token too". A forged one in output, with a wrong, cut, longer or
+    /// missing token, begins no prompt.
+    #[test]
+    fn a_prompt_report_with_a_wrong_or_missing_token_is_dropped() {
+        let local = Reported::new(false);
+        let token = history_token();
+        let last = if token.ends_with('0') { '1' } else { '0' };
+        let wrong = format!("{}{last}", &token[..31]);
+        let reports: Vec<Vec<u8>> = vec![
+            prompt_report(&wrong, "bash"),
+            prompt_report("", "bash"),
+            prompt_report(&token[..16], "bash"),
+            prompt_report(&format!("{token}x"), "bash"),
+            b"\x1b]6973;prompt;bash\x07".to_vec(),
+            b"\x1b]6973;prompt\x07".to_vec(),
+            b"\x1b]6973;\x07".to_vec(),
+        ];
+        for report in &reports {
+            feed(&local, &[report]);
+            assert_eq!(
+                local.take_prompt(),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(report)
+            );
+        }
+    }
+
+    /// TM-escape-18: a garbled report with the right token begins no
+    /// prompt either: an unknown shell, an unknown kind of report, or
+    /// the shell missing.
+    #[test]
+    fn a_garbled_prompt_report_is_dropped() {
+        let local = Reported::new(false);
+        let token = history_token();
+        let reports = [
+            prompt_report(token, "fish"),
+            prompt_report(token, "Bash"),
+            prompt_report(token, ""),
+            format!("\x1b]6973;prompt;{token}\x07").into_bytes(),
+            format!("\x1b]6973;prompts;{token};bash\x07").into_bytes(),
+            format!("\x1b]6973;PROMPT;{token};bash\x07").into_bytes(),
+            format!("\x1b]6974;prompt;{token};bash\x07").into_bytes(),
+        ];
+        for report in &reports {
+            feed(&local, &[report]);
+            // Never the token itself in a failure message.
+            let shown = String::from_utf8_lossy(report).replace(token, "<token>");
+            assert_eq!(local.take_prompt(), None, "{shown:?}");
+        }
+    }
+
+    /// Spec 0021, Scope and acceptance criterion 10: an SSH pane's prompt
+    /// report never counts, even with the right token, so no suggestion
+    /// shows there.
+    #[test]
+    fn a_remote_panes_prompt_report_is_dropped() {
+        let remote = Reported::new(true);
+        feed(&remote, &[&prompt_report(history_token(), "bash")]);
+        assert_eq!(remote.take_prompt(), None);
+    }
+
+    /// Spec 0021, flow 3 ("the pane's last-reported shell kind"): of two
+    /// prompts the pane hasn't looked at, the newer one counts, as when
+    /// zsh starts inside bash.
+    #[test]
+    fn the_newest_prompt_report_wins() {
+        let local = Reported::new(false);
+        let token = history_token();
+        feed(
+            &local,
+            &[&prompt_report(token, "bash"), &prompt_report(token, "zsh")],
+        );
+        assert_eq!(local.take_prompt(), Some(ShellKind::Zsh));
+        assert_eq!(local.take_prompt(), None);
+    }
+
+    /// Spec 0021, Reports: the two reports don't disturb each other. A
+    /// prompt report queues no command and doesn't reset the history
+    /// number a plain Enter repeats; a command report begins no prompt.
+    #[test]
+    fn prompt_and_command_reports_are_kept_apart() {
+        let local = Reported::new(false);
+        let token = history_token();
+        feed(&local, &[&history_report(token, "bash", 7, "make")]);
+        assert_eq!(local.take_prompt(), None, "a command is no prompt");
+        feed(
+            &local,
+            &[
+                &prompt_report(token, "bash"),
+                // A plain Enter: the same entry again, then the next prompt.
+                &history_report(token, "bash", 7, "make"),
+                &prompt_report(token, "bash"),
+            ],
+        );
+        assert_eq!(local.take_commands(), [entry(ShellKind::Bash, "make")]);
+        assert_eq!(local.take_prompt(), Some(ShellKind::Bash));
+    }
+
+    #[test]
+    fn a_prompt_report_split_across_reads_at_every_byte_is_taken() {
+        let mut stream = b"out".to_vec();
+        stream.extend(prompt_report(history_token(), "pwsh"));
+        stream.extend(b"PS> ");
+        for at in 0..stream.len() {
+            let local = Reported::new(false);
+            let (first, second) = stream.split_at(at);
+            feed(&local, &[first, second]);
+            assert_eq!(local.take_prompt(), Some(ShellKind::Pwsh), "split at {at}");
+        }
     }
 }

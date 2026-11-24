@@ -1,7 +1,7 @@
 //! The Terminal tab: scrollback, panes and the mouse.
 
 use crate::commands::ClearCommandHistory;
-use crate::config::{CloseOnExit, CommandHistory, Config, OpenLinks};
+use crate::config::{CloseOnExit, CommandHistory, Config, OpenLinks, SnippetOffer};
 use crate::settings::change::Change;
 use crate::settings::{Field, Page, Row, SettingsView, choice};
 use gpui::{Context, IntoElement, ParentElement, Styled, div, px};
@@ -142,6 +142,24 @@ impl SettingsView {
             Row::new(
                 Page::Terminal,
                 "Command history",
+                "Offer the shell integration in WSL",
+                "wsl shell integration snippet offer ask never bashrc zshrc suggestions",
+                self.options(
+                    "snippet-offer",
+                    &[("ask", "Ask"), ("never", "Never")],
+                    snippet_offer_name(config),
+                    |value| {
+                        choice(vec!["snippet_offer"], value, |config| {
+                            snippet_offer_name(config).to_owned()
+                        })
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            Row::new(
+                Page::Terminal,
+                "Command history",
                 "Forget every command",
                 "command history clear delete forget erase",
                 Button::new("clear-command-history")
@@ -154,6 +172,14 @@ impl SettingsView {
                     .into_any_element(),
             ),
         ]
+    }
+}
+
+/// `snippet_offer` as the file writes it.
+pub fn snippet_offer_name(config: &Config) -> &'static str {
+    match config.snippet_offer {
+        SnippetOffer::Ask => "ask",
+        SnippetOffer::Never => "never",
     }
 }
 

@@ -3,7 +3,7 @@
 //! command. The history itself is `crate::history`.
 
 use super::Workspace;
-use crate::commands::ClearCommandHistory;
+use crate::commands::{AcceptSuggestion, ClearCommandHistory};
 use crate::history::{Recorder, file};
 use futures::StreamExt;
 use gpui::{Context, Global, Window};
@@ -52,6 +52,25 @@ impl Workspace {
         if let Some(recorder) = cx.try_global::<Recorder>() {
             recorder.clear();
         }
+        // Every open pane drops the suggestion it shows.
+        cx.refresh_windows();
         super::show_notice("Command history cleared.".into(), window, cx);
+    }
+
+    /// Accepts the focused pane's suggestion (spec 0021, flow 4). With
+    /// none showing the key isn't ours [load-bearing]: it goes on to
+    /// whatever has the keyboard, so Right still moves the shell's cursor.
+    pub(super) fn accept_suggestion(
+        &mut self,
+        _: &AcceptSuggestion,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let accepted = self
+            .focused_pane()
+            .is_some_and(|pane| pane.update(cx, |pane, cx| pane.accept_suggestion(window, cx)));
+        if !accepted {
+            cx.propagate();
+        }
     }
 }

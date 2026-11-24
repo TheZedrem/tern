@@ -370,6 +370,11 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                         config.command_history = mode;
                     }
                 }
+                "snippet_offer" => {
+                    if let Some(offer) = map.next_value()? {
+                        config.snippet_offer = offer;
+                    }
+                }
                 "plugins" => {
                     let entries = map.next_value_seed(Optional(Entries::<PluginSettings>::new(
                         self,
@@ -1369,6 +1374,41 @@ mod tests {
             assert_eq!(config.scrollback, 500, "{value}");
             assert_eq!(notices.len(), 1, "{value}: {notices:?}");
             assert!(notices[0].contains("command_history"), "{}", notices[0]);
+        }
+    }
+
+    /// Spec 0022 §Model: `snippet_offer` is `ask` unless set to `never`,
+    /// and the template writes `ask`.
+    #[test]
+    fn snippet_offer_is_ask_unless_never() {
+        use crate::config::SnippetOffer;
+
+        assert_eq!(parse("").config.snippet_offer, SnippetOffer::Ask);
+        assert_eq!(parse(TEMPLATE).config.snippet_offer, SnippetOffer::Ask);
+        for (text, offer) in [
+            ("snippet_offer:\n", SnippetOffer::Ask),
+            ("snippet_offer: ask\n", SnippetOffer::Ask),
+            ("snippet_offer: never\n", SnippetOffer::Never),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.snippet_offer, offer, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005 and spec 0022 §Model: a bad `snippet_offer` is a notice
+    /// naming the key, keeps asking, and the rest of the file applies.
+    #[test]
+    fn a_bad_snippet_offer_keeps_ask_with_a_notice() {
+        use crate::config::SnippetOffer;
+
+        for value in ["always", "Never", "false", "[never]"] {
+            let text = format!("scrollback: 500\nsnippet_offer: {value}\n");
+            let Loaded { config, notices } = parse(&text);
+            assert_eq!(config.snippet_offer, SnippetOffer::Ask, "{value}");
+            assert_eq!(config.scrollback, 500, "{value}");
+            assert_eq!(notices.len(), 1, "{value}: {notices:?}");
+            assert!(notices[0].contains("snippet_offer"), "{}", notices[0]);
         }
     }
 

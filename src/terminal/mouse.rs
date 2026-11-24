@@ -241,7 +241,7 @@ impl TerminalPane {
     }
 
     /// Pastes the clipboard into the program (spec 0002, flow 4).
-    pub fn paste(&self, cx: &mut App) {
+    pub fn paste(&mut self, cx: &mut App) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             self.paste_text(&text);
         }
@@ -250,7 +250,7 @@ impl TerminalPane {
     /// Sends `text` to the program as a paste (TM-escape-07). Nothing
     /// reaches a program that has exited, or one waiting on a prompt
     /// dialog: a pasted password would go to the remote shell.
-    fn paste_text(&self, text: &str) {
+    fn paste_text(&mut self, text: &str) {
         if self.exited || self.dialog.is_some() {
             return;
         }
@@ -263,7 +263,7 @@ impl TerminalPane {
             term.scroll_display(Scroll::Bottom);
             select::paste_bytes(text, bracketed)
         };
-        running.notifier.notify(bytes);
+        self.send(bytes);
     }
 
     /// Scrolls through the scrollback, a line per wheel notch (spec 0002,

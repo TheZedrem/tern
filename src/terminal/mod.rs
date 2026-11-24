@@ -12,11 +12,13 @@ mod launch;
 pub mod link;
 pub mod marks;
 mod mouse;
+pub mod offer;
 mod plugin_io;
 pub mod prompt;
 pub mod pty;
 pub mod search;
 pub mod select;
+pub mod suggest;
 
 use crate::config::{self, CloseOnExit, Profile, ProfileKind};
 use crate::theme::{self, Theme};
@@ -93,6 +95,8 @@ pub struct PaneSettings {
     pub copy_on_select: bool,
     pub cursor: config::Cursor,
     pub open_links: config::OpenLinks,
+    /// `snippet_offer: ask` (spec 0022).
+    pub offer_snippet: bool,
 }
 
 impl PaneSettings {
@@ -167,6 +171,9 @@ pub enum PaneEvent {
     Notice(String),
     /// There is no keychain; the workspace says so once (spec 0006, flow 8).
     NoKeychain,
+    /// The user answered the snippet offer with **Never ask** (spec 0022,
+    /// flow 6).
+    NeverOfferSnippet,
     /// A prompt of a port forward's ssh opened or closed (spec 0017).
     ForwardPrompt { id: crate::forwards::Id, open: bool },
     /// The user declined a port forward's prompt: it fails as cancelled.
@@ -272,6 +279,15 @@ pub struct TerminalPane {
     cursor_shown: bool,
     /// Blinks the cursor while the pane has the keyboard.
     blink: Option<Task<()>>,
+    /// Where the shell is with its prompt, for command suggestions (spec
+    /// 0021).
+    prompt: suggest::Prompt,
+    /// Where the pane is with offering the snippet in WSL (spec 0022).
+    offer: offer::Offer,
+    /// A bash or zsh in this pane reported a prompt: it has the snippet.
+    snippet_seen: bool,
+    /// A look at the process list is under way.
+    looking_for_wsl: bool,
 }
 
 impl EventEmitter<PaneEvent> for TerminalPane {}
@@ -315,6 +331,10 @@ impl TerminalPane {
             preedit: None,
             cursor_shown: true,
             blink: None,
+            prompt: suggest::Prompt::Away,
+            offer: offer::Offer::None,
+            snippet_seen: false,
+            looking_for_wsl: false,
         };
         match start {
             Start::Started(session) => pane.attach(session, cx),
@@ -434,11 +454,13 @@ impl TerminalPane {
                         recorder.record(entry);
                     }
                 }
+                self.sync_prompt();
                 cx.notify();
             }
             Event::Title(title) => {
                 self.title = pane_title(&title);
                 cx.emit(PaneEvent::TitleChanged);
+                self.look_for_wsl(false, cx);
             }
             Event::ResetTitle => {
                 self.title = None;
@@ -510,7 +532,7 @@ impl TerminalPane {
             term.scroll_display(Scroll::Bottom);
             bytes
         };
-        running.notifier.notify(bytes);
+        self.send(bytes);
         self.keep_cursor_shown();
         cx.stop_propagation();
     }
@@ -583,6 +605,9 @@ impl Render for TerminalPane {
         let mut marks = self.marks();
         marks.hide_cursor = !self.cursor_shown;
         marks.preedit = self.preedit.clone();
+        if focused {
+            marks.suggestion = self.suggestion(cx);
+        }
         let content = match &self.state {
             State::Running(running) => element::TerminalElement::new(
                 cx.entity(),
@@ -636,6 +661,7 @@ impl Render for TerminalPane {
             .child(grid)
             .children(self.render_link_hint(cx))
             .children(self.render_search(cx))
+            .children(self.render_offer(cx))
             .children(self.dialog.as_ref().map(|(_, dialog)| dialog.clone()))
     }
 }
@@ -721,6 +747,7 @@ mod tests {
             copy_on_select: config.copy_on_select,
             cursor: config.cursor,
             open_links: config.open_links,
+            offer_snippet: true,
         }
     }
 

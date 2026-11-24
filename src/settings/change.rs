@@ -458,6 +458,82 @@ font:
         }
     }
 
+    /// What **Never ask** on the WSL offer writes, and what the settings
+    /// screen's row writes to turn it back (spec 0022, flow 6).
+    fn snippet_offer(value: &str) -> Change {
+        Change::Set {
+            path: vec!["snippet_offer"],
+            value: value.into(),
+            reads: |config| super::super::snippet_offer_name(config).to_owned(),
+        }
+    }
+
+    /// Spec 0022, flow 6 and AC5: **Never ask** on the template turns
+    /// `snippet_offer: ask` into `never`, keeps the line's comment and
+    /// changes no other line.
+    #[test]
+    fn never_ask_on_the_template_rewrites_only_the_snippet_offer_line() {
+        let edited = snippet_offer("never").edited(TEMPLATE).unwrap();
+        let (gone, added) = changed(TEMPLATE, &edited);
+        assert_eq!(gone.len(), 1, "{gone:?}");
+        assert!(gone[0].starts_with("snippet_offer: ask"), "{gone:?}");
+        assert_eq!(added.len(), 1, "{added:?}");
+        assert!(added[0].starts_with("snippet_offer: never"), "{added:?}");
+        let comment = |line: &str| line.split_once('#').map(|(_, c)| c.trim().to_owned());
+        assert!(comment(&gone[0]).is_some(), "{gone:?}");
+        assert_eq!(comment(&added[0]), comment(&gone[0]));
+        let loaded = parse(&edited);
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        assert_eq!(
+            loaded.config.snippet_offer,
+            crate::config::SnippetOffer::Never
+        );
+    }
+
+    /// Spec 0022, flow 6: **Never ask** on a config without the key adds
+    /// it and keeps every other line and comment.
+    #[test]
+    fn never_ask_keeps_the_rest_of_the_file() {
+        let edited = snippet_offer("never").edited(TWO_PROFILES).unwrap();
+        let (gone, added) = changed(TWO_PROFILES, &edited);
+        assert!(gone.is_empty(), "{gone:?}");
+        let added: Vec<&String> = added.iter().filter(|line| !line.is_empty()).collect();
+        assert_eq!(added, ["snippet_offer: never"]);
+        let loaded = parse(&edited);
+        assert!(loaded.notices.is_empty(), "{:?}", loaded.notices);
+        assert_eq!(
+            loaded.config.snippet_offer,
+            crate::config::SnippetOffer::Never
+        );
+        assert_eq!(loaded.config.profiles, parse(TWO_PROFILES).config.profiles);
+    }
+
+    /// Spec 0022, flow 6 and AC5: the settings screen's row turns a
+    /// written `never` back to `ask`, on that line alone.
+    #[test]
+    fn the_settings_row_turns_never_back_to_ask() {
+        let text = "scrollback: 500\nsnippet_offer: never # asked once\nfont:\n  size: 13 # pt\n";
+        let edited = snippet_offer("ask").edited(text).unwrap();
+        let (gone, added) = changed(text, &edited);
+        assert_eq!(gone, ["snippet_offer: never # asked once"]);
+        assert_eq!(added.len(), 1, "{added:?}");
+        assert!(added[0].starts_with("snippet_offer: ask"), "{added:?}");
+        assert!(added[0].ends_with("# asked once"), "{added:?}");
+        assert_eq!(
+            parse(&edited).config.snippet_offer,
+            crate::config::SnippetOffer::Ask
+        );
+    }
+
+    /// Spec 0022 §Model: only `ask` and `never` exist; any other value
+    /// doesn't read back and is refused, so the file is never left with it.
+    #[test]
+    fn a_snippet_offer_other_than_ask_or_never_is_never_written() {
+        for value in ["always", "off", "\"\""] {
+            assert!(snippet_offer(value).edited(TEMPLATE).is_err(), "{value}");
+        }
+    }
+
     /// What the settings screen writes when the sidebar's side is picked
     /// (spec 0018, Migration): `app_sidebar`, and its old name's line gone.
     fn sidebar_side(value: &str) -> Change {

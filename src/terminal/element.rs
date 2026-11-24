@@ -9,10 +9,11 @@ use super::{FontSettings, TerminalPane};
 use crate::theme::Theme;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 use gpui::{
-    App, BorderStyle, Bounds, Element, ElementId, ElementInputHandler, Entity, FocusHandle, Font,
-    FontStyle, FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId,
-    PaintQuad, Pixels, Point, Rgba, ShapedLine, SharedString, StrikethroughStyle, Style, TextAlign,
-    TextRun, UnderlineStyle, Window, fill, font, outline, point, px, relative, size,
+    App, BorderStyle, Bounds, ContentMask, Element, ElementId, ElementInputHandler, Entity,
+    FocusHandle, Font, FontStyle, FontWeight, GlobalElementId, Hsla, InspectorElementId,
+    IntoElement, LayoutId, PaintQuad, Pixels, Point, Rgba, ShapedLine, SharedString,
+    StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, font, outline,
+    point, px, relative, size,
 };
 
 pub struct TerminalElement {
@@ -57,6 +58,9 @@ pub struct Layout {
     cursor: Option<PaintQuad>,
     /// What an input method composes, over the cursor's cells.
     preedit: Option<(PaintQuad, Point<Pixels>, ShapedLine)>,
+    /// The suggested command, and the rest of the cursor's row it's
+    /// clipped to.
+    suggestion: Option<(Bounds<Pixels>, ShapedLine)>,
 }
 
 impl IntoElement for TerminalElement {
@@ -109,7 +113,7 @@ impl Element for TerminalElement {
         self.pane
             .update(cx, |pane, _| pane.lay_out(bounds.origin, cell, grid_size));
 
-        let (frame, cursor_cell) = {
+        let (mut frame, cursor_cell) = {
             let term = self.term.lock();
             let point = term.grid().cursor.point;
             let row = point.line.0 + term.grid().display_offset() as i32;
@@ -185,6 +189,41 @@ impl Element for TerminalElement {
             })
             .collect();
 
+        let suggestion = frame.suggestion.take().map(|suggestion| {
+            let left = usize::from(grid_size.cols).saturating_sub(suggestion.col);
+            let text: String = suggestion.text.chars().take(left).collect();
+            // Under a block cursor the first character takes the
+            // background color, as the grid's own text does there.
+            let first = match text.chars().next() {
+                Some(first) if suggestion.on_block => first.len_utf8(),
+                _ => 0,
+            };
+            let run = |len, color: Rgb| TextRun {
+                len,
+                font: font(self.font.family.clone()),
+                color: hsla(color),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let runs = [
+                run(first, super::colors::rgb(self.theme.background)),
+                run(text.len() - first, suggestion.color),
+            ];
+            // ASCII is locked to the cells; a wide character keeps its
+            // own width.
+            let force_width = text.is_ascii().then_some(cell.width);
+            let line =
+                window
+                    .text_system()
+                    .shape_line(text.into(), self.font.size, &runs, force_width);
+            let bounds = Bounds::new(
+                at(suggestion.row, suggestion.col),
+                size(cell.width * left as f32, cell.height),
+            );
+            (bounds, line)
+        });
+
         let cursor = frame.cursor.map(|cursor| {
             let origin = at(cursor.row, cursor.col);
             let width = cell.width * cursor.width as f32;
@@ -244,6 +283,7 @@ impl Element for TerminalElement {
             lines,
             cursor,
             preedit,
+            suggestion,
         }
     }
 
@@ -279,6 +319,19 @@ impl Element for TerminalElement {
         }
         if let Some(cursor) = layout.cursor.take() {
             window.paint_quad(cursor);
+        }
+        if let Some((bounds, line)) = layout.suggestion.take() {
+            let line_height = layout.line_height;
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                let _ = line.paint(
+                    bounds.origin,
+                    line_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
+            });
         }
         if let Some((background, origin, line)) = layout.preedit.take() {
             window.paint_quad(background);

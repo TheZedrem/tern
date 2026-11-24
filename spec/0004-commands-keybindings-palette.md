@@ -72,6 +72,7 @@ stay):**
 | Copy / paste / search | `Ctrl+Shift+C` / `Ctrl+Shift+V` / `Ctrl+Shift+F` |
 | Toggle the sidebar (spec 0018; `sidebar.toggle`, before that `sftp.toggle`, which `keybindings:` still accepts) | `Ctrl+Shift+S` |
 | Font size + / − / reset | `Ctrl+=` or `Ctrl++` / `Ctrl+-` / `Ctrl+0` (macOS: `Cmd`; OQ-015) |
+| Accept the suggested command (spec 0021; `history.acceptSuggestion`) | `→`, only while a suggestion shows; otherwise the key goes on to the shell, or to whatever has the keyboard |
 
 **[load-bearing]** Defaults never bind `Ctrl` or `Alt` plus a letter, digit
 or punctuation key without `Shift`, because those belong to the shell and

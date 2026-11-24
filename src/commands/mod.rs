@@ -88,6 +88,10 @@ actions!(
         /// Forgets every command in the history and deletes its file
         /// (spec 0021, flow 6).
         ClearCommandHistory,
+        /// Types the suggested past command into the focused pane's shell
+        /// (spec 0021, flow 4). With nothing suggested, its key goes to
+        /// the shell.
+        AcceptSuggestion,
     ]
 );
 
@@ -251,6 +255,11 @@ pub const COMMANDS: &[AppCommand] = &[
     command("history.clear", Some("Clear command history"), || {
         Box::new(ClearCommandHistory)
     }),
+    command(
+        "history.acceptSuggestion",
+        Some("Accept suggestion"),
+        || Box::new(AcceptSuggestion),
+    ),
     command("tab.goTo1", Some("Go to tab 1"), || Box::new(GoToTab(0))),
     command("tab.goTo2", Some("Go to tab 2"), || Box::new(GoToTab(1))),
     command("tab.goTo3", Some("Go to tab 3"), || Box::new(GoToTab(2))),
@@ -567,5 +576,21 @@ mod tests {
                 .collect();
             assert!(bound.is_empty(), "`{id}` is bound to {bound:?} by default");
         }
+    }
+
+    /// Spec 0021, flow 4 and Affected areas: accepting a suggestion is a
+    /// command, in the palette and bindable as `history.acceptSuggestion`,
+    /// and runs its own action, not the one that clears the history.
+    #[test]
+    fn accepting_a_suggestion_is_in_the_palette_and_bindable_as_history_accept_suggestion() {
+        let command = by_config_id("history.acceptSuggestion")
+            .expect("no command has the ID `history.acceptSuggestion`");
+        assert_eq!(command.title, Some("Accept suggestion"));
+        let action = (command.action)();
+        assert!(
+            action.partial_eq(&AcceptSuggestion),
+            "runs {}",
+            action.name()
+        );
     }
 }

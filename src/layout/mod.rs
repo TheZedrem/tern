@@ -682,6 +682,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(Self::check_for_updates))
             .on_action(cx.listener(Self::clear_command_history))
+            .on_action(cx.listener(Self::accept_suggestion))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.switch_tab(Tabs::next_tab, window, cx);
             }))

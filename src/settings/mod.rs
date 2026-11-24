@@ -10,8 +10,8 @@ pub mod change;
 mod pages;
 pub mod yaml;
 
-pub use pages::update_check_name;
 use pages::{Form, ImportCard, PluginFields};
+pub use pages::{snippet_offer_name, update_check_name};
 
 use crate::commands::OpenConfigFolder;
 use crate::config::{ActivePane, Config};
@@ -63,6 +63,7 @@ pub const FIELDS: &[&str] = &[
     "update_check",
     "plugins",
     "command_history",
+    "snippet_offer",
 ];
 
 /// Template keys the screen leaves to the file, and why: custom themes are
@@ -789,6 +790,8 @@ mod tests {
         "plugins",
         // Spec 0021's.
         "command_history",
+        // Spec 0022's.
+        "snippet_offer",
     ];
 
     /// A plain YAML key: lowercase words joined with `_`.

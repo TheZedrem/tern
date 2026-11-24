@@ -26,6 +26,8 @@ if (-not $global:__TernPrompt) {
                 $command = [Uri]::EscapeDataString($last.CommandLine)
                 [Console]::Write("`e]6973;command;$env:TERN_HISTORY_TOKEN;pwsh;$($last.Id);$command`a")
             }
+            # A prompt begins, so Tern knows where your input starts.
+            [Console]::Write("`e]6973;prompt;$env:TERN_HISTORY_TOKEN;pwsh`a")
         }
         $out
     }

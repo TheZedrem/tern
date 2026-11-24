@@ -80,6 +80,14 @@ impl History {
         self.lists[shell.index()].iter().map(String::as_str)
     }
 
+    /// The rest of `shell`'s newest command that starts with `typed` and
+    /// goes on after it (spec 0021, flow 3): exact and case-sensitive.
+    pub fn suggest(&self, shell: ShellKind, typed: &str) -> Option<&str> {
+        self.lists[shell.index()]
+            .iter()
+            .find_map(|command| command.strip_prefix(typed).filter(|rest| !rest.is_empty()))
+    }
+
     /// How many commands are kept, over every shell kind.
     pub fn len(&self) -> usize {
         self.lists.iter().map(VecDeque::len).sum()
@@ -175,6 +183,12 @@ impl Recorder {
         if kept && self.mode == CommandHistory::Save {
             self.send(Op::Append(entry));
         }
+    }
+
+    /// What to suggest after `typed` at a prompt of `shell`.
+    pub fn suggest(&self, shell: ShellKind, typed: &str) -> Option<String> {
+        let history = self.history.lock().ok()?;
+        history.suggest(shell, typed).map(str::to_owned)
     }
 
     /// Applies a changed `command_history`: `memory` and `off` delete the
@@ -668,5 +682,159 @@ mod tests {
         wait_until("a failure reported", || errors.try_recv().is_ok());
         recorder.record(entry(ShellKind::Bash, "git status"));
         assert_eq!(in_memory(&recorder, ShellKind::Bash), ["git status"]);
+    }
+
+    /// A bash history holding `commands`, run oldest first.
+    fn bash_history(commands: &[&str]) -> History {
+        let mut history = History::default();
+        for command in commands {
+            assert!(history.record(ShellKind::Bash, command), "{command}");
+        }
+        history
+    }
+
+    /// Acceptance criterion 1: after `git status`, typing `git s`
+    /// suggests the rest, `tatus`, not the whole command.
+    #[test]
+    fn the_suggestion_is_the_rest_of_the_command_after_the_typed_text() {
+        let history = bash_history(&["git status"]);
+        assert_eq!(history.suggest(ShellKind::Bash, "git s"), Some("tatus"));
+        assert_eq!(history.suggest(ShellKind::Bash, "g"), Some("it status"));
+        assert_eq!(history.suggest(ShellKind::Bash, "cargo"), None);
+    }
+
+    /// Spec 0021, flow 3: "the newest entry … that starts with it". A
+    /// command run again is the newest again (Model).
+    #[test]
+    fn the_newest_command_that_starts_with_the_typed_text_is_suggested() {
+        let mut history = bash_history(&["git status", "git stash", "cargo test"]);
+        assert_eq!(history.suggest(ShellKind::Bash, "git s"), Some("tash"));
+        // Only the older one goes on from here.
+        assert_eq!(history.suggest(ShellKind::Bash, "git stat"), Some("us"));
+        history.record(ShellKind::Bash, "git status");
+        assert_eq!(history.suggest(ShellKind::Bash, "git s"), Some("tatus"));
+    }
+
+    /// Spec 0021, flow 3: the match is "exact, case-sensitive" and only
+    /// at the command's start.
+    #[test]
+    fn the_match_is_an_exact_case_sensitive_prefix() {
+        let history = bash_history(&["Git Status", "ls  -la"]);
+        assert_eq!(history.suggest(ShellKind::Bash, "Git S"), Some("tatus"));
+        for typed in ["git s", "GIT S", "it S", "Status", " Git", "Git  S", "ls -"] {
+            assert_eq!(history.suggest(ShellKind::Bash, typed), None, "{typed:?}");
+        }
+        assert_eq!(history.suggest(ShellKind::Bash, "ls  -"), Some("la"));
+    }
+
+    /// Spec 0021, flow 3 ("the rest of the newest entry"): a command
+    /// that's typed out in full has no rest, so an older, longer one is
+    /// suggested instead, and nothing if there's none.
+    #[test]
+    fn a_command_typed_out_in_full_gives_way_to_an_older_longer_one() {
+        let history = bash_history(&["git status --short", "git status"]);
+        assert_eq!(
+            history.suggest(ShellKind::Bash, "git status"),
+            Some(" --short")
+        );
+        assert_eq!(history.suggest(ShellKind::Bash, "git status --short"), None);
+    }
+
+    /// Acceptance criterion 7: "A command run in pwsh isn't suggested in
+    /// a bash pane, and the reverse."
+    #[test]
+    fn a_command_is_suggested_only_in_its_own_shell_kind() {
+        let mut history = History::default();
+        history.record(ShellKind::Pwsh, "Get-ChildItem -Force");
+        history.record(ShellKind::Bash, "getent hosts");
+        history.record(ShellKind::Zsh, "gem list");
+        assert_eq!(
+            history.suggest(ShellKind::Pwsh, "Get-"),
+            Some("ChildItem -Force")
+        );
+        assert_eq!(history.suggest(ShellKind::Bash, "Get-"), None);
+        assert_eq!(history.suggest(ShellKind::Zsh, "Get-"), None);
+        assert_eq!(history.suggest(ShellKind::Bash, "ge"), Some("tent hosts"));
+        assert_eq!(history.suggest(ShellKind::Zsh, "ge"), Some("m list"));
+        assert_eq!(history.suggest(ShellKind::Pwsh, "ge"), None);
+    }
+
+    /// Acceptance criterion 4: a never-stored command is never suggested.
+    #[test]
+    fn a_never_stored_command_is_not_suggested() {
+        let mut history = History::default();
+        history.record(ShellKind::Bash, "mysql --password=hunter2");
+        history.record(ShellKind::Bash, " echo hi");
+        assert_eq!(history.suggest(ShellKind::Bash, "mysql"), None);
+        assert_eq!(history.suggest(ShellKind::Bash, " echo"), None);
+    }
+
+    /// Acceptance criterion 6: after clearing, nothing is suggested in
+    /// any shell kind.
+    #[test]
+    fn nothing_is_suggested_after_clear() {
+        let mut history = History::default();
+        history.record(ShellKind::Bash, "git status");
+        history.record(ShellKind::Pwsh, "git status");
+        history.clear();
+        for shell in ShellKind::ALL {
+            assert_eq!(history.suggest(shell, "git"), None, "{shell:?}");
+        }
+    }
+
+    /// Acceptance criteria 1 and 6, through the app's recorder: what a
+    /// pane recorded is suggested in every pane of that shell kind right
+    /// away, and **Clear command history** removes it.
+    #[test]
+    fn the_recorder_suggests_what_it_recorded_until_it_is_cleared() {
+        let dir = TempDir::new("history-suggest");
+        let path = dir.path().join("history.jsonl");
+        let (recorder, _errors) = Recorder::start(CommandHistory::Memory, Some(path));
+        recorder.record(entry(ShellKind::Bash, "git status"));
+        assert_eq!(
+            recorder.suggest(ShellKind::Bash, "git s").as_deref(),
+            Some("tatus")
+        );
+        assert_eq!(recorder.suggest(ShellKind::Pwsh, "git s"), None);
+        recorder.clear();
+        assert_eq!(recorder.suggest(ShellKind::Bash, "git s"), None);
+    }
+
+    /// Acceptance criterion 5: a command from the previous run is
+    /// suggested with `command_history: save`, once the file is loaded.
+    #[test]
+    fn a_command_of_the_previous_run_is_suggested_with_save() {
+        let dir = TempDir::new("history-suggest-save");
+        let path = dir.path().join("history.jsonl");
+        write_file(
+            &path,
+            &lines_of(&[entry(ShellKind::Zsh, "kubectl get pods")]),
+        );
+        let (recorder, _errors) = Recorder::start(CommandHistory::Save, Some(path));
+        wait_until("the file loaded", || kept(&recorder) == 1);
+        assert_eq!(
+            recorder.suggest(ShellKind::Zsh, "kube").as_deref(),
+            Some("ctl get pods")
+        );
+    }
+
+    /// Acceptance criterion 5: "With `off`, nothing is suggested or
+    /// recorded", neither this run's commands nor an earlier run's.
+    #[test]
+    fn nothing_is_suggested_with_off() {
+        let dir = TempDir::new("history-suggest-off");
+        let path = dir.path().join("history.jsonl");
+        write_file(&path, &lines_of(&[entry(ShellKind::Bash, "git stash")]));
+        let (mut recorder, _errors) = Recorder::start(CommandHistory::Off, Some(path.clone()));
+        recorder.record(entry(ShellKind::Bash, "git status"));
+        wait_until("the file deleted", || !path.exists());
+        assert_eq!(recorder.suggest(ShellKind::Bash, "git s"), None);
+
+        // Turned off later, what this run recorded goes too.
+        recorder.set_mode(CommandHistory::Memory);
+        recorder.record(entry(ShellKind::Bash, "git status"));
+        assert!(recorder.suggest(ShellKind::Bash, "git s").is_some());
+        recorder.set_mode(CommandHistory::Off);
+        assert_eq!(recorder.suggest(ShellKind::Bash, "git s"), None);
     }
 }

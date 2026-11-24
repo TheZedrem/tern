@@ -13,3 +13,4 @@ pub use general::update_check_name;
 pub(super) use import::ImportCard;
 pub(super) use plugins::PluginFields;
 pub(super) use profiles::Form;
+pub use terminal::snippet_offer_name;

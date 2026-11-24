@@ -60,7 +60,7 @@ and the history survives a restart unless the user turned that off.
 - New `src/history/`: the store, matching and the file.
 - `src/terminal/suggest.rs`: drawing and accepting the suggestion.
 - Config `command_history`, the settings screen (spec 0009), and the
-  `accept_suggestion` and `clear_command_history` commands (spec 0004).
+  commands `history.acceptSuggestion` and `history.clear` (spec 0004).
 
 ### Model
 
@@ -69,8 +69,11 @@ and the history survives a restart unless the user turned that off.
   code or pane.
 - **History:** for each shell kind, a list of distinct commands, newest
   first, capped at 5 000. Running a command again moves it to the front.
-- **Prompt state, per pane and in memory:** the grid point where the
-  current prompt's input starts, or none while a command runs.
+- **Prompt state, per pane and in memory:** the shell kind and where
+  the current prompt's input starts, or none while a command runs. The
+  start is an offset into the cursor's line (its wrapped rows counted as
+  one), not a grid point, so it still holds after `Ctrl+L`, a resize or
+  ConPTY's repaint (OQ-041).
 
 ### Reports from the snippets
 
@@ -78,8 +81,12 @@ Each snippet sends two reports, as one Tern-private OSC sequence. The
 number and encoding are implementation details shared by Tern and the
 snippets, which ship together.
 
-- **Input start**, at the very end of each prompt, so the input begins
-  right after it.
+- **Prompt**, from the prompt hook as each prompt begins, with the
+  shell kind. It doesn't say where the input starts: Tern's scanner sees
+  the bytes before the terminal has drawn them, so it can't turn a
+  report into a position. Instead Tern reads the cursor at the first
+  input (key, IME text or paste) after the report, before the shell
+  echoes it. The snippets leave `PS1` and prompt themes alone.
 - **Last command**, at each prompt: the shell's newest history entry, its
   history number and the shell kind, percent-encoded like OSC 7. In bash
   and pwsh, asking the shell's own history means its opt-outs apply
@@ -147,7 +154,7 @@ Rules:
    is the normal empty case.
 3. **Suggesting.** On each render of the focused pane, a suggestion shows
    only if all of these hold:
-   - an input start is known for this prompt;
+   - the prompt was reported and something was typed at it;
    - the pane is scrolled to the bottom and not on the alternate screen;
    - there's no IME preedit and no open search bar;
    - the typed text has at least one non-space character;
@@ -167,6 +174,13 @@ Rules:
    to the shell unchanged.
 5. **Leaving the prompt.** Enter, `Ctrl+C` or a new prompt's report
    clears the input start, so no suggestion shows while a command runs.
+   Text typed ahead while a command ran is echoed before the first key
+   at the new prompt, so it lies before the input start: a suggestion
+   then completes only what was typed after it. Input whose first rows
+   have scrolled off the top of the screen gets no suggestion, because
+   the scrollback is never read. A wrong start can only
+   make a suggestion not show or not fit. It never runs anything
+   (flow 4).
 6. **Clearing.** **Clear command history** (palette and settings) empties
    every shell kind's history in memory and deletes the file. Setting
    `command_history` to `off` or `memory` deletes the file as well, and
@@ -191,9 +205,10 @@ other way to read the entry's text); zsh and pwsh don't fork.
 - **Windows:** pwsh reads the last command from `Get-History` in the
   prompt function the snippet already wraps, after the original prompt
   ran, so a prompt theme still sees `$?`. ConPTY may
-  repaint the prompt line after a resize. The input start is a grid
-  point, so the check whether the cells after the cursor are blank (flow
-  3) must be confirmed on Windows, not assumed. WSL shells get the token
+  repaint the prompt line after a resize, and doesn't always mark a
+  wrapped row as wrapped. Input that runs onto a second row may then
+  get no suggestion. This and the check whether the cells after the
+  cursor are blank (flow 3) must be confirmed on Windows, not assumed. WSL shells get the token
   through `WSLENV`. Their entries count as `bash` or `zsh`, the same as a
   native shell of that kind.
 - **Linux:** bash reads `history 1` in `PROMPT_COMMAND` when `HISTCMD`
@@ -202,9 +217,8 @@ other way to read the entry's text); zsh and pwsh don't fork.
   session. The hook keeps `$?` for prompt themes after it. zsh takes the
   line as typed from its `zshaddhistory` hook and reports it at the next
   prompt, leaving out a line that starts with a space, as
-  `HIST_IGNORE_SPACE` does. The input-start report (T-107) is
-  added to the prompt in each shell's non-printing brackets, so line
-  editing doesn't miscount the prompt's width.
+  `HIST_IGNORE_SPACE` does. A zsh `RPROMPT` fills the cells after
+  the cursor, so no suggestion shows on its row.
 - **History file:** `<data_local_dir>/tern/history.jsonl`, one JSON
   object per line. On Linux it's created with mode `0600`. On Windows it
   sits in `%LOCALAPPDATA%`, which doesn't roam.
@@ -262,5 +276,4 @@ other way to read the entry's text); zsh and pwsh don't fork.
 
 ## Open questions
 
-- OQ-041: how the scanner, which runs before `alacritty_terminal` parses
-  the bytes, pins the grid point of the input-start report.
+None. OQ-041 (where the input starts) is resolved: see Reports.

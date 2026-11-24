@@ -45,10 +45,14 @@ __tern_history() {
 }
 
 # Keeps $? for the prompt commands after it, such as a prompt theme's.
+# The last report tells Tern a prompt begins, so it knows where your
+# input starts.
 __tern_prompt() {
     local status=$?
     __tern_osc7
     __tern_history
+    [[ -n $TERN_HISTORY_TOKEN ]] &&
+        printf '\e]6973;prompt;%s;bash\a' "$TERN_HISTORY_TOKEN"
     return $status
 }
 

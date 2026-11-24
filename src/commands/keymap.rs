@@ -213,6 +213,9 @@ pub fn defaults_for(new_tab: NewTab) -> Vec<(String, &'static str)> {
         (format!("{font}-+"), "font.increase"),
         (format!("{font}--"), "font.decrease"),
         (format!("{font}-0"), "font.reset"),
+        // The shell's own key: it only acts while a suggestion shows, and
+        // reaches the shell otherwise (spec 0021, flow 4).
+        ("right".into(), "history.acceptSuggestion"),
     ];
     let tabs = [
         "tab.goTo1",
@@ -522,6 +525,7 @@ mod tests {
             ("ctrl-+", "font.increase"),
             ("ctrl--", "font.decrease"),
             ("ctrl-0", "font.reset"),
+            ("right", "history.acceptSuggestion"),
         ];
         let expected: BTreeSet<(String, &str)> = table
             .into_iter()
@@ -877,5 +881,48 @@ mod tests {
             assert!(by_config_id(id).is_some(), "{id} isn't a command");
             assert_eq!(default_keys(id), [""; 0], "{id}");
         }
+    }
+
+    /// Spec 0021, flow 4: `history.acceptSuggestion` is on plain Right by
+    /// default, and on nothing else. The other plain editing keys still
+    /// run no command, so they reach the shell.
+    #[test]
+    fn right_accepts_the_suggestion_by_default_and_no_other_plain_key_is_taken() {
+        let (planned, notices) = plan(&[]);
+        let ran = runs(&planned, "right").map(|command| command.id);
+        assert_eq!(ran, Some("history.acceptSuggestion"));
+        assert_eq!(keys_of(&planned, "history.acceptSuggestion"), ["right"]);
+        for key in ["left", "up", "down", "home", "end", "tab", "enter"] {
+            assert!(runs(&planned, key).is_none(), "`{key}` runs a command");
+        }
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// Spec 0004, AC3, for spec 0021's key: a user who binds
+    /// `history.acceptSuggestion` elsewhere gets Right back for the
+    /// shell alone.
+    #[test]
+    fn rebinding_accept_suggestion_frees_right() {
+        let loaded =
+            config::parse("keybindings:\n  \"ctrl+shift+right\": history.acceptSuggestion\n");
+        let (planned, notices) = plan(&loaded.config.keybindings);
+        let all: Vec<&String> = loaded.notices.iter().chain(&notices).collect();
+        assert!(all.is_empty(), "{all:?}");
+        assert_eq!(
+            keys_of(&planned, "history.acceptSuggestion"),
+            [canonical("ctrl-shift-right")]
+        );
+        assert!(runs(&planned, "right").is_none(), "`right` still runs it");
+    }
+
+    /// Spec 0004, AC2, for spec 0021's key: Right bound to another
+    /// command leaves accepting a suggestion without a key.
+    #[test]
+    fn right_bound_to_another_command_no_longer_accepts_the_suggestion() {
+        let (planned, notices) = plan(&[entry("right", "tab.next", 1)]);
+        let ran = runs(&planned, "right").map(|command| command.id);
+        assert_eq!(ran, Some("tab.next"));
+        assert!(keys_of(&planned, "history.acceptSuggestion").is_empty());
+        assert!(notices.is_empty(), "{notices:?}");
     }
 }

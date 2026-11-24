@@ -88,6 +88,7 @@ impl TerminalPane {
             child_pid: session.child_pid,
             reported: session.reported,
         });
+        self.look_for_wsl(true, cx);
     }
 
     /// Starts the program of a waiting pane, sized to the window until the

@@ -34,9 +34,14 @@ __tern_history() {
     printf '\e]6973;command;%s;zsh;%s;%s\a' "$TERN_HISTORY_TOKEN" "$__tern_count" "$REPLY"
 }
 
+# The last report tells Tern a prompt begins, so it knows where your
+# input starts.
 __tern_precmd() {
     __tern_osc7
     __tern_history
+    [[ -n $TERN_HISTORY_TOKEN ]] &&
+        printf '\e]6973;prompt;%s;zsh\a' "$TERN_HISTORY_TOKEN"
+    return 0
 }
 
 autoload -Uz add-zsh-hook

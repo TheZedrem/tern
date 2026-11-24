@@ -6,6 +6,8 @@ use super::tree::LeafId;
 use super::{Workspace, show_notice};
 use crate::config::{self, Profile};
 use crate::secrets;
+use crate::settings::change::Change;
+use crate::settings::snippet_offer_name;
 use crate::terminal::pty::{Command, GridSize};
 use crate::terminal::{Launch, PaneEvent, PaneProfile, PaneSettings, Start, TerminalPane};
 use crate::theme::{self, Theme};
@@ -46,6 +48,7 @@ impl Workspace {
             copy_on_select: self.config.copy_on_select,
             cursor: self.config.cursor,
             open_links: self.config.open_links,
+            offer_snippet: self.config.snippet_offer == config::SnippetOffer::Ask,
         }
     }
 
@@ -139,6 +142,15 @@ impl Workspace {
                     show_notice(secrets::UNAVAILABLE.into(), window, cx);
                 }
             }
+            PaneEvent::NeverOfferSnippet => self.write_change(
+                Change::Set {
+                    path: vec!["snippet_offer"],
+                    value: "never".into(),
+                    reads: |config| snippet_offer_name(config).to_owned(),
+                },
+                window,
+                cx,
+            ),
             PaneEvent::ForwardPrompt { id, open } => {
                 if let Some(forwards) = &self.forwards {
                     forwards.update(cx, |forwards, cx| forwards.prompting(*id, *open, cx));

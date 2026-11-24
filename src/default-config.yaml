@@ -36,6 +36,8 @@ command_history: save # save | memory | off: suggest commands your shells ran, k
                       # plain-text history.jsonl, only until Tern quits, or not at all.
                       # Needs the shell integration; commands that look like they
                       # hold a secret are never kept
+snippet_offer: ask    # ask | never: on Windows, offer to add the shell integration to a
+                      # WSL shell that doesn't load it
 tab_bar: top          # top | bottom | left | right (left and right: vertical tabs)
 app_sidebar: right    # left | right: where the sidebar opens (Ctrl+Shift+S)
 sftp_click: edit      # what double-clicking a remote file does: edit (in your app) | download

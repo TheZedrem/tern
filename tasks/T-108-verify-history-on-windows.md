@@ -1,12 +1,15 @@
 ---
-status: next
-blocked-by: [T-107]
+status: now
+blocked-by: []
 ---
 # T-108: Verify command history suggestions on Windows 11
 
-In pwsh with the snippet, and in a WSL shell, check recording, the
-suggestion's placement after resizes (ConPTY repaints), stepping aside
-for PSReadLine's prediction, and Right with and without a suggestion.
+In pwsh with the snippet, and in a WSL shell (bash, and zsh, whose
+snippet has never run), check recording, the suggestion's placement
+after resizes (ConPTY repaints) and on input that wraps onto a second
+row, stepping aside for PSReadLine's prediction, and Right with and
+without a suggestion (also after a Left, in vim, and in the settings
+screen and the palette, where it must move the text cursor).
 Also check in the running app, on Windows and on Linux (Wayland): a
 command run in a pane with the snippet lands in `history.jsonl`, the
 settings screen's Command history row switches `command_history`, and

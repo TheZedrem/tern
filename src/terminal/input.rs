@@ -9,7 +9,6 @@
 
 use super::pty;
 use super::{State, TerminalPane};
-use alacritty_terminal::event::Notify;
 use alacritty_terminal::grid::Scroll;
 use gpui::Keystroke;
 use gpui::{Bounds, Context, EntityInputHandler, Pixels, Point, UTF16Selection, Window, px};
@@ -183,7 +182,7 @@ impl TerminalPane {
             return;
         };
         running.term.lock().scroll_display(Scroll::Bottom);
-        running.notifier.notify(text.as_bytes().to_vec());
+        self.send(text.as_bytes().to_vec());
         self.keep_cursor_shown();
     }
 

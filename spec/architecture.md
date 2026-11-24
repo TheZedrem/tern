@@ -19,7 +19,7 @@ local, single-user app: no accounts, no backend, no telemetry.
 |---|---|---|
 | 1 — Core terminal | Local shell and local profiles, tabs + splits, shortcuts, clipboard, scrollback, search, command palette, YAML config + themes, session restore | 0001–0005, 0007, 0009 |
 | 2 — SSH / SFTP | `ssh` profile type, host manager UI (groups), `~/.ssh/config` import, host import from MobaXterm, Tabby, PuTTY and WinSCP, connect via system `ssh` in a PTY, one file browser over the local disk or any host, drawn as a sidebar next to any pane or as a files pane (with file permissions: view and change mode, owner and group), secrets in the OS keychain; opt-in update check | 0006, 0008, 0010, 0011, 0013, 0014, 0015 |
-| 3 — Command history | Detect the commands the user runs and suggest past ones inline as they type, like Windows Terminal and Warp; local shells only, through the opt-in snippets | 0021 |
+| 3 — Command history | Detect the commands the user runs and suggest past ones inline as they type, like Windows Terminal and Warp; local shells only, through the opt-in snippets | 0021, 0022 |
 | 4 — Theming | Edit themes in the app with a live preview, saved as `themes/*.yaml` files (spec 0005) | — |
 | 5 — Plugins | A plugin system: runtime, API and per-plugin permissions; an extensible app sidebar with the SSH hosts as its first built-in panel and plugins adding their own; themes installable as plugins | 0016, 0018 |
 | 6 — Plugin store | Plugin registries the user configures; browse, install and update plugins in the app, with an opt-in update check like spec 0011's | — |
@@ -134,7 +134,7 @@ machine a Tauri + WebKitGTK version measured ~1.07 s to first prompt
 One crate. `src/main.rs` is the boot path and does only what the first
 frame needs. Everything else is a module under `src/`:
 
-- `terminal/` — the pane: PTY lifecycle, terminal element, input mapping, search. `mod.rs` holds `TerminalPane` and its render; `launch.rs` starts and restarts the program, `exit.rs` titles and exit handling, `answers.rs` prompt answering, `mouse.rs` mouse, selection and clipboard, `font.rs` font settings, `input.rs` keys and IME, `search.rs` the search bar; `osc7.rs` scans the shell-integration reports (spec 0021 renames it `marks.rs` and adds `suggest.rs`, the inline history suggestion)
+- `terminal/` — the pane: PTY lifecycle, terminal element, input mapping, search. `mod.rs` holds `TerminalPane` and its render; `launch.rs` starts and restarts the program, `exit.rs` titles and exit handling, `answers.rs` prompt answering, `mouse.rs` mouse, selection and clipboard, `font.rs` font settings, `input.rs` keys and IME, `search.rs` the search bar; `marks.rs` scans the shell-integration reports (OSC 7 and spec 0021's), `suggest.rs` is the inline history suggestion, `offer.rs` the offer to add the snippet in WSL (spec 0022)
 - `layout/` — tabs, title bar, split tree, session restore. `mod.rs` holds `Workspace`, `Boot`, the action wiring and render; each feature it hosts has its own file: `session.rs`, `panes.rs`, `files.rs` (files panes and each SSH pane's views for the sidebar), `sidebar.rs` (the sidebar's wiring: commands, placement, saving), `plugins.rs` (the plugin host and its panels), `profiles.rs` (palette and profiles), `reload.rs` (config reload and the settings screen), `closing.rs`, `splits.rs` (splits and drag and drop), `chrome.rs` (tab bar and title bar)
 - `commands/` — actions, keymap, palette
 - `ssh/` — hosts, the ssh command, askpass (spec 0006)

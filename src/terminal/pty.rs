@@ -278,7 +278,11 @@ pub fn rerun(
     let pty = tty::new(&options, size.window_size(), 0).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     let child_pid = Some(pty.child().id());
-    #[cfg(not(unix))]
+    // Already known from the spawn, so this asks the OS nothing. The WSL
+    // offer looks for `wsl.exe` under it (spec 0022).
+    #[cfg(windows)]
+    let child_pid = pty.child_watcher().pid().map(std::num::NonZeroU32::get);
+    #[cfg(not(any(unix, windows)))]
     let child_pid = None;
 
     let pty = MarksPty::new(pty, Arc::clone(reported));
@@ -1246,5 +1250,103 @@ mod tests {
             commands,
             [pwsh("echo alpha-$(1+1)"), pwsh("echo done-$(3+3)")]
         );
+    }
+
+    /// Spec 0021, Reports and acceptance criterion 1, on Windows: the
+    /// pwsh snippet reports each prompt as it begins, as `pwsh`, the
+    /// first one included, and again after a command ran.
+    #[cfg(windows)]
+    #[test]
+    fn the_pwsh_snippet_reports_each_prompt() {
+        if !has_pwsh() {
+            return;
+        }
+        let root = crate::config::tests::TempDir::new("prompt-pwsh");
+        let snippet = Path::new(env!("CARGO_MANIFEST_DIR")).join("shell-integration/tern.ps1");
+        // As in the test above: no PSReadLine, so nothing typed here
+        // reaches the user's own history file.
+        let profile = root.path().join("profile.ps1");
+        let source = format!(
+            "Remove-Module PSReadLine -ErrorAction Ignore\n. '{}'\n",
+            snippet.display()
+        );
+        std::fs::write(&profile, source).expect("write the profile");
+        let command = Command {
+            program: "pwsh".into(),
+            args: [
+                "-NoLogo",
+                "-NoProfile",
+                "-NoExit",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ]
+            .map(String::from)
+            .into_iter()
+            .chain([profile.display().to_string()])
+            .collect(),
+            env: BTreeMap::new(),
+        };
+        let session = spawn(&command, WIDE, None, 100, false, timing()).expect("spawn pwsh");
+        // A line's output proves pwsh read it, so the prompt before it,
+        // and its report, was scanned.
+        type_line(&session, "echo alpha-$(1+1)");
+        wait_for(&session, "alpha-2");
+        let first = session.reported.take_prompt();
+        type_line(&session, "echo done-$(3+3)");
+        wait_for(&session, "done-6");
+        type_line(&session, "echo end-$(5+5)");
+        wait_for(&session, "end-10");
+        // The prompt after `alpha` was scanned by now; later ones may be.
+        let next = session.reported.take_prompt();
+        type_line(&session, "exit");
+        assert_eq!(first, Some(ShellKind::Pwsh), "the first prompt");
+        assert_eq!(next, Some(ShellKind::Pwsh), "the prompt after a command");
+    }
+
+    /// Spec 0021, Reports and acceptance criterion 1, on Linux: the bash
+    /// snippet reports each prompt as it begins, as `bash`, the first one
+    /// included, and again after a command ran.
+    #[cfg(unix)]
+    #[test]
+    fn the_bash_snippet_reports_each_prompt() {
+        if !on_path("bash") {
+            eprintln!("bash isn't on PATH: skipped");
+            return;
+        }
+        let root = crate::config::tests::TempDir::new("prompt-bash");
+        let snippet = Path::new(env!("CARGO_MANIFEST_DIR")).join("shell-integration/tern.bash");
+        let command = Command {
+            program: "bash".into(),
+            args: vec![
+                "--noprofile".into(),
+                "--rcfile".into(),
+                snippet.display().to_string(),
+                "-i".into(),
+            ],
+            env: BTreeMap::from([
+                // Never the user's own history file.
+                (
+                    "HISTFILE".to_owned(),
+                    root.path().join("bash_history").display().to_string(),
+                ),
+                ("PS1".to_owned(), "$ ".to_owned()),
+            ]),
+        };
+        let session = spawn(&command, WIDE, None, 100, false, timing()).expect("spawn bash");
+        // A line's output proves bash read it, so the prompt before it,
+        // and its report, was scanned.
+        type_line(&session, "echo alpha-$((1+1))");
+        wait_for(&session, "alpha-2");
+        let first = session.reported.take_prompt();
+        type_line(&session, "echo done-$((3+3))");
+        wait_for(&session, "done-6");
+        type_line(&session, "echo end-$((5+5))");
+        wait_for(&session, "end-10");
+        // The prompt after `alpha` was scanned by now; later ones may be.
+        let next = session.reported.take_prompt();
+        type_line(&session, "exit");
+        assert_eq!(first, Some(ShellKind::Bash), "the first prompt");
+        assert_eq!(next, Some(ShellKind::Bash), "the prompt after a command");
     }
 }

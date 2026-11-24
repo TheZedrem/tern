@@ -16,6 +16,7 @@ pub struct Frame {
     pub backgrounds: Vec<Span>,
     pub runs: Vec<Run>,
     pub cursor: Option<Cursor>,
+    pub suggestion: Option<Suggestion>,
 }
 
 /// Consecutive cells on one row sharing a non-default background.
@@ -62,10 +63,24 @@ pub struct Cursor {
     pub color: Rgb,
 }
 
+/// A past command's rest, drawn grey from the cursor's cell on and cut at
+/// the row's right edge (spec 0021, flow 3).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Suggestion {
+    pub row: usize,
+    pub col: usize,
+    pub text: String,
+    pub color: Rgb,
+    /// A block cursor covers the first character, which is drawn in the
+    /// background color to stay readable on it.
+    pub on_block: bool,
+}
+
 /// What a frame draws besides the grid and the selection: the search bar's
 /// matches on screen, in reading order, and the one the view is on (spec
 /// 0002, flow 6); the hovered link, underlined (flow 7); the cursor's blink
-/// phase; and what an input method composes at the cursor (flow 2).
+/// phase; what an input method composes at the cursor (flow 2); and the
+/// command suggested after it (spec 0021).
 #[derive(Debug, Default)]
 pub struct Marks {
     pub matches: Vec<Match>,
@@ -73,6 +88,7 @@ pub struct Marks {
     pub link: Option<Match>,
     pub hide_cursor: bool,
     pub preedit: Option<String>,
+    pub suggestion: Option<String>,
 }
 
 /// Builds the frame for `content`. `focused` decides between a solid and a
@@ -225,6 +241,15 @@ pub fn build(content: RenderableContent<'_>, theme: &Theme, focused: bool, marks
     if let Some(run) = current {
         push_run(&mut frame.runs, run);
     }
+    frame.suggestion = marks.suggestion.as_ref().and_then(|text| {
+        Some(Suggestion {
+            row: usize::try_from(cursor_point.line.0 + offset).ok()?,
+            col: cursor_point.column.0,
+            text: text.clone(),
+            color: colors::mix(rgb(theme.foreground), default_bg, 0.5),
+            on_block: cursor_shape == CursorShape::Block,
+        })
+    });
     frame
 }
 
@@ -498,5 +523,65 @@ mod tests {
             let under = run_at(&frame, 0, 0).style.color;
             assert_eq!(under, rgb(DARK.foreground), "focused: {focused}");
         }
+    }
+
+    /// The frame of a pane that has printed `bytes` and suggests `tatus`.
+    fn suggesting(bytes: &[u8], focused: bool, hide_cursor: bool) -> Frame {
+        let marks = Marks {
+            suggestion: Some("tatus".into()),
+            hide_cursor,
+            ..Marks::default()
+        };
+        let term = term_with(COLS, ROWS, bytes);
+        build(term.renderable_content(), &DARK, focused, &marks)
+    }
+
+    /// Spec 0021, flow 3 and AC1: the suggestion is drawn "as grey text
+    /// after the cursor": from the cursor's cell on, on its row, in a
+    /// color that's neither the text's nor the background's.
+    #[test]
+    fn the_suggestion_starts_at_the_cursors_cell() {
+        let frame = suggesting(b"make\r\n$ git s", true, false);
+        let suggestion = frame
+            .suggestion
+            .as_ref()
+            .expect("no suggestion in the frame");
+        assert_eq!((suggestion.row, suggestion.col), (1, 7));
+        assert_eq!(suggestion.text, "tatus");
+        let plain = [rgb(DARK.foreground), rgb(DARK.background)];
+        assert!(
+            !plain.contains(&suggestion.color),
+            "not grey: {:?}",
+            suggestion.color
+        );
+        // What's typed is drawn as before.
+        assert_eq!(row_text(&frame, 1), "$ git s");
+    }
+
+    /// Spec 0021, flow 3: without a suggestion the frame draws none.
+    #[test]
+    fn a_frame_without_a_suggestion_draws_none() {
+        for focused in [true, false] {
+            assert_eq!(frame(b"$ git s", focused).suggestion, None);
+        }
+    }
+
+    /// The suggestion's first character lies under the cursor. Only a
+    /// focused pane's block cursor, while shown, covers that cell; then
+    /// the character is drawn in the background color to stay readable.
+    #[test]
+    fn the_suggestion_is_on_a_block_only_under_a_focused_shown_block_cursor() {
+        let on_block = |bytes: &[u8], focused, hide_cursor| {
+            suggesting(bytes, focused, hide_cursor)
+                .suggestion
+                .expect("no suggestion in the frame")
+                .on_block
+        };
+        assert!(on_block(b"$ git s", true, false));
+        assert!(!on_block(b"$ git s", false, false), "a hollow block");
+        assert!(!on_block(b"$ git s", true, true), "off half of the blink");
+        assert!(!on_block(b"$ git s\x1b[6 q", true, false), "a beam");
+        assert!(!on_block(b"$ git s\x1b[4 q", true, false), "an underline");
+        assert!(!on_block(b"$ git s\x1b[?25l", true, false), "hidden");
     }
 }

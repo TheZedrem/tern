@@ -80,6 +80,18 @@ pub struct Config {
     pub plugins: BTreeMap<String, PluginSettings>,
     /// Whether commands local shells run are kept, and where (spec 0021).
     pub command_history: CommandHistory,
+    /// Whether a WSL shell without the shell integration is offered it
+    /// (spec 0022).
+    pub snippet_offer: SnippetOffer,
+}
+
+/// `ask` offers the shell integration in WSL; `never` is what **Never
+/// ask** on the offer writes (spec 0022).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SnippetOffer {
+    Ask,
+    Never,
 }
 
 /// Where the command history is kept: in `history.jsonl`, only for this
@@ -361,6 +373,7 @@ impl Default for Config {
             update_check: None,
             plugins: BTreeMap::new(),
             command_history: CommandHistory::Save,
+            snippet_offer: SnippetOffer::Ask,
         }
     }
 }

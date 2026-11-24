@@ -39,6 +39,7 @@ earlier Tauri version took 1.07 s to start and was dropped.
 - Splits and restored tabs open in the shell's working directory, with the opt-in [shell integration](#shell-integration) on Windows and everywhere for SSH
 - Search, clickable links, IME input, right-click paste, copy on select and the Linux primary selection
 - A command palette, and shortcuts that never take `Ctrl`/`Alt` keys from the shell
+- Suggestions from the commands you ran, in grey as you type and accepted with `→`, with the opt-in [shell integration](#shell-integration)
 - YAML config that reloads live, profiles and themes, and a settings screen for all of it
 
 **SSH and SFTP**
@@ -121,16 +122,17 @@ shell. You can rebind all of them in the settings or in `config.yaml`.
 | `Ctrl+Shift+W` | Close the pane |
 | `Alt+1`–`9`, `Alt+←↑→↓` | Go to a tab, or to the next pane in that direction |
 | `Ctrl+Shift+F` | Search the scrollback |
+| `→` | Accept the suggested command, when one shows |
 | `Ctrl+Shift+S` | Sidebar: the pane's files, SSH hosts, an SSH pane's port forwards |
 | `Ctrl+Shift+B` / `Ctrl+Shift+O` | Files pane / switch its host |
 
 ## Shell integration
 
 To have splits, restored tabs and an SSH pane's files in the sidebar open in the
-folder you're in, source the snippet for your shell from its rc file. It
-reports the working directory with OSC 7 at each prompt, and in local
-panes each command you run, for the command history; nothing is set up
-automatically.
+folder you're in, and to get suggestions from the commands you ran, source
+the snippet for your shell from its rc file. It reports the working
+directory with OSC 7 at each prompt, and in local panes each command you
+run and where a prompt begins; nothing is set up automatically.
 
 | Shell | Add to | Line |
 |---|---|---|
@@ -144,11 +146,22 @@ path above). The AppImage carries them at
 `$APPDIR/usr/share/tern/shell-integration/`, where `$APPDIR` is set only
 in shells Tern started, so guard the line:
 `[ -n "$APPDIR" ] && . "$APPDIR/usr/share/tern/shell-integration/tern.bash"`.
-From a clone, use `shell-integration/` in it.
+From a clone, use `shell-integration/` in it. A WSL shell sources the
+Windows copy through `/mnt/c/…`, like
+`. "/mnt/c/Users/<you>/AppData/Local/Programs/Tern/shell-integration/tern.bash"`.
+On Windows, Tern offers to add that line when it sees a WSL shell that
+doesn't load the snippet: **Add** types it into that shell, and **Never
+ask** turns the offer off (`snippet_offer: never`).
 
 On Linux, local panes follow `cd` without it. On a server, the snippet
 lets the sidebar's files start in the shell's folder. A report counts as
 local only for this machine and an existing directory.
+
+As you type at a prompt, the newest past command that starts with what
+you typed shows in grey after the cursor, and `→` types it in without
+running it. With nothing suggested, `→` is the shell's as always. Each
+shell has its own history, and Tern steps aside where the shell suggests
+on its own (PSReadLine's predictions, zsh-autosuggestions).
 
 The command history (`command_history: save`, the default) is kept in
 `history.jsonl` in Tern's data folder, as plain text, one list per shell.
@@ -168,7 +181,6 @@ SSH sessions aren't recorded.
 **Toward 1.0** ([roadmap](spec/architecture.md#roadmap))
 
 - **Plugins:** file-browser targets from plugins, an author guide with examples, themes as plugins, and plugin registries you browse in the app
-- Suggestions from your command history as you type
 - A theme editor with a live preview
 - Profiles that run a command (a coding agent, say) in the current folder or a folder you pick
 
