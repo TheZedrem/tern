@@ -12,6 +12,7 @@ mod commands;
 mod config;
 mod files;
 mod forwards;
+mod history;
 mod import;
 #[cfg(windows)]
 mod job;

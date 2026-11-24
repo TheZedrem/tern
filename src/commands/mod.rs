@@ -85,6 +85,9 @@ actions!(
         AllowPluginRequest,
         /// Denies the plugin request on the focused pane.
         DenyPluginRequest,
+        /// Forgets every command in the history and deletes its file
+        /// (spec 0021, flow 6).
+        ClearCommandHistory,
     ]
 );
 
@@ -244,6 +247,9 @@ pub const COMMANDS: &[AppCommand] = &[
     ),
     command("app.checkForUpdates", Some("Check for updates"), || {
         Box::new(CheckForUpdates)
+    }),
+    command("history.clear", Some("Clear command history"), || {
+        Box::new(ClearCommandHistory)
     }),
     command("tab.goTo1", Some("Go to tab 1"), || Box::new(GoToTab(0))),
     command("tab.goTo2", Some("Go to tab 2"), || Box::new(GoToTab(1))),

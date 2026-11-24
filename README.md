@@ -128,8 +128,9 @@ shell. You can rebind all of them in the settings or in `config.yaml`.
 
 To have splits, restored tabs and an SSH pane's files in the sidebar open in the
 folder you're in, source the snippet for your shell from its rc file. It
-reports the working directory with OSC 7 at each prompt; nothing is set
-up automatically.
+reports the working directory with OSC 7 at each prompt, and in local
+panes each command you run, for the command history; nothing is set up
+automatically.
 
 | Shell | Add to | Line |
 |---|---|---|
@@ -148,6 +149,15 @@ From a clone, use `shell-integration/` in it.
 On Linux, local panes follow `cd` without it. On a server, the snippet
 lets the sidebar's files start in the shell's folder. A report counts as
 local only for this machine and an existing directory.
+
+The command history (`command_history: save`, the default) is kept in
+`history.jsonl` in Tern's data folder, as plain text, one list per shell.
+Commands that start with a space, span lines, or look like they hold a
+secret (`password`, `token`, a JWT, an `Authorization` header, a GitHub
+or GitLab token, `user:pass@` in a URL, a long random string) are never
+kept. `memory` keeps it only until Tern quits, `off` keeps nothing, and
+**Clear command history** in the palette or the settings forgets it all.
+SSH sessions aren't recorded.
 
 ## Roadmap
 

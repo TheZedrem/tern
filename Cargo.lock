@@ -6954,6 +6954,7 @@ dependencies = [
  "libc",
  "notify",
  "polling",
+ "regex",
  "russh-sftp",
  "serde",
  "serde-saphyr 2.1.0",

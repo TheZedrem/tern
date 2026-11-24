@@ -40,6 +40,9 @@ polling = "=3.11.0"
 # A Local delete goes to the freedesktop trash or the Recycle Bin (spec
 # 0013, T-044), on the files thread; nothing on the boot path.
 trash = "5.3"
+# The token patterns that keep secrets out of the command history (spec
+# 0021). Already built through alacritty_terminal; owner's OK 2026-11-24.
+regex = "1.13"
 
 [target.'cfg(unix)'.dependencies]
 # killpg, to end a plugin's whole process group (spec 0016, OQ-035), and

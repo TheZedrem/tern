@@ -78,6 +78,18 @@ pub struct Config {
     pub update_check: Option<UpdateCheck>,
     /// What the user granted each plugin, by its ID (spec 0016).
     pub plugins: BTreeMap<String, PluginSettings>,
+    /// Whether commands local shells run are kept, and where (spec 0021).
+    pub command_history: CommandHistory,
+}
+
+/// Where the command history is kept: in `history.jsonl`, only for this
+/// run, or not at all (spec 0021).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandHistory {
+    Save,
+    Memory,
+    Off,
 }
 
 /// The two answers to "check GitHub for new releases?" (spec 0011).
@@ -348,6 +360,7 @@ impl Default for Config {
             new_tab: NewTab::Ask,
             update_check: None,
             plugins: BTreeMap::new(),
+            command_history: CommandHistory::Save,
         }
     }
 }

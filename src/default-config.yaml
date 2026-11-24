@@ -32,6 +32,10 @@ restore_session: true # reopen the last run's tabs and splits
 open_new_tab: true    # every launch opens a fresh tab after the restored ones, or focuses a restored plain local shell
 close_last_tab: quit  # quit | new_tab: closing the last tab quits, or leaves the window open with a fresh tab
 open_links: ctrl_click # ctrl_click (Cmd+click on macOS) | click
+command_history: save # save | memory | off: suggest commands your shells ran, kept in a
+                      # plain-text history.jsonl, only until Tern quits, or not at all.
+                      # Needs the shell integration; commands that look like they
+                      # hold a secret are never kept
 tab_bar: top          # top | bottom | left | right (left and right: vertical tabs)
 app_sidebar: right    # left | right: where the sidebar opens (Ctrl+Shift+S)
 sftp_click: edit      # what double-clicking a remote file does: edit (in your app) | download

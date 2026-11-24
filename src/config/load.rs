@@ -365,6 +365,11 @@ impl<'de> MapReader<'de> for Attempt<'_> {
                     }
                 }
                 "update_check" => config.update_check = map.next_value()?,
+                "command_history" => {
+                    if let Some(mode) = map.next_value()? {
+                        config.command_history = mode;
+                    }
+                }
                 "plugins" => {
                     let entries = map.next_value_seed(Optional(Entries::<PluginSettings>::new(
                         self,
@@ -714,8 +719,8 @@ mod tests {
     use super::*;
     use crate::config::tests::{TempDir, profile_ids, ssh_to};
     use crate::config::{
-        CloseLastTab, CloseOnExit, CursorStyle, FilesExecutable, NewTab, OpenLinks, SftpClick,
-        SidebarSide, TEMPLATE, UpdateCheck, UploadMode,
+        CloseLastTab, CloseOnExit, CommandHistory, CursorStyle, FilesExecutable, NewTab, OpenLinks,
+        SftpClick, SidebarSide, TEMPLATE, UpdateCheck, UploadMode,
     };
     use crate::terminal::FontSettings;
     use crate::terminal::pty::Command;
@@ -1332,6 +1337,38 @@ mod tests {
             assert!(config.copy_on_select, "{value}");
             assert_eq!(notices.len(), 1, "{value}: {notices:?}");
             assert!(notices[0].contains("update_check"), "{}", notices[0]);
+        }
+    }
+
+    /// Spec 0021: `command_history` is `save` unless set to `memory` or
+    /// `off`, and the template writes it.
+    #[test]
+    fn command_history_is_save_unless_memory_or_off() {
+        assert_eq!(parse("").config.command_history, CommandHistory::Save);
+        assert_eq!(parse(TEMPLATE).config.command_history, CommandHistory::Save);
+        for (text, mode) in [
+            ("command_history:\n", CommandHistory::Save),
+            ("command_history: save\n", CommandHistory::Save),
+            ("command_history: memory\n", CommandHistory::Memory),
+            ("command_history: off\n", CommandHistory::Off),
+        ] {
+            let Loaded { config, notices } = parse(text);
+            assert_eq!(config.command_history, mode, "{text}");
+            assert!(notices.is_empty(), "{text}: {notices:?}");
+        }
+    }
+
+    /// Spec 0005: a bad value is a notice naming the key, keeps the
+    /// default, and the rest of the file applies.
+    #[test]
+    fn a_bad_command_history_keeps_save_with_a_notice() {
+        for value in ["forever", "Off", "true", "[off]"] {
+            let text = format!("scrollback: 500\ncommand_history: {value}\n");
+            let Loaded { config, notices } = parse(&text);
+            assert_eq!(config.command_history, CommandHistory::Save, "{value}");
+            assert_eq!(config.scrollback, 500, "{value}");
+            assert_eq!(notices.len(), 1, "{value}: {notices:?}");
+            assert!(notices[0].contains("command_history"), "{}", notices[0]);
         }
     }
 

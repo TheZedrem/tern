@@ -81,9 +81,11 @@ snippets, which ship together.
 - **Input start**, at the very end of each prompt, so the input begins
   right after it.
 - **Last command**, at each prompt: the shell's newest history entry, its
-  history number and the shell kind, percent-encoded like OSC 7. Asking
-  the shell's own history means its opt-outs apply (`HISTCONTROL`,
-  `HIST_IGNORE_SPACE`). The history number lets Tern skip a repeat when
+  history number and the shell kind, percent-encoded like OSC 7. In bash
+  and pwsh, asking the shell's own history means its opt-outs apply
+  (`HISTCONTROL`). zsh's snippet takes the typed line instead, and keeps
+  out only a line that starts with a space; `HISTORY_IGNORE` and
+  `HIST_NO_STORE` don't apply there. The history number lets Tern skip a repeat when
   the user only pressed Enter.
 
 Rules:
@@ -136,8 +138,11 @@ Rules:
 2. **Loading.** After the first frame, the history thread starts and
    reads the file. Nothing in `history/` runs before that frame. Reports
    that arrive earlier are queued in the pane and recorded once the
-   thread runs. Lines it can't read are skipped. If the file holds more than
-   twice the cap, it's rewritten through a temp file and a rename. Until
+   thread runs. Lines it can't read are skipped, and so are entries
+   today's never-stored rules drop (a pattern added in a later version
+   purges older entries). If the file holds such entries, or more than
+   twice the lines it keeps, it's rewritten through a temp file and a
+   rename. Until
    loading finishes, suggestions come only from this run. A missing file
    is the normal empty case.
 3. **Suggesting.** On each render of the focused pane, a suggestion shows
@@ -164,7 +169,9 @@ Rules:
    clears the input start, so no suggestion shows while a command runs.
 6. **Clearing.** **Clear command history** (palette and settings) empties
    every shell kind's history in memory and deletes the file. Setting
-   `command_history` to `off` or `memory` deletes the file as well.
+   `command_history` to `off` or `memory` deletes the file as well, and
+   `off` also forgets this run's commands. Switching back to `save`
+   writes what's kept in memory.
 
 ### Startup impact
 
@@ -174,20 +181,28 @@ the file is loaded, suggestions come only from commands run in this
 session. The only thing at spawn is the token's environment variable,
 built from std's already-seeded hasher with no syscall or IO. The
 implementing commit still records a TTFP measurement showing the median
-is unchanged (spec 0001), because it touches the spawn code. The snippets add one built-in history
-call and an encoding loop to each prompt in the shell, with no fork.
+is unchanged (spec 0001), because it touches the spawn code. In the
+shell, the snippets add an encoding loop for each command they report.
+bash also forks once for each command it adds to its history (it has no
+other way to read the entry's text); zsh and pwsh don't fork.
 
 ### Platform notes
 
-- **Windows:** pwsh reads the last command from `Get-History` and adds
-  its report to the prompt function the snippet already wraps. ConPTY may
+- **Windows:** pwsh reads the last command from `Get-History` in the
+  prompt function the snippet already wraps, after the original prompt
+  ran, so a prompt theme still sees `$?`. ConPTY may
   repaint the prompt line after a resize. The input start is a grid
   point, so the check whether the cells after the cursor are blank (flow
   3) must be confirmed on Windows, not assumed. WSL shells get the token
   through `WSLENV`. Their entries count as `bash` or `zsh`, the same as a
   native shell of that kind.
-- **Linux:** bash takes the last entry from `history 1` in
-  `PROMPT_COMMAND`. zsh uses `precmd` and `fc`. The input-start report is
+- **Linux:** bash reads `history 1` in `PROMPT_COMMAND` when `HISTCMD`
+  moved, so only commands bash kept count; the first prompt only notes
+  where the history stands, since its last entry is from an earlier
+  session. The hook keeps `$?` for prompt themes after it. zsh takes the
+  line as typed from its `zshaddhistory` hook and reports it at the next
+  prompt, leaving out a line that starts with a space, as
+  `HIST_IGNORE_SPACE` does. The input-start report (T-107) is
   added to the prompt in each shell's non-printing brackets, so line
   editing doesn't miscount the prompt's width.
 - **History file:** `<data_local_dir>/tern/history.jsonl`, one JSON

@@ -9,6 +9,7 @@ mod chrome;
 mod closing;
 mod files;
 mod forwards;
+mod history;
 mod panes;
 mod plugins;
 mod profiles;
@@ -447,7 +448,8 @@ impl Workspace {
     }
 
     /// What waits for the first frame (spec 0001): the boot notices,
-    /// config reloads and the update check (spec 0011). Runs once, at the
+    /// config reloads, the update check (spec 0011) and the command
+    /// history (spec 0021). Runs once, at the
     /// first frame with output, or [`SILENT_BOOT_WAIT`] after boot if the
     /// program prints nothing.
     fn after_first_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -473,6 +475,7 @@ impl Workspace {
                 .spawn(async { sftp::copies::sweep() })
                 .detach();
             self.start_plugins(window, cx);
+            self.start_history(window, cx);
         }
         cx.notify();
     }
@@ -678,6 +681,7 @@ impl Render for Workspace {
                 this.run_plugin_command(command, window, cx);
             }))
             .on_action(cx.listener(Self::check_for_updates))
+            .on_action(cx.listener(Self::clear_command_history))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.switch_tab(Tabs::next_tab, window, cx);
             }))

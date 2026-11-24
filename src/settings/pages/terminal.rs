@@ -1,9 +1,12 @@
 //! The Terminal tab: scrollback, panes and the mouse.
 
-use crate::config::{CloseOnExit, OpenLinks};
+use crate::commands::ClearCommandHistory;
+use crate::config::{CloseOnExit, CommandHistory, Config, OpenLinks};
 use crate::settings::change::Change;
 use crate::settings::{Field, Page, Row, SettingsView, choice};
-use gpui::{Context, IntoElement};
+use gpui::{Context, IntoElement, ParentElement, Styled, div, px};
+use gpui_component::button::Button;
+use gpui_component::{ActiveTheme, Sizable};
 
 impl SettingsView {
     /// The Terminal tab's rows.
@@ -102,6 +105,63 @@ impl SettingsView {
                 )
                 .into_any_element(),
             ),
+            Row::new(
+                Page::Terminal,
+                "Command history",
+                "Suggest past commands",
+                "command history suggestions shell integration autosuggest save memory clear forget",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(self.options(
+                        "command-history",
+                        &[
+                            ("save", "Kept in a file"),
+                            ("memory", "Until Tern quits"),
+                            ("off", "Off"),
+                        ],
+                        command_history_name(config),
+                        |value| {
+                            choice(vec!["command_history"], value, |config| {
+                                command_history_name(config).to_owned()
+                            })
+                        },
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                "The file, history.jsonl, is plain text. Needs the shell                                  integration; commands that look like they hold a secret                                  are never kept.",
+                            ),
+                    )
+                    .into_any_element(),
+            ),
+            Row::new(
+                Page::Terminal,
+                "Command history",
+                "Forget every command",
+                "command history clear delete forget erase",
+                Button::new("clear-command-history")
+                    .label("Clear command history")
+                    .small()
+                    .outline()
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(ClearCommandHistory), cx)
+                    })
+                    .into_any_element(),
+            ),
         ]
+    }
+}
+
+/// `command_history` as the file writes it.
+fn command_history_name(config: &Config) -> &'static str {
+    match config.command_history {
+        CommandHistory::Save => "save",
+        CommandHistory::Memory => "memory",
+        CommandHistory::Off => "off",
     }
 }

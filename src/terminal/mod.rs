@@ -10,8 +10,8 @@ pub mod grid;
 pub mod input;
 mod launch;
 pub mod link;
+pub mod marks;
 mod mouse;
-pub mod osc7;
 mod plugin_io;
 pub mod prompt;
 pub mod pty;
@@ -206,7 +206,7 @@ struct Running {
     size: GridSize,
     child_pid: Option<u32>,
     /// The cwd the shell reports with OSC 7.
-    reported: std::sync::Arc<osc7::Reported>,
+    reported: std::sync::Arc<marks::Reported>,
 }
 
 /// Whose ssh a prompt dialog answers: the pane's terminal connection, its
@@ -426,6 +426,13 @@ impl TerminalPane {
                 self.has_output = true;
                 if running.reported.take_changed() {
                     cx.emit(PaneEvent::CwdChanged);
+                }
+                // Until the history starts after the first frame, the
+                // pane keeps what its shell reported (spec 0021, flow 2).
+                if let Some(recorder) = cx.try_global::<crate::history::Recorder>() {
+                    for entry in running.reported.take_commands() {
+                        recorder.record(entry);
+                    }
                 }
                 cx.notify();
             }

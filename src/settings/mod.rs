@@ -62,6 +62,7 @@ pub const FIELDS: &[&str] = &[
     "new_tab",
     "update_check",
     "plugins",
+    "command_history",
 ];
 
 /// Template keys the screen leaves to the file, and why: custom themes are
@@ -786,6 +787,8 @@ mod tests {
         "theme.custom",
         // Spec 0016's, documented with spec 0005's.
         "plugins",
+        // Spec 0021's.
+        "command_history",
     ];
 
     /// A plain YAML key: lowercase words joined with `_`.

