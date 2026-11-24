@@ -1,6 +1,6 @@
 ---
-status: next
-blocked-by: [T-105]
+status: now
+blocked-by: []
 ---
 # T-106: Record the commands local shells run
 
