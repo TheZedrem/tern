@@ -80,7 +80,9 @@ nothing touching a terminal before the user saw and approved it.
   differ, ignoring case, from every other plugin's and from `Tern`, or both
   plugins are listed as unusable. Its strings render by spec 0003's title
   rules, capped at 64 characters, and `icon` names one of Tern's built-in
-  icons, any other value getting the default (TM-plug-01, -13).
+  icons, any other value getting the default (TM-plug-01, -13), or an
+  SVG file of plain shapes in the plugin's folder
+  ([spec 0018](0018-app-sidebar.md), Icons; TM-plug-24).
 
 - **Never through a shell [load-bearing].** `run` is spawned as an argv
   with the plugin's folder as its working directory. No `sh -c`, no

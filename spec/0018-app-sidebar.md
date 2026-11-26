@@ -1,7 +1,7 @@
 ---
 status: implemented  # draft | approved | implemented
 phase: 5
-tasks: [T-064, T-080, T-049, T-084, T-085, T-069, T-097]
+tasks: [T-064, T-080, T-049, T-084, T-085, T-069, T-097, T-111]
 related: [spec 0003, spec 0004, spec 0006, spec 0008, spec 0009, spec 0013, spec 0016, spec 0017, threat model 0003, threat model 0005, OQ-036, OQ-038, OQ-039]
 ---
 
@@ -49,7 +49,7 @@ meant for the shell.
 - Adding a host or a group in the panel, more menu entries (split with host, forget password), and editing a `~/.ssh/config` host: *Later*. The picker and the settings screen do these today
 - Local profiles in the hosts panel: never; `Ctrl+Shift+T` lists them
 - A palette picker for panels, reordering or hiding panels, collapsing host groups, dragging a host into a split: *Later*
-- More icons than the embedded set: *Later* (each one adds to the binary)
+- More built-in icons than the embedded set: *Later* (each one adds to the binary). A plugin brings its own (Design, Icons)
 
 ## Design
 
@@ -100,7 +100,26 @@ meant for the shell.
   (TM-plug-01).
 - **Icons.** One of the icons the embedded bundle holds (the widget
   library's icon set), named in kebab-case. Any other name, or none, gets
-  the default plugin icon. No image is read from a plugin.
+  the default plugin icon.
+- **A plugin's own icon [load-bearing]** (TM-plug-24). An `icon` that is
+  a kebab-case name ending in `.svg` (`docker.svg`) names a file directly
+  in the plugin's folder: never a path, and never a link.
+  Discovery reads it with the manifest, off the UI thread, and accepts it
+  only when all of these hold:
+  - at most 16 KiB of UTF-8 that starts with `<svg`;
+  - only the elements `svg`, `g`, `path`, `circle`, `ellipse`, `rect`,
+    `line`, `polyline`, `polygon` and `title`. So no `use`, `image`,
+    `text`, `style`, `filter`, script or link;
+  - no `<!`, `<?` or `&` anywhere: no doctype, entity, comment or
+    processing instruction;
+  - the renderer can read it: it is well-formed XML.
+    This runs last, on a file that passed the checks above.
+
+  A file that fails makes the plugin unusable with the reason, like any
+  other manifest error; there is no silent default, so an author sees
+  why. Tern draws only the icon's shape, in the colour its own icons
+  have: the file's colours are ignored. Nothing a plugin sends while it
+  runs changes an icon.
 - **Body.** The panel's view gets the rest of the height and scrolls as
   one column. Text wraps at the sidebar's width and is never cut: a
   command button shows all of its command at 200 px too (TM-plug-23). A
@@ -296,7 +315,8 @@ Tern ↔ plugin boundary, and keeps
 [threat model 0005](threat-model/0005-plugins.md)'s mitigations:
 
 - TM-plug-01: the header's `Plugin <name>` line, built-in panels first,
-  icons only from the embedded set, titles by spec 0003's title rules.
+  an icon from the embedded set or the plugin's own checked shape
+  (TM-plug-24), titles by spec 0003's title rules.
 - TM-plug-02: no focus by `open_panel`, never a prompt in the sidebar.
 - TM-plug-23: commands never cut by the width, and the 0.5 s after
   `open_panel`.
@@ -315,7 +335,7 @@ Tern ↔ plugin boundary, and keeps
 6. With a profile host selected, a right click opens a menu with Connect, Edit… and Delete…; Edit… changes its label in `config.yaml` with every other line and comment kept, and the list shows the new label; Delete… asks in a dialog over the window, Esc or Cancel keeps the profile, Delete removes it and leaves its saved password in the keychain. A `~/.ssh/config` host's Edit… and Delete… are disabled and the file is never written (T-085). `sidebar.focus` on SSH hosts puts typing into the filter field and none of it reaches the shell; Esc returns typing to the shell with the sidebar still open, in the Files and Port forwards panels too.
 7. Quitting with the sidebar open at 320 px on an SSH pane's files and relaunching shows it at 320 px on the first frame and makes no connection; `~/.ssh/config` is not read before the first-frame mark, and `--bench-startup 10` is within noise of a run with it closed. `session.json` holds the flag, the width and a panel ID and no host name. With `restore_session: false` it starts closed.
 8. A panel registered in a test through the same call the built-in panels use appears in the strip after them and shows its view; removing it while shown shows Files. `src/sidebar/mod.rs` has no code path for a particular panel: beyond declaring its submodules, it names no panel ID or panel type. Spec 0008's and spec 0017's acceptance criteria still pass, apart from the lines this spec overrides.
-9. With plugins `alpha` and `Zeta` enabled (T-069), the strip reads Files, SSH hosts, alpha's panels, Zeta's in manifest order; a plugin panel's header reads `Plugin <name>`, one named `SSH Hosts` reads `Plugin SSH Hosts`, and `icon: no-such-icon` shows the default icon. A killed plugin's panel keeps its place and header and shows "stopped" with Restart.
+9. With plugins `alpha` and `Zeta` enabled (T-069), the strip reads Files, SSH hosts, alpha's panels, Zeta's in manifest order; a plugin panel's header reads `Plugin <name>`, one named `SSH Hosts` reads `Plugin SSH Hosts`, and `icon: no-such-icon` shows the default icon. `icon: whale.svg` with a shapes-only `whale.svg` in the plugin's folder shows that shape in the strip, in the colour of the other icons; a `whale.svg` holding an `<image>` or a `<use>`, one over 16 KiB or a missing one lists the plugin as unusable with the reason, and `icon: ../whale.svg` reads no file and shows the default icon. A killed plugin's panel keeps its place and header and shows "stopped" with Restart.
 10. After running a plugin's command with the sidebar closed, its `open_panel` shows its panel and the next keystrokes still reach the shell; a click on a command button within 0.5 s runs nothing. After the user closes the sidebar, a second `open_panel` with no act of the user's shows nothing and adds a line to the plugin's log. Quitting on a plugin's panel and relaunching shows Files and starts no plugin process. At 200 px a command button's whole command is readable, wrapped.
 
 ## Open questions

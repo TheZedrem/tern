@@ -2,6 +2,7 @@
 //! and 6): which panels the sidebar lists, and what the user does in them
 //! as events for their plugin.
 
+use super::icon::PanelIcon;
 use super::manifest::Right;
 use super::protocol::Event;
 use super::{Host, HostEvent};
@@ -17,8 +18,8 @@ pub struct ListedPanel {
     pub name: String,
     pub panel: String,
     pub title: String,
-    /// The name of one of Tern's own icons, if the manifest gave one.
-    pub icon: Option<String>,
+    /// The icon the manifest gave, if any.
+    pub icon: Option<PanelIcon>,
     /// The plugin crashed or couldn't start: the panel offers Restart.
     pub stopped: bool,
     /// The rights in force; a command button without its right is drawn

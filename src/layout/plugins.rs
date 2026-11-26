@@ -172,7 +172,7 @@ impl Workspace {
                 let panel = Panel {
                     id: id.clone(),
                     title: listed.title.clone().into(),
-                    icon: panel_view::icon(listed.icon.as_deref(), cx),
+                    icon: panel_view::icon(listed.icon.as_ref(), cx),
                     plugin: Some(listed.name.clone().into()),
                     view: view.clone().into(),
                     focus: Rc::new(move |window, cx| {

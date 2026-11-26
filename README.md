@@ -61,7 +61,7 @@ earlier Tauri version took 1.07 s to start and was dropped.
 
 - The optional [Docker sidebar](plugins/docker/README.md) follows the active terminal and offers container shells, inspection, live logs and Compose file editing on Windows, Linux and SSH hosts.
 - Plugins are programs of your own choosing that you drop into the plugins folder and enable on the settings screen's Plugins tab, after a warning to install only what you trust
-- They add sidebar panels and palette commands; whatever they want typed, run or read in a terminal waits for your Allow on a bar that shows it exactly
+- They add sidebar panels, each with one of Tern's icons or a plain SVG of their own, and palette commands; whatever they want typed, run or read in a terminal waits for your Allow on a bar that shows it exactly
 
 **Privacy**
 

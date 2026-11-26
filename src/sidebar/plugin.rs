@@ -10,7 +10,7 @@
 use super::CLICK_GUARD;
 use crate::plugins::command::{self, Command};
 use crate::plugins::panel::{Control, Item, PanelModel};
-use crate::plugins::{ListedPanel, Right};
+use crate::plugins::{ListedPanel, PanelIcon, Right};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
@@ -40,10 +40,16 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-/// The icon a manifest names: one of the icons Tern embeds, by its
-/// kebab-case name. Any other name, or none, gets the default plugin
-/// icon; no image is ever read from a plugin (spec 0018, Icons).
-pub fn icon(name: Option<&str>, cx: &App) -> Icon {
+/// The icon a manifest gives (spec 0018, Icons): the plugin's own
+/// checked shape, or one of the icons Tern embeds, by its kebab-case
+/// name. Any other name, or none, gets the default plugin icon. Either
+/// way only the shape is drawn, in the colour of the text around it.
+pub fn icon(icon: Option<&PanelIcon>, cx: &App) -> Icon {
+    let name = match icon {
+        Some(PanelIcon::Image(svg)) => return Icon::default().data(svg),
+        Some(PanelIcon::Named(name)) => Some(name.as_str()),
+        None => None,
+    };
     let embedded = |path: &str| matches!(cx.asset_source().load(path), Ok(Some(_)));
     match icon_path(name, embedded) {
         Some(path) => Icon::default().path(path),

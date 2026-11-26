@@ -3,6 +3,7 @@
 //! checked and cleaned here, before anything shows or runs it
 //! (TM-plug-01, -13, -15).
 
+use super::icon::{self, PanelIcon};
 use crate::terminal::clean_title;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -82,8 +83,9 @@ pub struct Manifest {
 pub struct Named {
     pub id: String,
     pub title: String,
-    /// A panel's icon, by the name of one of Tern's own.
-    pub icon: Option<String>,
+    /// A panel's icon. `parse` only ever gives a name; discovery loads
+    /// the file a name stands for.
+    pub icon: Option<PanelIcon>,
 }
 
 /// One of the plugin's own settings.
@@ -147,7 +149,9 @@ pub fn discover(root: &Path) -> Vec<Found> {
         .filter_map(|entry| {
             let id = entry.file_name().into_string().ok()?;
             let folder = entry.path();
-            let manifest = read(&folder).and_then(|text| parse(&id, &text));
+            let manifest = read(&folder)
+                .and_then(|text| parse(&id, &text))
+                .and_then(|manifest| icon::load(&folder, manifest));
             Some(Found {
                 id,
                 folder,
@@ -390,7 +394,11 @@ fn named(raw: Vec<RawNamed>, what: &str) -> Result<Vec<Named>, String> {
         if title.is_empty() {
             return Err(format!("{what} `{id}` has no `title`"));
         }
-        all.push(Named { id, title, icon });
+        all.push(Named {
+            id,
+            title,
+            icon: icon.map(PanelIcon::Named),
+        });
     }
     Ok(all)
 }
@@ -777,5 +785,237 @@ settings: [{ key: socket, label: Docker socket, type: text }]
         let found = discover(root.path());
         assert!(usable(&found, "docker"));
         assert!(!usable(&found, "future"));
+    }
+
+    /// A shapes-only icon, as spec 0018's AC9 means it.
+    const WHALE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 14h20c0 4-3 6-8 6H9c-4 0-7-2-7-6z"/><circle cx="6" cy="12" r="1"/></svg>"#;
+
+    /// `root/<id>/plugin.yaml` for a plugin whose one panel has `icon`.
+    fn with_icon(root: &TempDir, id: &str, icon: &str) {
+        let panels = format!("panels: [{{ id: p, title: P, icon: '{icon}' }}]\n");
+        folder(root, id, &(minimal(id, id) + &panels));
+    }
+
+    /// `text` as the file at `path` under `root`, parent folders included.
+    fn file(root: &TempDir, path: &str, text: impl AsRef<[u8]>) {
+        let path = root.path().join(path);
+        fs::create_dir_all(path.parent().expect("a file has a folder")).expect("create folders");
+        fs::write(path, text).expect("write a file");
+    }
+
+    /// The icon of plugin `id`'s first panel, or why the plugin is
+    /// unusable.
+    fn panel_icon(found: &[Found], id: &str) -> Result<Option<PanelIcon>, String> {
+        let plugin = found.iter().find(|plugin| plugin.id == id);
+        let manifest = plugin.expect("the folder is listed").manifest.clone();
+        manifest.map(|manifest| manifest.panels[0].icon.clone())
+    }
+
+    /// Spec 0018 AC9: "`icon: whale.svg` with a shapes-only `whale.svg`
+    /// in the plugin's folder shows that shape": discovery hands on the
+    /// file's bytes, and the plugin is usable.
+    #[test]
+    fn an_icon_file_of_plain_shapes_is_the_panels_icon() {
+        let root = TempDir::new("plugins-icon-file");
+        with_icon(&root, "sea", "whale.svg");
+        file(&root, "sea/whale.svg", WHALE);
+        let found = discover(root.path());
+        assert_eq!(
+            panel_icon(&found, "sea"),
+            Ok(Some(PanelIcon::Image(WHALE.as_bytes().into())))
+        );
+    }
+
+    /// Spec 0018 AC9, TM-plug-24: "a `whale.svg` holding an `<image>` or
+    /// a `<use>`, one over 16 KiB or a missing one lists the plugin as
+    /// unusable with the reason". The folder is still listed, and its
+    /// neighbour stays usable.
+    #[test]
+    fn a_bad_icon_file_makes_the_plugin_unusable_with_a_reason_naming_it() {
+        let over = format!(
+            "<svg><title>{}</title></svg>",
+            "x".repeat(16 * 1024 - "<svg><title></title></svg>".len() + 1)
+        );
+        assert_eq!(over.len(), 16 * 1024 + 1);
+        let bad: [(&str, Option<&[u8]>); 11] = [
+            // Spec 0018, Icons: "the renderer can read it: it is
+            // well-formed XML".
+            ("unclosed", Some(b"<svg><g><path d=\"M0 0\"/></svg>")),
+            ("cut-off", Some(b"<svg><path")),
+            ("image", Some(b"<svg><image href=\"/etc/passwd\"/></svg>")),
+            (
+                "use",
+                Some(b"<svg><path id=\"a\"/><use href=\"#a\"/></svg>"),
+            ),
+            ("text", Some(b"<svg><text>hi</text></svg>")),
+            ("comment", Some(b"<svg><!-- hi --></svg>")),
+            ("entity", Some(b"<svg><title>a &amp; b</title></svg>")),
+            ("not-svg", Some(b"api: 1\nid: sea\n")),
+            ("not-utf8", Some(b"<svg>\xff</svg>")),
+            ("over", Some(over.as_bytes())),
+            ("missing", None),
+        ];
+        let root = TempDir::new("plugins-icon-bad");
+        with_icon(&root, "good", "whale.svg");
+        file(&root, "good/whale.svg", WHALE);
+        for (id, bytes) in bad {
+            with_icon(&root, id, "whale.svg");
+            if let Some(bytes) = bytes {
+                file(&root, &format!("{id}/whale.svg"), bytes);
+            }
+        }
+        let found = discover(root.path());
+        assert_eq!(found.len(), bad.len() + 1, "every folder is listed");
+        assert!(usable(&found, "good"));
+        for (id, _) in bad {
+            let reason = panel_icon(&found, id).expect_err(id);
+            assert!(reason.contains("whale.svg"), "{id}: {reason:?}");
+        }
+    }
+
+    /// Spec 0018, Icons: an `icon` names a file only as "a kebab-case
+    /// name ending in `.svg`": "never a path". AC9: "`icon: ../whale.svg`
+    /// reads no file and shows the default icon". Every file such a
+    /// value could mean holds a usable icon here, so reading one shows.
+    #[test]
+    fn an_icon_that_is_no_file_name_reads_no_file() {
+        let root = TempDir::new("plugins-icon-not-a-name");
+        let outside = root.path().join("whale.svg");
+        let outside = outside.to_str().expect("a UTF-8 temp dir");
+        let not_names = [
+            "../whale.svg",
+            "..\\whale.svg",
+            "./whale.svg",
+            ".\\whale.svg",
+            "sub/whale.svg",
+            "sub\\whale.svg",
+            "../sea/whale.svg",
+            "/whale.svg",
+            outside,
+            "..",
+            "../",
+            ".",
+            "",
+            ".svg",
+            "..svg",
+            "Whale.svg",
+            "WHALE.SVG",
+            "whale.SVG",
+            "whale.Svg",
+            "whale.png",
+            "whale.svgz",
+            "whale.svg.png",
+            "whale.svg/",
+            "whale.svg ",
+            " whale.svg",
+            "whale .svg",
+            "whale_fin.svg",
+            "whale.v2.svg",
+            "wh\u{e4}le.svg",
+            "whale.svg\u{2028}",
+            "whale",
+            "svg",
+        ];
+        for path in [
+            "whale.svg",
+            "sea/whale.svg",
+            "sea/sub/whale.svg",
+            "sea/.svg",
+            "sea/..svg",
+            "sea/whale.png",
+            "sea/whale.svgz",
+            "sea/whale.svg.png",
+            "sea/whale_fin.svg",
+            "sea/whale.v2.svg",
+            "sea/wh\u{e4}le.svg",
+            "sea/whale",
+            "sea/svg",
+        ] {
+            file(&root, path, WHALE);
+        }
+        for icon in not_names {
+            with_icon(&root, "sea", icon);
+            let found = discover(root.path());
+            assert_eq!(
+                panel_icon(&found, "sea"),
+                Ok(Some(PanelIcon::Named(icon.into()))),
+                "{icon:?}"
+            );
+        }
+
+        // And with no file anywhere, none is missed.
+        let empty = TempDir::new("plugins-icon-not-a-name-empty");
+        for icon in not_names {
+            with_icon(&empty, "sea", icon);
+            let found = discover(empty.path());
+            assert_eq!(
+                panel_icon(&found, "sea"),
+                Ok(Some(PanelIcon::Named(icon.into()))),
+                "{icon:?}"
+            );
+        }
+    }
+
+    /// Spec 0018, Icons: the name of one of Tern's own icons stays a
+    /// name, whatever files the plugin's folder holds.
+    #[test]
+    fn a_built_in_icon_name_is_untouched() {
+        let root = TempDir::new("plugins-icon-built-in");
+        for name in ["container", "scroll-text", "no-such-icon"] {
+            with_icon(&root, "sea", name);
+            for bad in [name.to_owned(), format!("{name}.svg")] {
+                file(
+                    &root,
+                    &format!("sea/{bad}"),
+                    "<svg><image href=\"x\"/></svg>",
+                );
+            }
+            let found = discover(root.path());
+            assert_eq!(
+                panel_icon(&found, "sea"),
+                Ok(Some(PanelIcon::Named(name.into())))
+            );
+        }
+        folder(
+            &root,
+            "sea",
+            &(minimal("sea", "Sea") + "panels: [{ id: p, title: P }]\n"),
+        );
+        assert_eq!(panel_icon(&discover(root.path()), "sea"), Ok(None));
+    }
+
+    /// Only a panel has an icon (spec 0018, Icons): what a command says
+    /// reads no file and can't make the plugin unusable.
+    #[test]
+    fn a_command_is_unaffected_by_icon_files() {
+        let root = TempDir::new("plugins-icon-command");
+        let text = minimal("sea", "Sea")
+            + "commands: [{ id: c, title: C, icon: missing.svg }, { id: d, title: D, icon: bad.svg }]\n\
+               panels: [{ id: p, title: P, icon: whale.svg }]\n";
+        folder(&root, "sea", &text);
+        file(&root, "sea/whale.svg", WHALE);
+        file(&root, "sea/bad.svg", "<svg><image href=\"x\"/></svg>");
+        let found = discover(root.path());
+        let manifest = found[0].manifest.as_ref().expect("usable");
+        let parsed = parse("sea", &text).expect("usable");
+        assert_eq!(manifest.commands, parsed.commands);
+        assert_eq!(
+            manifest.panels[0].icon,
+            Some(PanelIcon::Image(WHALE.as_bytes().into()))
+        );
+    }
+
+    /// The Docker plugin Tern ships uses its own icon: the file in the
+    /// repo passes the check, so an edit to it can't ship a plugin that
+    /// lists as unusable.
+    #[test]
+    fn the_shipped_docker_plugins_icon_is_accepted() {
+        let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins");
+        let shipped = fs::read(plugins.join("docker").join("docker.svg")).expect("docker.svg");
+        let found = discover(&plugins);
+        assert_eq!(
+            panel_icon(&found, "docker"),
+            Ok(Some(PanelIcon::Image(shipped.into())))
+        );
     }
 }

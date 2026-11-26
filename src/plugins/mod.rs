@@ -7,6 +7,7 @@
 //! (OQ-031).
 
 pub mod command;
+mod icon;
 mod listing;
 mod manifest;
 pub mod panel;
@@ -15,6 +16,7 @@ mod process;
 mod protocol;
 mod requests;
 
+pub use icon::PanelIcon;
 pub use listing::ListedPlugin;
 pub use manifest::{FieldKind, Right, Subscription};
 pub use panels::ListedPanel;
@@ -2082,7 +2084,7 @@ switch ($mode) {
                     name: format!("Name of {plugin}"),
                     panel: panel.into(),
                     title: title.into(),
-                    icon: icon.map(str::to_owned),
+                    icon: icon.map(|name| PanelIcon::Named(name.to_owned())),
                     stopped: false,
                     rights: rights.to_vec(),
                 }
